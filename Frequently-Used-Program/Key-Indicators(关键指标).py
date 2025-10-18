@@ -5,7 +5,7 @@ import time
 
 today = time.strftime("%Y%m%d", time.localtime())
 
-codes = ["600900", "600027", "601728"]
+codes = ["600900"]
 for code in codes:
     print(f"Fetching data for {code}...")
     # Fetching financial abstract data
