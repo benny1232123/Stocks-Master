@@ -3,6 +3,7 @@ import pandas as pd
 import numpy as np
 import time
 from datetime import datetime
+import ast
 
 '''0.准备工作'''
 # --- 配置区 ---
@@ -11,6 +12,7 @@ DEBT_ASSET_RATIO_LIMIT = 70  # 资产负债率上限
 PROFIT_RATIO_LIMIT = 0.5 # 筹码获利比例上限
 CURRENT_YEAR = datetime.now().year
 LAST_YEAR = CURRENT_YEAR - 1
+SKIP_CHIPS_ANALYSIS = False # 是否跳过筹码分析
 
 # 根据当前月份确定最近的财报日期
 # 5月前用去年年报，5-8月用一季报，9-10月用中报，11月后用三季报
@@ -28,13 +30,20 @@ else:
     REPORT_DATE_PROFIT = f"{CURRENT_YEAR}0930"
     REPORT_DATE_HOLDER = f"{CURRENT_YEAR}0930"
 
-# 资产负债表通常更新较慢，可以考虑获取最近两个季度
-ZCFZ_DATES = [f"{CURRENT_YEAR}0630", f"{CURRENT_YEAR}0331"] # 示例，可根据实际情况调整
+# 资产负债表通常更新较慢，可以考虑获取最近几个季度
+ZCFZ_DATES = [f"{CURRENT_YEAR}0630", f"{CURRENT_YEAR}0930"] # 示例，可根据实际情况调整
 
 UNFAMILIAR_INDUSTRY = [
     "钢铁行业", "化学制品", "房地产开发", "纺织服装", "水泥建材", "燃气",
     "航运港口", "化学原料", "美容护理", "农药兽药", "化纤行业", "采掘行业",
-    "化肥行业", "酿酒行业", "商业百货", "中药", "化学制药", "医药商业", "生物制品"
+    "化肥行业", "酿酒行业", "商业百货", "中药", "化学制药", "医药商业", "生物制品",
+    "工业金属", "钢铁", "港口航运", "造纸", "包装印刷", "食品加工制造", 
+    "环境治理", "服装家纺", "养殖业", "建筑材料", "农产品加工", "纺织制造",
+    "乳胶制品", "零售", "机场航运", "公路铁路运输", "化学纤维", "电池", 
+    "生物制品", "光学光电子", "种植业与林业", "农化制品", "金属新材料", "饮料制造",
+    "小金属", "建筑装饰", "石油加工贸易", "橡胶制品", "油气开采及服务","医疗服务",
+    "电子化学品", "煤炭开采加工", "医疗器械", "贵金属", "工程机械"
+
 ]
 IMPORTANT_SHAREHOLDERS = [
     "香港中央结算有限公司", "中央汇金资产管理有限公司", "中央汇金投资有限责任公司",
@@ -51,6 +60,11 @@ pd.set_option('display.unicode.ambiguous_as_wide', True)
 pd.set_option('display.unicode.east_asian_width', True)
 pd.set_option('display.max_columns', None)
 pd.set_option('display.max_rows', None)
+
+def add_market_prefix_upper(code):
+    """为股票代码添加大写市场前缀 (SH/SZ)"""
+    formatted_code = format_stock_code(code)
+    return f"SH{formatted_code}" if formatted_code.startswith('6') else f"SZ{formatted_code}"
 
 def format_stock_code(code):
     """将股票代码格式化为6位数"""
@@ -149,7 +163,7 @@ profit_df = fetch_data_with_fallback(
 )
 profit_codes = []
 if not profit_df.empty:
-    good_profit_df = profit_df[(profit_df['净利润'] > 0) & (profit_df['净利润同比'] > 0)]
+    good_profit_df = profit_df[profit_df['净利润'] > 0]
     profit_codes = good_profit_df['股票代码'].tolist()
 time.sleep(3)
 
@@ -217,11 +231,21 @@ if filtered_codes:
     print("正在合并股票信息...")
     for code in filtered_codes:
         try:
-            stock_info_df = ak.stock_individual_info_em(symbol=code, timeout=10)
+            # 使用新的接口和带大写前缀的代码
+            prefixed_code = add_market_prefix_upper(code)
+            stock_info_df = ak.stock_individual_basic_info_xq(symbol=prefixed_code)
             info_dict = dict(zip(stock_info_df['item'], stock_info_df['value']))
-            stock_name = info_dict.get('股票简称', '未知')
-            industry = info_dict.get('行业', '未知')
+
+            # 使用新的字段名
+            stock_name = info_dict.get('org_short_name_cn', '未知')
             
+            # 解析行业信息
+            industry_str = info_dict.get('affiliate_industry', '{}')
+            try:
+                industry=industry_str['ind_name']
+            except (ValueError, SyntaxError):
+                industry = '未知'
+
             stock_info_list.append({
                 '股票代码': code,
                 '股票名称': stock_name,
@@ -265,30 +289,33 @@ else:
 
 
 '''6.股票筹码分析'''
-def filter_by_chips(codes, max_retries=3):
-    """根据筹码分布筛选股票"""
+def filter_by_chips(codes):
+    """根据筹码分布筛选股票，出错时直接跳过。"""
     chips_filtered_codes = []
     for code in codes:
-        for attempt in range(max_retries):
-            try:
-                print(f"Fetching chips data for {code}... (Attempt {attempt + 1}/{max_retries})")
-                chips_df = ak.stock_cyq_em(symbol=code, adjust="qfq")
-                if not chips_df.empty:
-                    profit_ratio = chips_df.iloc[-1]['获利比例']
-                    if profit_ratio < PROFIT_RATIO_LIMIT:
-                        chips_filtered_codes.append(code)
-                        print(f"{code}: 获利比例={profit_ratio:.3f} - 符合筹码条件")
-                break  # Success
-            except Exception as e:
-                print(f"Error getting chips data for {code}: {e}")
-                if attempt < max_retries - 1:
-                    time.sleep(5)
+        try:
+            print(f"正在获取 {code} 的筹码数据...")
+            chips_df = ak.stock_cyq_em(symbol=code, adjust="qfq")
+            if not chips_df.empty:
+                profit_ratio = chips_df.iloc[-1]['获利比例']
+                if profit_ratio < PROFIT_RATIO_LIMIT:
+                    chips_filtered_codes.append(code)
+                    print(f"{code}: 获利比例={profit_ratio:.3f} - 符合筹码条件")
                 else:
-                    print(f"Max retries reached for {code}, skipping.")
+                    print(f"{code}: 获利比例={profit_ratio:.3f} - 不符合筹码条件")
+            else:
+                print(f"未获取到 {code} 的筹码数据，跳过。")
+        except Exception as e:
+            print(f"获取 {code} 筹码数据时出错: {e}，已跳过。")
     return chips_filtered_codes
 
-candidate_codes = filter_by_chips(filter_summary_codes) if filter_summary_codes else []
-print(f"筹码筛选后剩余股票数量: {len(candidate_codes)}")
+if SKIP_CHIPS_ANALYSIS:
+    print("\n--- 开始进行第6步：股票筹码分析 ---")
+    candidate_codes = filter_by_chips(filter_summary_codes) if filter_summary_codes else []
+    print(f"筹码筛选后剩余股票数量: {len(candidate_codes)}")
+else:
+    print("\n--- 已跳过第6步：股票筹码分析 ---")
+    candidate_codes = filter_summary_codes # 跳过筹码分析，直接使用上一环节的结果
 
 
 '''7.流通股东分析'''
@@ -327,7 +354,7 @@ else:
 
 if not filter_summary_df.empty:
     final_df = filter_summary_df[filter_summary_df['股票代码'].isin(final_candidate_codes)]
-    final_df.to_csv(f"stock_data/Stock-Selection-{today}.csv", index=False, encoding='utf-8-sig')
-    print(f"\nStock-Selection-{today}.csv 文件已保存，共选出 {len(final_candidate_codes)} 只股票")
+    final_df.to_csv(f"stock_data/Stock-Selection-{today}B.csv", index=False, encoding='utf-8-sig')
+    print(f"\nStock-Selection-{today}B.csv 文件已保存，共选出 {len(final_candidate_codes)} 只股票")
 else:
     print("\n没有符合所有条件的股票。")

@@ -1,47 +1,101 @@
-import akshare as ak
+import baostock as bs
 import pandas as pd
+import time
+import datetime
+from sklearn.linear_model import LinearRegression
 import numpy as np
-import pandas as pd
-import numpy as np
-import matplotlib.pyplot as plt
-from scipy.interpolate import interp1d
 
-# 实验数据
-load_resistances = [100, 200, 300, 390, 510]  # R (Ω)
-voltage_original = [2.18, 3.07, 3.55, 3.83, 4.09]  # 原始电路的U_R (V)
-voltage_equivalent = [2.14, 3.03, 3.51, 3.79, 4.05]  # 等效电路的U_R (V)
-voltage_theoretical = [1.96, 2.91, 3.48, 3.82, 4.14]  # 理论U_R (V)
+today = time.strftime("%Y%m%d", time.localtime())
+now = datetime.datetime.now()
+CURRENT_YEAR = now.year
+current_month = now.month
+current_day = now.day
 
-# 创建更密集的数据点用于平滑曲线
-load_resistances_smooth = np.linspace(min(load_resistances), max(load_resistances), 300)
 
-# 使用三次样条插值创建平滑曲线
-f_original = interp1d(load_resistances, voltage_original, kind='cubic')
-f_equivalent = interp1d(load_resistances, voltage_equivalent, kind='cubic')
-f_theoretical = interp1d(load_resistances, voltage_theoretical, kind='cubic')
+lg = bs.login()
+# 显示登陆返回信息
+print('login respond error_code:'+lg.error_code)
+print('login respond  error_msg:'+lg.error_msg)
 
-# 生成平滑的电压值
-voltage_original_smooth = f_original(load_resistances_smooth)
-voltage_equivalent_smooth = f_equivalent(load_resistances_smooth)
-voltage_theoretical_smooth = f_theoretical(load_resistances_smooth)
+def format_stock_code(code):
+    """将股票代码格式化为6位数"""
+    if isinstance(code, str):
+        code = ''.join(filter(str.isdigit, code))
+        return code.zfill(6)
+    elif isinstance(code, int):
+        return f"{code:06d}"
+    return code
 
-# 创建图形并绘制平滑曲线
-plt.figure(figsize=(10, 6))
-plt.plot(load_resistances_smooth, voltage_original_smooth, '-', label='Original Circuit', linewidth=2)
-plt.plot(load_resistances_smooth, voltage_equivalent_smooth, '-', label='Equivalent Circuit', linewidth=2)
-plt.plot(load_resistances_smooth, voltage_theoretical_smooth, '-', label='Theoretical Value', linewidth=2)
+def add_market_prefix_dotted(code):
+    """为股票代码添加小写市场前缀"""
+    formatted_code = format_stock_code(code)
+    return f"sh.{formatted_code}" if formatted_code.startswith('6') else f"sz.{formatted_code}"
 
-# 仍然显示原始数据点
-plt.plot(load_resistances, voltage_original, 'o', markersize=6, color='C0')
-plt.plot(load_resistances, voltage_equivalent, 's', markersize=6, color='C1')
-plt.plot(load_resistances, voltage_theoretical, '^', markersize=6, color='C2')
+#### 获取沪深A股历史K线数据 ####
+# 详细指标参数，参见“历史行情指标参数”章节；“分钟线”参数与“日线”参数不同。“分钟线”不包含指数。
+# 分钟线指标：date,time,code,open,high,low,close,volume,amount,adjustflag
+# 周月线指标：date,code,open,high,low,close,volume,amount,adjustflag,turn,pctChg
+# 1：后复权；2：前复权 ；3：不复权
+fianl_df=[]
+days_back = 10
+start_date = (datetime.datetime.now() - datetime.timedelta(days=days_back)).strftime('%Y-%m-%d')
+final_candidate_codes=["600900", "000001", "000002"]  # 示例股票代码列表
+for fncode in final_candidate_codes:
+    rs = bs.query_history_k_data_plus(add_market_prefix_dotted(fncode),
+        "date,code,open,high,low,close,preclose,volume,amount,adjustflag,turn,tradestatus,pctChg,isST",
+        start_date=start_date, 
+        end_date=f"{CURRENT_YEAR}-{current_month}-{current_day}",
+        frequency="d", adjustflag="2")
 
-# 添加标签、标题、图例和网格
-plt.xlabel('Load Resistance $R$ ($\Omega$)')
-plt.ylabel('Load Voltage $U_R$ (V)')
-plt.title('External Characteristic Curve of Active Two-terminal Network\n(Verification of Thevenin\'s Theorem)')
-plt.legend()
-plt.grid(True, linestyle='--', alpha=0.7)
+    print('query_history_k_data_plus respond error_code:'+rs.error_code)
+    print('query_history_k_data_plus respond  error_msg:'+rs.error_msg)
+      
+    data_list = []
+    while (rs.error_code == '0') & rs.next():
+       data_list.append(rs.get_row_data())
 
-# 显示图形
-plt.show()
+    result_df = pd.DataFrame(data_list, columns=rs.fields)
+    result_df=result_df[['date','code','open','high','low','close','preclose']]  
+
+    # 将收盘价转换为数值类型
+    result_df['close'] = pd.to_numeric(result_df['close'], errors='coerce')
+    result_df = result_df.dropna(subset=['close'])
+    
+
+    
+    y = result_df['close'].values
+    x = np.arange(len(y)).reshape(-1, 1)
+        
+        # 拟合线性回归模型
+    model = LinearRegression()
+    model.fit(x, y)
+        
+        # 获取斜率
+    slope = model.coef_[0]
+
+    if slope > 0.05:
+        signal = "buy"
+    elif slope < -0.05:
+        signal = "sell"
+    else:
+        signal = "stand"
+
+    fianl_df.append({
+         'code': fncode,
+         'slope': slope,
+         "signal": signal
+    })
+        # 生成交易信号
+    if slope > 0.05:  # 上升趋势较强
+            print(f"slope is {slope}, {fncode} buy")   # 买入信号
+    elif slope < -0.05:  # 下降趋势较强
+            print(f"slope is {slope}, {fncode} sell")  # 卖出信号
+    else:
+            print(f"slope is {slope}, {fncode} stand")   # 持有/观望
+    
+    #### 结果集输出到csv文件 ####
+    result_df.to_csv(f"stock_data/history_A_stock_k_data-{fncode}.csv", index=False)
+
+print(pd.DataFrame(fianl_df))
+#### 登出系统 ####
+bs.logout()
