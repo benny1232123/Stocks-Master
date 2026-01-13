@@ -23,8 +23,8 @@ current_month = datetime.datetime.now().month
 current_day = datetime.datetime.now().day
 
 if current_month < 5:
-    REPORT_DATE_PROFIT = f"{LAST_YEAR}1231" # 利润表/现金流量表使用去年年报
-    REPORT_DATE_HOLDER = f"{LAST_YEAR}1231" # 股东信息使用去年年报
+    REPORT_DATE_PROFIT = f"{LAST_YEAR}0930" # 利润表/现金流量表使用去年年报
+    REPORT_DATE_HOLDER = f"{LAST_YEAR}0930" # 股东信息使用去年年报
 elif current_month < 9:
     REPORT_DATE_PROFIT = f"{CURRENT_YEAR}0331"
     REPORT_DATE_HOLDER = f"{CURRENT_YEAR}0331"
@@ -35,8 +35,20 @@ else:
     REPORT_DATE_PROFIT = f"{CURRENT_YEAR}0930"
     REPORT_DATE_HOLDER = f"{CURRENT_YEAR}0930"
 
-# 资产负债表通常更新较慢，可以考虑获取最近两个季度
-ZCFZ_DATES = [f"{CURRENT_YEAR}0630", f"{CURRENT_YEAR}0930"] # 示例，可根据实际情况调整
+if current_month < 5:
+    ZCFZ_DATE1 = f"{LAST_YEAR}0930" 
+    ZCFZ_DATE2 = f"{LAST_YEAR}0630"
+elif current_month < 9:
+    ZCFZ_DATE1 = f"{CURRENT_YEAR}0331" 
+    ZCFZ_DATE2 = f"{LAST_YEAR}1231"
+elif current_month < 11:
+    ZCFZ_DATE1 = f"{CURRENT_YEAR}0630" 
+    ZCFZ_DATE2 = f"{CURRENT_YEAR}0331"
+else:
+    ZCFZ_DATE1 = f"{CURRENT_YEAR}0930" 
+    ZCFZ_DATE2 = f"{CURRENT_YEAR}0630"
+
+ZCFZ_DATES = [ZCFZ_DATE1, ZCFZ_DATE2] 
 
 UNFAMILIAR_INDUSTRY = [
     "钢铁行业", "化学制品", "房地产开发", "纺织服装", "水泥建材", "燃气",
@@ -389,7 +401,7 @@ def add_market_prefix_dotted(code):
 # 周月线指标：date,code,open,high,low,close,volume,amount,adjustflag,turn,pctChg
 # 1：后复权；2：前复权 ；3：不复权
 
-days_back = 10
+days_back = 20 # 修改：增加回溯天数，以便更好地进行滤波和平滑趋势分析
 start_date = (datetime.datetime.now() - datetime.timedelta(days=days_back)).strftime('%Y-%m-%d')
 trend_data=[]
 
@@ -418,7 +430,12 @@ for fncode in final_candidate_codes:
         print(f"股票 {fncode} 的数据不足，跳过趋势分析。")
         continue
 
-    y = result_df['close'].values
+    # --- 新增：滤波处理 ---
+    # 使用指数加权移动平均 (EWMA) 滤除短期回调噪音，提取平滑趋势
+    # span=5 对应约 3 日的平滑窗口，既能滤掉单日剧烈回调，又能保留上升形态
+    result_df['close_smooth'] = result_df['close'].ewm(span=5, adjust=False).mean()
+    
+    y = result_df['close_smooth'].values # 使用平滑后的数据进行拟合
     x = np.arange(len(y)).reshape(-1, 1)
         
     # 拟合 Theil-Sen 回归模型，它对异常值更不敏感
@@ -436,13 +453,21 @@ for fncode in final_candidate_codes:
     
     # --- 优化：结合 R² 和归一化斜率进行判断 ---
     signal = "stand" # 默认状态
-    if r_squared > 0.5: # 只考虑趋势稳定性较好的股票
-        if 0.01 < normalized_slope <= 0.03: # 日均涨幅在 1% 到 3% 之间
+    
+    # 修改阈值说明：
+    # 1. R² > 0.25: 放宽线性度要求，允许更深的回调或波动
+    # 2. Slope > 0.001: 日均涨幅只要大于 0.1% 即可（捕捉缓慢爬升的股票）
+    if r_squared > 0.25: 
+        if 0.001 < normalized_slope <= 0.05: # 日均涨幅在 0.1% 到 5% 之间
             signal = "buy"
-        elif normalized_slope > 0.03: # 日均涨幅超过 3%
+            print(f"  [选中] {fncode}: 日均涨幅={normalized_slope*100:.2f}%, 趋势强度R2={r_squared:.2f}")
+        elif normalized_slope > 0.05: # 日均涨幅超过 5%
             signal = "overheated"
-        elif normalized_slope < -0.01: # 日均跌幅超过 1%
+        elif normalized_slope < -0.001: # 日均跌幅超过 0.1%
             signal = "sell"
+    
+    # 调试打印：如果觉得还是选不出，可以取消下面这行的注释，看看具体数值
+    # else: print(f"  [淘汰] {fncode}: 斜率={normalized_slope:.4f}, R2={r_squared:.4f}")
 
     trend_data.append({
             '股票代码': fncode,

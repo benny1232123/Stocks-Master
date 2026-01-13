@@ -1,0 +1,15 @@
+import subprocess
+import sys
+
+def update_akshare():
+    try:
+        subprocess.check_call([
+            sys.executable, "-m", "pip", "install", "akshare", 
+            "--upgrade", "-i", "https://pypi.org/simple"
+        ])
+        print("akshare 更新成功！")
+    except subprocess.CalledProcessError as e:
+        print(f"更新失败：{e}")
+
+if __name__ == "__main__":
+    update_akshare()

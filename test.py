@@ -1,91 +1,90 @@
 import numpy as np
 import matplotlib.pyplot as plt
-from scipy.optimize import curve_fit
+from scipy.interpolate import PchipInterpolator  # 改：PCHIP 保形插值（更稳，不易过冲）
 
-plt.rcParams['font.sans-serif'] = ['SimHei']
-plt.rcParams['axes.unicode_minus'] = False
-# 启用LaTeX渲染以正确显示下标和上标
-plt.rcParams['text.usetex'] = False  # 不使用LaTeX，避免配置问题
-plt.rcParams['text.latex.preamble'] = r'\usepackage{amsmath}'  # 如果启用LaTeX时使用
+# ---------------------- 1. 实验参数定义（源自实验报告）----------------------
+N1 = 50               # 励磁线圈匝数
+N2 = 150              # 测量线圈匝数
+L = 60e-3             # 样品长度（m），60mm转换为国际单位
+S = 80e-6             # 样品横截面积（m²），80mm²转换为国际单位
+R1 = 10               # 取样电阻（Ω），实验选择0-10Ω档
+R2 = 10e3             # 积分电阻（Ω），10kΩ转换为国际单位
+C = 10e-6             # 积分电容（F），10μF转换为国际单位
 
-# 实验数据整理（来自实验报告）
-# 悬挂点位置x（mm）和对应的共振频率测量值
-x_data = np.array([5.30, 15.40, 25.50, 35.50, 45.50, 55.50])  # 位置（mm）
+# ---------------------- 2. 基础磁化曲线原始数据（源自实验报告）----------------------
+# 按“逐步增加励磁”顺序：Ux 从 0 -> 最大
+Ux_data = np.array([0.000, 0.365, 0.512, 0.712, 1.000, 1.350])   # 电压Ux (V)
+Uy_data = np.array([0.000, 0.0537, 0.101, 0.147, 0.205, 0.250])  # 电压Uy (V)
 
-# 每个位置两次测量值；35.50处无测量，用 np.nan 标记
-f1 = np.array([764.21, 739.64, 721.12, np.nan, 720.61, 728.65])
-f2 = np.array([763.53, 740.31, 722.73, np.nan, 720.94, 728.81])
+# ---------------------- 3. 计算H和B值（根据实验原理公式）----------------------
+# H系数：K_H = N1/(L*R1)，单位：A/V
+K_H = N1 / (L * R1)
+# B系数：K_B = (R2*C)/(N2*S)，单位：T/V
+K_B = (R2 * C) / (N2 * S)
 
-# 计算平均值，自动忽略 NaN
-y_data = np.nanmean(np.vstack([f1, f2]), axis=0)
+# 计算磁场强度H和磁感应强度B
+H_data = K_H * Ux_data  # 磁场强度（A/m）
+B_data = K_B * Uy_data  # 磁感应强度（T）
 
-# 过滤掉缺失点用于拟合
-valid_mask = ~np.isnan(y_data)
-x_fit_input = x_data[valid_mask]
-y_fit_input = y_data[valid_mask]
+# ---------------------- 4. 绘制基础磁化曲线（专业美化）----------------------
+plt.rcParams['font.sans-serif'] = ['SimHei']  # 支持中文显示
+plt.rcParams['axes.unicode_minus'] = False    # 支持负号显示
 
-# 理论节点位置计算
-L = 159.8  # 棒长(mm)
-node_position = 35.50  # 理论节点位置
-print(f"理论节点位置: {node_position:.2f} mm")
+# 创建画布，设置尺寸
+fig, ax = plt.subplots(figsize=(10, 6))
 
-# 进行二次多项式拟合 f(x) = ax² + bx + c
-def quadratic_func(x, a, b, c):
-    return a * x**2 + b * x + c
+# 兜底：确保按H升序（理论上此时已是逐步增加）
+idx = np.argsort(H_data)
+H_plot = H_data[idx]
+B_plot = B_data[idx]
+Ux_plot = Ux_data[idx]
+Uy_plot = Uy_data[idx]
 
-# 使用curve_fit进行拟合（仅使用有效数据点）
-params, covariance = curve_fit(quadratic_func, x_fit_input, y_fit_input)
+k = min(3, len(H_plot) - 1)
+H_smooth = np.linspace(H_plot.min(), H_plot.max(), 800)  # 可加密一点更“顺”
+pchip = PchipInterpolator(H_plot, B_plot)               # 改：用PCHIP替代样条
+B_smooth = pchip(H_smooth)
 
-# 提取拟合参数
-a_fit, b_fit, c_fit = params
-print(f"\n拟合参数:")
-print(f"a = {a_fit:.6e} Hz/mm²")
-print(f"b = {b_fit:.4f} Hz/mm")
-print(f"c = {c_fit:.4f} Hz")
+# 平滑曲线（先画平滑线）
+ax.plot(H_smooth, B_smooth, color='#e74c3c', linewidth=2.5, label='基础磁化曲线（平滑）')
 
-# 在节点位置计算基频共振频率
-f0 = quadratic_func(node_position, a_fit, b_fit, c_fit)
-print(f"\n基频共振频率 f₀ = {f0:.2f} Hz")
+# 原始测量点（再叠加散点）
+ax.plot(H_plot, B_plot, linestyle='None', marker='o', markersize=6,
+        markerfacecolor='#3498db', markeredgecolor='white', markeredgewidth=1.5,
+        label='测量点')
 
-# 计算拟合优度R²
-y_pred = quadratic_func(x_fit_input, a_fit, b_fit, c_fit)
-ss_res = np.sum((y_fit_input - y_pred) ** 2)
-ss_tot = np.sum((y_fit_input - np.mean(y_fit_input)) ** 2)
-r_squared = 1 - (ss_res / ss_tot)
-print(f"拟合优度 R² = {r_squared:.4f}")
+# 设置坐标轴标签（含单位）
+ax.set_xlabel('磁场强度 $H$ (A/m)', fontsize=12, fontweight='bold')
+ax.set_ylabel('磁感应强度 $B$ (T)', fontsize=12, fontweight='bold')
 
-# 可视化
-plt.figure(figsize=(10, 6))
+# 设置标题
+ax.set_title('软磁铁氧体材料基础磁化曲线', fontsize=14, fontweight='bold', pad=20)
 
-# 绘制原始数据点
-plt.scatter(x_data, y_data, color='red', s=80, label='实验数据', zorder=5)
+# 设置网格（虚线，增加可读性）
+ax.grid(True, linestyle='--', alpha=0.7, linewidth=0.8)
 
-# 绘制拟合曲线
-x_fit = np.linspace(np.nanmin(x_data), np.nanmax(x_data), 300)
-y_fit = quadratic_func(x_fit, a_fit, b_fit, c_fit)
-plt.plot(x_fit, y_fit, color='blue', linewidth=2, label='二次拟合曲线')
+# 设置坐标轴范围（适当留白，使曲线居中）
+ax.set_xlim(H_plot.min() - 5, H_plot.max() + 10)
+ax.set_ylim(-0.1, B_plot.max() + 0.2)
 
-# 标注节点位置（使用matplotlib的下标语法）
-plt.axvline(x=node_position, color='green', linestyle='--', linewidth=2, 
-            label=r'理论节点 $x_0$=%.2fmm' % node_position)
-plt.plot(node_position, f0, 'go', markersize=10, label=r'$f_0$=%.2fHz' % f0)
+# 美化坐标轴刻度
+ax.tick_params(axis='both', which='major', labelsize=10, width=1.2, length=5)
+ax.spines['top'].set_visible(False)
+ax.spines['right'].set_visible(False)
+ax.spines['left'].set_linewidth(1.2)
+ax.spines['bottom'].set_linewidth(1.2)
 
-# 图表设置 - 使用数学模式显示下标
-plt.xlabel(r'悬挂点位置 $x$ (mm)', fontsize=12)
-plt.ylabel(r'共振频率 $f$ (Hz)', fontsize=12)
-plt.title(r'共振频率与悬挂点位置关系（外延法）', fontsize=14, fontweight='bold')
-plt.legend(loc='best', fontsize=10)
-plt.grid(True, alpha=0.3)
+# 添加图例
+ax.legend(loc='upper left', fontsize=11, frameon=True, shadow=True, framealpha=0.9)
 
 plt.tight_layout()
-plt.savefig('resonance_fit.png', dpi=300)
+plt.savefig('基础磁化曲线.png', dpi=300, bbox_inches='tight')
 plt.show()
 
-# 输出完整报告 - 使用纯文本表示下标
-print("\n" + "="*50)
-print("实验数据处理报告")
-print("="*50)
-print(f"试样长度 L = {L/1000:.4f} m")
-print(f"理论节点位置 = {node_position:.2f} mm")
-print(f"拟合得到的基频 f0 = {f0:.2f} ± {np.sqrt(covariance[2,2]):.2f} Hz")
-print(f"杨氏模量计算公式: Y = 1.6067 × (L^3m/d^4) × f0^2")
+# ---------------------- 5. 输出计算结果（用于实验报告数据记录）----------------------
+print("基础磁化曲线数据计算结果（按逐步增加顺序）：")
+print("-" * 50)
+print(f"{'序号':<5}{'Ux(V)':<10}{'Uy(V)':<10}{'H(A/m)':<12}{'B(T)':<10}")
+print("-" * 50)
+for i in range(len(H_plot)):
+    print(f"{i+1:<5}{Ux_plot[i]:<10.3f}{Uy_plot[i]:<10.4f}{H_plot[i]:<12.2f}{B_plot[i]:<10.4f}")
