@@ -1,0 +1,11 @@
+{
+    "sqltools.connections": [
+        {
+            "previewLimit": 50,
+            "driver": "SQLite",
+            "database": "${workspaceFolder:Stocks-Master}/stock_data/stocks_data.db",
+            "name": "test"
+        }
+    ],
+    "sqltools.useNodeRuntime": true
+}

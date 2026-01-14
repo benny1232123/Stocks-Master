@@ -2,6 +2,7 @@ import akshare as ak
 import pandas as pd
 import numpy as np
 import time
+import sqlite3
 from datetime import datetime, timedelta
 import baostock as bs
 
@@ -102,25 +103,48 @@ def convert_fund_flow(value):
 
 def fetch_data_with_fallback(api_func, file_path, *args, **kwargs):
     """
-    通用数据获取函数，支持从API获取，失败则从本地CSV读取。
+    通用数据获取函数，优先从API获取并存入本地数据库，失败则从数据库读取。
+    数据库文件: stock_data/stocks_data.db
+    
     :param api_func: akshare的数据获取函数。
-    :param file_path: 本地缓存文件的路径。
+    :param file_path: 原文件路径参数，这里用于生成唯一的数据库表名。
     :param args, kwargs: 传递给api_func的参数。
     :return: pandas DataFrame。
     """
+    # 1. 准备数据库配置
+    db_path = "stock_data/stocks_data.db"
+    # 将 file_path 转换为合法的数据库表名 (移除目录、后缀，横杠转下划线)
+    # 例: "stock_data/stock-lrb-2023.csv" -> "stock_lrb_2023"
+    table_name = file_path.replace("stock_data/", "").replace(".csv", "").replace("-", "_")
+    
+    conn = sqlite3.connect(db_path)
+    
     try:
+        # 2. 尝试请求 API
+        # print(f"正在从 API 获取数据: {table_name} ...") 
         df = api_func(*args, **kwargs)
-        df.to_csv(file_path, index=False, encoding="utf-8-sig")
-        print(f"API call for {file_path} was successful. Data saved.")
+        
+        # 3. 成功后写入数据库 (if_exists='replace' 表示如果表存在则覆盖，保持数据最新)
+        # 这一步替代了原来的 to_csv
+        df.to_sql(table_name, conn, if_exists='replace', index=False)
+        print(f"API调用成功。数据已保存至数据库表: {table_name}")
+        
+        conn.close()
         return df
+        
     except Exception as e:
-        print(f"API call for {file_path} failed: {e}. Trying to read local file...")
+        print(f"API调用失败或超时: {e}。正在尝试读取本地数据库缓存...")
         try:
-            df = pd.read_csv(file_path)
-            print(f"Successfully read local file: {file_path}")
+            # 4. API 失败时，尝试从数据库读取缓存
+            query = f"SELECT * FROM {table_name}"
+            df = pd.read_sql(query, conn)
+            
+            conn.close()
+            print(f"成功读取本地数据库表: {table_name}")
             return df
         except Exception as e2:
-            print(f"Failed to read local file {file_path}: {e2}")
+            conn.close()
+            print(f"读取本地数据库失败 {table_name}: {e2}")
             return pd.DataFrame()
 
 '''1.技术面选股'''
