@@ -5,6 +5,9 @@ import time
 import sqlite3
 from datetime import datetime, timedelta
 import baostock as bs
+import os
+import re
+import matplotlib.pyplot as plt
 
 '''0.准备工作'''
 # --- 配置区 ---
@@ -12,6 +15,15 @@ PRICE_UPPER_LIMIT = 30  # 股价上限
 DEBT_ASSET_RATIO_LIMIT = 70  # 资产负债率上限
 CURRENT_YEAR = datetime.now().year
 LAST_YEAR = CURRENT_YEAR - 1
+
+# 可视化配置
+ENABLE_VISUALIZATION = True
+PLOT_ONLY_SELECTED = True          # True: 只画命中策略的票；False: 所有候选都画
+PLOT_MAX_COUNT = 50                # 最多保存多少张图（避免太多）
+PLOT_SAVE_DIR = "stock_data/plots" # 输出目录
+PLOT_SHOW = False                  # Windows下可改 True 弹窗；默认 False 仅保存
+# --- 配置区结束 ---
+
 
 # 根据当前月份确定最近的财报日期
 # 5月前用去年年报，5-8月用一季报，9-10月用中报，11月后用三季报
@@ -316,6 +328,20 @@ lg = bs.login()
 print('login respond error_code:'+lg.error_code)
 print('login respond  error_msg:'+lg.error_msg)
 
+# 先拉取一次全市场代码-名称映射（用于最终 CSV 和图片命名）
+code_name_map: dict[str, str] = {}
+try:
+    code_name_df = fetch_data_with_fallback(
+        ak.stock_info_a_code_name,
+        "stock_data/stock_info_a_code_name.csv",
+    )
+    if not code_name_df.empty and {"code", "name"}.issubset(code_name_df.columns):
+        tmp = code_name_df.copy()
+        tmp["code"] = tmp["code"].apply(format_stock_code)
+        code_name_map = dict(zip(tmp["code"], tmp["name"]))
+except Exception as e:
+    print(f"获取股票名称映射失败: {e}（将仅输出股票代码）")
+
 def format_stock_code(code):
     """将股票代码格式化为6位数"""
     if isinstance(code, str):
@@ -330,22 +356,92 @@ def add_market_prefix_dotted(code):
     formatted_code = format_stock_code(code)
     return f"sh.{formatted_code}" if formatted_code.startswith('6') else f"sz.{formatted_code}"
 
+def safe_filename_component(s: str, max_len: int = 30) -> str:
+    """清理成适合 Windows 文件名的片段"""
+    if s is None:
+        return ""
+    s = str(s).strip()
+    # Windows 不允许：\ / : * ? " < > |
+    s = re.sub(r'[\\/:*?"<>|]', "_", s)
+    s = re.sub(r"\s+", "", s)
+    return s[:max_len]
+
+def plot_bollinger(
+    result_df: pd.DataFrame,
+    fncode: str,
+    k: float,
+    today: str,
+    save_dir: str,
+    show: bool = False,
+    stock_name: str = "",
+):
+    """保存布林带图：close / MA20 / Upper / Lower（文件名/标题包含股票名称）"""
+    if result_df.empty:
+        return
+    needed_cols = {"date", "close", "MA20", "Upper", "Lower"}
+    if not needed_cols.issubset(result_df.columns):
+        return
+
+    os.makedirs(save_dir, exist_ok=True)
+
+    dfp = result_df.copy()
+    try:
+        dfp["date"] = pd.to_datetime(dfp["date"])
+    except Exception:
+        pass
+
+    name_part = safe_filename_component(stock_name)
+    display_name = stock_name.strip() if isinstance(stock_name, str) else ""
+    title_name = f"{fncode} {display_name}".strip()
+
+    plt.figure(figsize=(12, 6))
+    plt.plot(dfp["date"], dfp["close"], label="Close", linewidth=1.6)
+    plt.plot(dfp["date"], dfp["MA20"], label="MA20", linewidth=1.2)
+    plt.plot(dfp["date"], dfp["Upper"], label=f"Upper (k={k})", linewidth=1.0)
+    plt.plot(dfp["date"], dfp["Lower"], label=f"Lower (k={k})", linewidth=1.0)
+    plt.fill_between(dfp["date"], dfp["Lower"], dfp["Upper"], alpha=0.12)
+
+    plt.title(f"{title_name} Bollinger Bands (MA20, k={k})")
+    plt.xlabel("Date")
+    plt.ylabel("Price")
+    plt.grid(True, linestyle="--", alpha=0.3)
+    plt.legend()
+
+    if name_part:
+        out_name = f"{fncode}_{name_part}_BOLL_{today}.png"
+    else:
+        out_name = f"{fncode}_BOLL_{today}.png"
+
+    out_path = os.path.join(save_dir, out_name)
+    plt.tight_layout()
+    plt.savefig(out_path, dpi=160)
+    if show:
+        plt.show()
+    plt.close()
+    print(f"可视化已保存: {out_path}")
+
 #### 获取沪深A股历史K线数据 ####
 # 详细指标参数，参见“历史行情指标参数”章节；“分钟线”参数与“日线”参数不同。“分钟线”不包含指数。
 # 分钟线指标：date,time,code,open,high,low,close,volume,amount,adjustflag
 # 周月线指标：date,code,open,high,low,close,volume,amount,adjustflag,turn,pctChg
 # 1：后复权；2：前复权 ；3：不复权
 
-days_back = 60 
+days_back = 60
 start_date = (datetime.now() - timedelta(days=days_back)).strftime('%Y-%m-%d')
 boll_selected_codes = []
+plot_saved_count = 0
 
 for fncode in final_candidate_codes:
-    rs = bs.query_history_k_data_plus(add_market_prefix_dotted(fncode),
+    stock_name = code_name_map.get(format_stock_code(fncode), "")
+
+    rs = bs.query_history_k_data_plus(
+        add_market_prefix_dotted(fncode),
         "date,code,open,high,low,close,preclose,volume,amount,adjustflag,turn,tradestatus,pctChg,isST",
-        start_date=start_date, 
+        start_date=start_date,
         end_date=f"{CURRENT_YEAR}-{current_month}-{current_day}",
-        frequency="d", adjustflag="2")
+        frequency="d",
+        adjustflag="2"
+    )
 
     print('query_history_k_data_plus respond error_code:'+rs.error_code)
     print('query_history_k_data_plus respond  error_msg:'+rs.error_msg)
@@ -372,24 +468,45 @@ for fncode in final_candidate_codes:
         result_df['Lower'] = result_df['MA20'] - k * result_df['STD20']
         
         latest = result_df.iloc[-1]
-        
-        # 策略：收盘价接近或跌破下轨 (超卖)
-        # 设定接近阈值为下轨上方 1.5%
+
+        selected = False
         if latest['close'] < latest['Lower']:
-            print(f"{fncode} 价格低于布林带下轨 (90%概率)，超卖")
+            print(f"{fncode} {stock_name} 价格低于布林带下轨 (90%概率)，超卖".strip())
             boll_selected_codes.append(fncode)
+            selected = True
         elif latest['close'] <= latest['Lower'] * 1.015:
-            print(f"{fncode} 价格接近布林带下轨 (90%概率)，关注")
+            print(f"{fncode} {stock_name} 价格接近布林带下轨 (90%概率)，关注".strip())
             boll_selected_codes.append(fncode)
+            selected = True
+
+        if ENABLE_VISUALIZATION and plot_saved_count < PLOT_MAX_COUNT:
+            if (not PLOT_ONLY_SELECTED) or selected:
+                plot_bollinger(
+                    result_df=result_df,
+                    fncode=fncode,
+                    k=k,
+                    today=today,
+                    save_dir=PLOT_SAVE_DIR,
+                    show=PLOT_SHOW,
+                    stock_name=stock_name,
+                )
+                plot_saved_count += 1
 
 bs.logout()
 
 if boll_selected_codes:
-    out_df = pd.DataFrame({"股票代码": boll_selected_codes})
-    out_df.to_csv(f"stock_data/Stock-Selection-Boll-{today}.csv", index=False, encoding='utf-8-sig')
-    print(f"Stock-Selection-Boll-{today}.csv 文件已保存，仅包含股票代码")
-    print("\n布林带最终选股代码:")
-    print(boll_selected_codes)
+    out_df = pd.DataFrame({
+        "股票代码": [format_stock_code(c) for c in boll_selected_codes],
+        "股票名称": [code_name_map.get(format_stock_code(c), "") for c in boll_selected_codes],
+    })
+    out_df.to_csv(
+        f"stock_data/Stock-Selection-Boll-{today}.csv",
+        index=False,
+        encoding='utf-8-sig'
+    )
+    print(f"Stock-Selection-Boll-{today}.csv 文件已保存，包含股票代码与名称")
+    print("\n布林带最终选股:")
+    print(out_df)
 else:
     print("\n没有选出符合布林带策略的股票。")
 
