@@ -60,13 +60,13 @@ ZCFZ_DATES = [ZCFZ_DATE1, ZCFZ_DATE2]
 UNFAMILIAR_INDUSTRY = [
     "钢铁行业", "化学制品", "房地产开发", "纺织服装", "水泥建材", "燃气",
     "航运港口", "化学原料", "美容护理", "农药兽药", "化纤行业", "采掘行业",
-    "化肥行业", "酿酒行业", "商业百货", "中药", "化学制药", "医药商业", "生物制品",
+    "化肥行业", "酿酒行业", "中药", "化学制药", "医药商业", "生物制品",
     "工业金属", "钢铁", "港口航运", "造纸", "包装印刷", "食品加工制造", 
     "环境治理", "服装家纺", "养殖业", "建筑材料", "农产品加工", "纺织制造",
-    "乳胶制品", "零售", "机场航运", "公路铁路运输", "化学纤维", "电池", 
+    "乳胶制品",  "机场航运", "公路铁路运输", "化学纤维", "电池", 
     "生物制品", "光学光电子", "种植业与林业", "农化制品", "金属新材料", "饮料制造",
     "小金属", "建筑装饰", "石油加工贸易", "橡胶制品", "油气开采及服务","医疗服务",
-    "电子化学品", "煤炭开采加工", "医疗器械", "贵金属", "工程机械"
+    "电子化学品", "煤炭开采加工", "医疗器械", "贵金属"
 
 ]
 IMPORTANT_SHAREHOLDERS = [
@@ -125,9 +125,22 @@ def fetch_data_with_fallback(api_func, file_path, *args, **kwargs):
     """
     # 1. 准备数据库配置
     db_path = "stock_data/stocks_data.db"
-    # 将 file_path 转换为合法的数据库表名 (移除目录、后缀，横杠转下划线)
-    # 例: "stock_data/stock-lrb-2023.csv" -> "stock_lrb_2023"
-    table_name = file_path.replace("stock_data/", "").replace(".csv", "").replace("-", "_")
+
+    def sanitize_table_name(name: str) -> str:
+        """生成安全的 SQLite 表名：仅保留字母数字/下划线，并避免数字开头。"""
+        name = str(name)
+        name = name.replace("stock_data/", "").replace(".csv", "").replace("-", "_")
+        name = re.sub(r"[^0-9a-zA-Z_]+", "_", name)
+        name = re.sub(r"_+", "_", name).strip("_")
+        if not name:
+            name = "table"
+        if name[0].isdigit():
+            name = f"t_{name}"
+        return name
+
+    # 将 file_path 转换为合法的数据库表名
+    # 例: "stock_data/3-days-positive-funds.csv" -> "t_3_days_positive_funds"
+    table_name = sanitize_table_name(file_path)
     
     conn = sqlite3.connect(db_path)
     
@@ -148,8 +161,8 @@ def fetch_data_with_fallback(api_func, file_path, *args, **kwargs):
         print(f"API调用失败或超时: {e}。正在尝试读取本地数据库缓存...")
         try:
             # 4. API 失败时，尝试从数据库读取缓存
-            query = f"SELECT * FROM {table_name}"
-            df = pd.read_sql(query, conn)
+            query = f'SELECT * FROM "{table_name}"'
+            df = pd.read_sql_query(query, conn)
             
             conn.close()
             print(f"成功读取本地数据库表: {table_name}")

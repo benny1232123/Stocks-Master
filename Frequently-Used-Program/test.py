@@ -2,7 +2,6 @@ import baostock as bs
 import pandas as pd
 import time
 import datetime
-from sklearn.linear_model import LinearRegression
 import numpy as np
 import akshare as ak
 
@@ -13,5 +12,5 @@ current_month = now.month
 current_day = now.day
 
 
-df=ak.fund_etf_spot_em()
-df.to_csv("ETF基金.csv", encoding="utf-8-sig")
+df=ak.news_cctv(date=today)
+df.to_csv(f"{today}_cctv.csv", index=False)
