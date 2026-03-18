@@ -1,20 +1,109 @@
 from __future__ import annotations
 
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import date, datetime
+from threading import Lock
+import time
+from typing import Callable, TypeVar
 
 import akshare as ak
 import baostock as bs
 import pandas as pd
 
 from core.data_fetcher import (
+    fetch_code_name_map,
+    fetch_daily_k_data,
+    fetch_fund_flow_snapshot,
     format_stock_code,
     infer_report_period,
-    parse_amount_text,
     previous_report_period,
     to_baostock_code,
 )
 from core.indicators import calc_bollinger, evaluate_boll_signal
 from utils.config import DEFAULT_FUND_FLOW_PERIODS, IMPORTANT_SHAREHOLDER_TYPES, IMPORTANT_SHAREHOLDERS
+
+
+ProgressCallback = Callable[[str, int, int, str], None]
+T = TypeVar("T")
+
+
+class _RateLimiter:
+    def __init__(self, request_interval_seconds: float = 0.0) -> None:
+        self.interval_seconds = max(0.0, float(request_interval_seconds))
+        self._lock = Lock()
+        self._next_allowed = 0.0
+
+    def wait(self) -> None:
+        if self.interval_seconds <= 0:
+            return
+
+        while True:
+            with self._lock:
+                now = time.monotonic()
+                if now >= self._next_allowed:
+                    self._next_allowed = now + self.interval_seconds
+                    return
+                sleep_seconds = self._next_allowed - now
+            if sleep_seconds > 0:
+                time.sleep(sleep_seconds)
+
+
+def _retry_action(
+    action: Callable[[], T],
+    max_retries: int,
+    backoff_seconds: float,
+    rate_limiter: _RateLimiter | None = None,
+) -> T:
+    retries = max(0, int(max_retries))
+    base_sleep = max(0.0, float(backoff_seconds))
+    last_error: Exception | None = None
+
+    for attempt in range(retries + 1):
+        try:
+            if rate_limiter is not None:
+                rate_limiter.wait()
+            return action()
+        except Exception as error:
+            last_error = error
+            if attempt >= retries:
+                break
+            if base_sleep > 0:
+                time.sleep(base_sleep * (2**attempt))
+
+    if last_error is not None:
+        raise last_error
+    raise RuntimeError("重试失败")
+
+
+def _retry_fetch_dataframe(
+    action: Callable[[], pd.DataFrame],
+    max_retries: int,
+    backoff_seconds: float,
+    rate_limiter: _RateLimiter | None = None,
+) -> pd.DataFrame:
+    retries = max(0, int(max_retries))
+    base_sleep = max(0.0, float(backoff_seconds))
+    last_df = pd.DataFrame()
+
+    for attempt in range(retries + 1):
+        try:
+            if rate_limiter is not None:
+                rate_limiter.wait()
+            current_df = action()
+        except Exception:
+            current_df = pd.DataFrame()
+
+        if isinstance(current_df, pd.DataFrame):
+            last_df = current_df
+            if not current_df.empty:
+                return current_df
+
+        if attempt >= retries:
+            break
+        if base_sleep > 0:
+            time.sleep(base_sleep * (2**attempt))
+
+    return last_df
 
 
 def _to_float(raw_value: object) -> float | None:
@@ -36,58 +125,78 @@ def _result_set_to_df(result_set) -> pd.DataFrame:
     return pd.DataFrame(rows, columns=result_set.fields)
 
 
-def _to_date_string(value: str | date | datetime) -> str:
-    if isinstance(value, datetime):
-        return value.strftime("%Y-%m-%d")
-    if isinstance(value, date):
-        return value.strftime("%Y-%m-%d")
-    text = str(value)
-    if len(text) == 8 and text.isdigit():
-        return f"{text[:4]}-{text[4:6]}-{text[6:]}"
-    return text
-
-
-def _fetch_code_name_map_bs(codes: list[str]) -> dict[str, str]:
-    code_name_map: dict[str, str] = {}
-    for code in codes:
-        result_set = bs.query_stock_basic(code=to_baostock_code(code))
-        if result_set.error_code != "0":
-            continue
-        basic_df = _result_set_to_df(result_set)
-        if basic_df.empty or "code_name" not in basic_df.columns:
-            continue
-        code_name_map[code] = str(basic_df.iloc[0]["code_name"])
-    return code_name_map
-
-
-def _fetch_positive_fund_flow_codes(period_symbol: str, price_upper_limit: float) -> set[str]:
-    try:
-        fund_df = ak.stock_fund_flow_individual(symbol=period_symbol)
-    except Exception:
+def _fetch_positive_fund_flow_codes(
+    period_symbol: str,
+    price_upper_limit: float,
+    use_cache: bool,
+    force_refresh: bool,
+    cache_max_age_hours: float,
+    max_retries: int,
+    retry_backoff_seconds: float,
+    rate_limiter: _RateLimiter | None,
+) -> set[str]:
+    fund_df = _retry_fetch_dataframe(
+        lambda: fetch_fund_flow_snapshot(
+            period_symbol=period_symbol,
+            use_cache=use_cache,
+            force_refresh=force_refresh,
+            max_cache_age_hours=cache_max_age_hours,
+        ),
+        max_retries=max_retries,
+        backoff_seconds=retry_backoff_seconds,
+        rate_limiter=rate_limiter,
+    )
+    if fund_df.empty:
         return set()
 
-    if fund_df is None or fund_df.empty or fund_df.shape[1] < 7:
-        return set()
-
-    normalized = fund_df.copy()
-    normalized["code"] = normalized.iloc[:, 1].map(format_stock_code)
-    normalized["latest_price"] = pd.to_numeric(normalized.iloc[:, 3], errors="coerce")
-    normalized["net_inflow"] = normalized.iloc[:, 6].map(parse_amount_text)
-
-    filtered = normalized[
-        (normalized["net_inflow"] > 0)
-        & (normalized["latest_price"] < float(price_upper_limit))
-    ]
+    filtered = fund_df[(fund_df["net_inflow"] > 0) & (fund_df["latest_price"] < float(price_upper_limit))]
     return set(filtered["code"].dropna().astype(str).tolist())
 
 
 def _fetch_fund_flow_union(
     price_upper_limit: float,
     periods: tuple[str, ...],
+    use_cache: bool,
+    force_refresh: bool,
+    cache_max_age_hours: float,
+    max_workers: int,
+    max_retries: int,
+    retry_backoff_seconds: float,
+    rate_limiter: _RateLimiter | None,
+    progress_callback: ProgressCallback | None = None,
 ) -> tuple[set[str], dict[str, set[str]]]:
     period_code_map: dict[str, set[str]] = {}
-    for period_symbol in periods:
-        period_code_map[period_symbol] = _fetch_positive_fund_flow_codes(period_symbol, price_upper_limit)
+    total = len(periods)
+    if total == 0:
+        return set(), {}
+
+    worker_count = max(1, min(int(max_workers), total))
+    with ThreadPoolExecutor(max_workers=worker_count) as executor:
+        future_map = {
+            executor.submit(
+                _fetch_positive_fund_flow_codes,
+                period_symbol,
+                price_upper_limit,
+                use_cache,
+                force_refresh,
+                cache_max_age_hours,
+                max_retries,
+                retry_backoff_seconds,
+                rate_limiter,
+            ): period_symbol
+            for period_symbol in periods
+        }
+
+        for done_count, future in enumerate(as_completed(future_map), start=1):
+            period_symbol = future_map[future]
+            try:
+                period_code_map[period_symbol] = future.result()
+            except Exception:
+                period_code_map[period_symbol] = set()
+            if progress_callback is not None:
+                progress_callback("fund_flow", done_count, total, f"资金流榜单处理中：{period_symbol}")
+
+    period_code_map = {period: period_code_map.get(period, set()) for period in periods}
 
     union_codes: set[str] = set()
     for code_set in period_code_map.values():
@@ -96,11 +205,36 @@ def _fetch_fund_flow_union(
     return union_codes, period_code_map
 
 
-def _query_financial_with_fallback(code: str, query_func, periods: list[tuple[int, int]]) -> pd.DataFrame:
+def _query_financial_with_fallback(
+    code: str,
+    query_func,
+    periods: list[tuple[int, int]],
+    max_retries: int,
+    retry_backoff_seconds: float,
+    rate_limiter: _RateLimiter | None,
+) -> pd.DataFrame:
     bs_code = to_baostock_code(code)
+    retries = max(0, int(max_retries))
+    base_sleep = max(0.0, float(retry_backoff_seconds))
+
     for year, quarter in periods:
-        result_set = query_func(code=bs_code, year=year, quarter=quarter)
-        if result_set.error_code != "0":
+        result_set = None
+        for attempt in range(retries + 1):
+            try:
+                if rate_limiter is not None:
+                    rate_limiter.wait()
+                result_set = query_func(code=bs_code, year=year, quarter=quarter)
+            except Exception:
+                result_set = None
+
+            if result_set is not None and getattr(result_set, "error_code", "1") == "0":
+                break
+            if attempt >= retries:
+                break
+            if base_sleep > 0:
+                time.sleep(base_sleep * (2**attempt))
+
+        if result_set is None or result_set.error_code != "0":
             continue
         data_frame = _result_set_to_df(result_set)
         if not data_frame.empty:
@@ -120,13 +254,24 @@ def _calc_liability_ratio_percent(balance_df: pd.DataFrame) -> float | None:
     return ratio_raw
 
 
-def _fetch_forecast_eps_mean(code: str, current_year: int) -> float | None:
+def _fetch_forecast_eps_mean(
+    code: str,
+    current_year: int,
+    max_retries: int,
+    retry_backoff_seconds: float,
+    rate_limiter: _RateLimiter | None,
+) -> float | None:
     try:
-        forecast_df = ak.stock_profit_forecast_ths(symbol=code)
+        forecast_df = _retry_action(
+            lambda: ak.stock_profit_forecast_ths(symbol=code),
+            max_retries=max_retries,
+            backoff_seconds=retry_backoff_seconds,
+            rate_limiter=rate_limiter,
+        )
     except Exception:
         return None
 
-    if forecast_df is None or forecast_df.empty or forecast_df.shape[1] < 4:
+    if not isinstance(forecast_df, pd.DataFrame) or forecast_df.empty or forecast_df.shape[1] < 4:
         return None
 
     temp = forecast_df.copy()
@@ -152,11 +297,42 @@ def _evaluate_fundamental(
     periods: list[tuple[int, int]],
     debt_asset_ratio_limit: float,
     current_year: int,
+    max_retries: int,
+    retry_backoff_seconds: float,
+    rate_limiter: _RateLimiter | None,
 ) -> dict[str, object]:
-    balance_df = _query_financial_with_fallback(code, bs.query_balance_data, periods)
-    profit_df = _query_financial_with_fallback(code, bs.query_profit_data, periods)
-    cash_df = _query_financial_with_fallback(code, bs.query_cash_flow_data, periods)
-    growth_df = _query_financial_with_fallback(code, bs.query_growth_data, periods)
+    balance_df = _query_financial_with_fallback(
+        code,
+        bs.query_balance_data,
+        periods,
+        max_retries=max_retries,
+        retry_backoff_seconds=retry_backoff_seconds,
+        rate_limiter=rate_limiter,
+    )
+    profit_df = _query_financial_with_fallback(
+        code,
+        bs.query_profit_data,
+        periods,
+        max_retries=max_retries,
+        retry_backoff_seconds=retry_backoff_seconds,
+        rate_limiter=rate_limiter,
+    )
+    cash_df = _query_financial_with_fallback(
+        code,
+        bs.query_cash_flow_data,
+        periods,
+        max_retries=max_retries,
+        retry_backoff_seconds=retry_backoff_seconds,
+        rate_limiter=rate_limiter,
+    )
+    growth_df = _query_financial_with_fallback(
+        code,
+        bs.query_growth_data,
+        periods,
+        max_retries=max_retries,
+        retry_backoff_seconds=retry_backoff_seconds,
+        rate_limiter=rate_limiter,
+    )
 
     debt_ratio_percent = _calc_liability_ratio_percent(balance_df)
     debt_pass = debt_ratio_percent is not None and debt_ratio_percent < float(debt_asset_ratio_limit)
@@ -179,7 +355,13 @@ def _evaluate_fundamental(
     if not growth_df.empty and "YOYNI" in growth_df.columns:
         yoy_ni = _to_float(growth_df.iloc[-1].get("YOYNI"))
 
-    forecast_eps_mean = _fetch_forecast_eps_mean(code, current_year=current_year)
+    forecast_eps_mean = _fetch_forecast_eps_mean(
+        code,
+        current_year=current_year,
+        max_retries=max_retries,
+        retry_backoff_seconds=retry_backoff_seconds,
+        rate_limiter=rate_limiter,
+    )
     forecast_pass = bool(
         (forecast_eps_mean is not None and forecast_eps_mean > 0)
         or (yoy_ni is not None and yoy_ni > 0)
@@ -204,13 +386,21 @@ def _check_important_shareholder(
     code: str,
     important_shareholders: tuple[str, ...],
     important_holder_types: tuple[str, ...],
+    max_retries: int,
+    retry_backoff_seconds: float,
+    rate_limiter: _RateLimiter | None,
 ) -> tuple[bool, str]:
     try:
-        holder_df = ak.stock_circulate_stock_holder(symbol=code)
+        holder_df = _retry_action(
+            lambda: ak.stock_circulate_stock_holder(symbol=code),
+            max_retries=max_retries,
+            backoff_seconds=retry_backoff_seconds,
+            rate_limiter=rate_limiter,
+        )
     except Exception:
         return True, "股东接口异常，默认保留"
 
-    if holder_df is None or holder_df.empty or holder_df.shape[1] < 7:
+    if not isinstance(holder_df, pd.DataFrame) or holder_df.empty or holder_df.shape[1] < 7:
         return True, "股东数据为空，默认保留"
 
     dates = pd.to_datetime(holder_df.iloc[:, 0], errors="coerce")
@@ -236,36 +426,225 @@ def _check_important_shareholder(
     return False, "未命中重点股东"
 
 
-def _fetch_daily_k_data_in_session(
+def _score_full_flow_result(
+    flow_pass: bool,
+    debt_pass: bool,
+    profit_pass: bool,
+    cash_pass: bool,
+    forecast_pass: bool,
+    shareholder_pass: bool,
+    signal_type: str,
+    hit: bool,
+) -> tuple[int, str, str]:
+    score = 0
+    reasons: list[str] = []
+
+    if flow_pass:
+        score += 20
+        reasons.append("资金流通过")
+    else:
+        reasons.append("资金流未通过")
+
+    if debt_pass:
+        score += 10
+    else:
+        reasons.append("资产负债率未通过")
+
+    if profit_pass:
+        score += 15
+    else:
+        reasons.append("净利润未通过")
+
+    if cash_pass:
+        score += 10
+    else:
+        reasons.append("现金流未通过")
+
+    if forecast_pass:
+        score += 10
+    else:
+        reasons.append("盈利预期未通过")
+
+    if shareholder_pass:
+        score += 15
+        reasons.append("重点股东加分")
+    else:
+        reasons.append("重点股东未命中")
+
+    if hit:
+        score += 20
+        reasons.append("Boll命中")
+    elif signal_type == "oversold_continuous":
+        score += 4
+        reasons.append("连续低于下轨，已抑制重复触发")
+    elif signal_type == "near_lower":
+        score += 12
+        reasons.append("接近下轨")
+    elif signal_type == "oversold":
+        score += 16
+        reasons.append("低于下轨")
+    elif signal_type == "neutral":
+        score += 6
+        reasons.append("布林中性")
+    elif signal_type == "near_upper":
+        score += 4
+        reasons.append("接近上轨")
+    elif signal_type == "overbought":
+        score += 2
+        reasons.append("高于上轨")
+    elif signal_type == "insufficient":
+        reasons.append("K线样本不足")
+    elif signal_type == "empty_k":
+        reasons.append("K线数据为空")
+    elif signal_type == "fetch_error":
+        reasons.append("K线请求失败")
+    else:
+        reasons.append("未进入Boll")
+
+    score = int(max(0, min(100, score)))
+    if score >= 85:
+        grade = "A"
+        conclusion = "优先关注"
+    elif score >= 70:
+        grade = "B"
+        conclusion = "可持续跟踪"
+    elif score >= 55:
+        grade = "C"
+        conclusion = "中性观察"
+    else:
+        grade = "D"
+        conclusion = "暂不优先"
+
+    return score, grade, f"{conclusion}：{'；'.join(reasons)}"
+
+
+def _evaluate_boll_candidate(
     code: str,
     start_date: str | date,
     end_date: str | date,
+    window: int,
+    k: float,
+    near_ratio: float,
     adjust: str,
-) -> pd.DataFrame:
-    adjust_map = {"hfq": "1", "qfq": "2", "bfq": "3"}
-    adjust_flag = adjust_map.get(str(adjust).lower(), "2")
-
-    result_set = bs.query_history_k_data_plus(
-        to_baostock_code(code),
-        "date,code,open,high,low,close,volume,amount",
-        start_date=_to_date_string(start_date),
-        end_date=_to_date_string(end_date),
-        frequency="d",
-        adjustflag=adjust_flag,
+    use_cache: bool,
+    force_refresh: bool,
+    cache_max_age_hours: float,
+    max_retries: int,
+    retry_backoff_seconds: float,
+    rate_limiter: _RateLimiter | None,
+) -> tuple[str, pd.DataFrame, dict[str, object]]:
+    k_df = _retry_fetch_dataframe(
+        lambda: fetch_daily_k_data(
+            code=code,
+            start_date=start_date,
+            end_date=end_date,
+            adjust=adjust,
+            use_cache=use_cache,
+            force_refresh=force_refresh,
+            max_cache_age_hours=cache_max_age_hours,
+        ),
+        max_retries=max_retries,
+        backoff_seconds=retry_backoff_seconds,
+        rate_limiter=rate_limiter,
     )
-    if result_set.error_code != "0":
-        return pd.DataFrame()
 
-    price_df = _result_set_to_df(result_set)
-    if price_df.empty:
-        return price_df
+    if k_df.empty:
+        return (
+            code,
+            pd.DataFrame(),
+            {
+                "signal": "K线数据为空",
+                "signal_type": "empty_k",
+                "selected": False,
+                "latest_close": None,
+                "latest_lower": None,
+                "latest_upper": None,
+            },
+        )
 
-    for column_name in ["open", "high", "low", "close", "volume", "amount"]:
-        price_df[column_name] = pd.to_numeric(price_df[column_name], errors="coerce")
-    price_df["date"] = pd.to_datetime(price_df["date"], errors="coerce")
-    price_df = price_df.dropna(subset=["date", "close"]).sort_values("date").reset_index(drop=True)
-    price_df["date"] = price_df["date"].dt.strftime("%Y-%m-%d")
-    return price_df
+    boll_df = calc_bollinger(k_df, window=window, k=k)
+    signal_info = evaluate_boll_signal(boll_df, near_ratio=near_ratio)
+    latest = boll_df.iloc[-1]
+
+    return (
+        code,
+        boll_df,
+        {
+            "signal": str(signal_info["signal"]),
+            "signal_type": str(signal_info.get("signal_type", "unknown")),
+            "selected": bool(signal_info["selected"]),
+            "latest_close": float(latest["close"]) if pd.notna(latest["close"]) else None,
+            "latest_lower": float(latest["Lower"]) if pd.notna(latest["Lower"]) else None,
+            "latest_upper": float(latest["Upper"]) if pd.notna(latest["Upper"]) else None,
+        },
+    )
+
+
+def _evaluate_boll_candidates_parallel(
+    codes: list[str],
+    start_date: str | date,
+    end_date: str | date,
+    window: int,
+    k: float,
+    near_ratio: float,
+    adjust: str,
+    use_cache: bool,
+    force_refresh: bool,
+    cache_max_age_hours: float,
+    max_workers: int,
+    max_retries: int,
+    retry_backoff_seconds: float,
+    rate_limiter: _RateLimiter | None,
+) -> tuple[dict[str, dict[str, object]], dict[str, pd.DataFrame]]:
+    if not codes:
+        return {}, {}
+
+    worker_count = max(1, min(int(max_workers), len(codes)))
+    signal_map: dict[str, dict[str, object]] = {}
+    data_map: dict[str, pd.DataFrame] = {}
+
+    with ThreadPoolExecutor(max_workers=worker_count) as executor:
+        future_map = {
+            executor.submit(
+                _evaluate_boll_candidate,
+                code,
+                start_date,
+                end_date,
+                window,
+                k,
+                near_ratio,
+                adjust,
+                use_cache,
+                force_refresh,
+                cache_max_age_hours,
+                max_retries,
+                retry_backoff_seconds,
+                rate_limiter,
+            ): code
+            for code in codes
+        }
+
+        for future in as_completed(future_map):
+            code = future_map[future]
+            try:
+                code_key, boll_df, signal_info = future.result()
+            except Exception:
+                code_key = code
+                boll_df = pd.DataFrame()
+                signal_info = {
+                    "signal": "K线请求失败",
+                    "signal_type": "fetch_error",
+                    "selected": False,
+                    "latest_close": None,
+                    "latest_lower": None,
+                    "latest_upper": None,
+                }
+
+            signal_map[code_key] = signal_info
+            if not boll_df.empty:
+                data_map[code_key] = boll_df
+
+    return signal_map, data_map
 
 
 def analyze_stocks_full_flow(
@@ -276,13 +655,21 @@ def analyze_stocks_full_flow(
     k: float = 1.645,
     near_ratio: float = 1.015,
     adjust: str = "qfq",
-    price_upper_limit: float = 30.0,
+    price_upper_limit: float = 35.0,
     debt_asset_ratio_limit: float = 70.0,
     exclude_gem_sci: bool = True,
     fund_flow_periods: tuple[str, ...] = DEFAULT_FUND_FLOW_PERIODS,
     important_shareholders: tuple[str, ...] = IMPORTANT_SHAREHOLDERS,
     important_holder_types: tuple[str, ...] = IMPORTANT_SHAREHOLDER_TYPES,
-) -> tuple[pd.DataFrame, dict[str, pd.DataFrame], dict[str, int]]:
+    use_cache: bool = True,
+    force_refresh: bool = False,
+    cache_max_age_hours: float = 24.0,
+    max_workers: int = 4,
+    max_retries: int = 2,
+    retry_backoff_seconds: float = 0.5,
+    request_interval_seconds: float = 0.0,
+    progress_callback: ProgressCallback | None = None,
+) -> tuple[pd.DataFrame, dict[str, pd.DataFrame], dict[str, int | float]]:
     normalized_codes = [format_stock_code(code) for code in codes]
     normalized_codes = list(dict.fromkeys(normalized_codes))
 
@@ -295,9 +682,32 @@ def analyze_stocks_full_flow(
     else:
         universe_codes = normalized_codes
 
+    code_name_map = fetch_code_name_map(
+        universe_codes,
+        use_cache=use_cache,
+        force_refresh=force_refresh,
+        max_cache_age_hours=cache_max_age_hours,
+    )
+
+    if progress_callback is not None:
+        progress_callback("init", 0, len(universe_codes), "初始化筛选任务")
+
+    safe_max_workers = max(1, int(max_workers))
+    safe_max_retries = max(0, int(max_retries))
+    safe_retry_backoff = max(0.0, float(retry_backoff_seconds))
+    network_limiter = _RateLimiter(request_interval_seconds=request_interval_seconds)
+
     flow_union_codes, fund_flow_map = _fetch_fund_flow_union(
         price_upper_limit=float(price_upper_limit),
         periods=fund_flow_periods,
+        use_cache=use_cache,
+        force_refresh=force_refresh,
+        cache_max_age_hours=cache_max_age_hours,
+        max_workers=safe_max_workers,
+        max_retries=safe_max_retries,
+        retry_backoff_seconds=safe_retry_backoff,
+        rate_limiter=network_limiter,
+        progress_callback=progress_callback,
     )
     fund_flow_pass_codes = set(universe_codes) & flow_union_codes
 
@@ -316,9 +726,12 @@ def analyze_stocks_full_flow(
         raise RuntimeError(f"baostock 登录失败: {login_result.error_msg}")
 
     try:
-        code_name_map = _fetch_code_name_map_bs(universe_codes)
+        total_codes = len(universe_codes)
+        update_step = 1 if total_codes <= 500 else 10
+        for index, code in enumerate(universe_codes, start=1):
+            if progress_callback is not None and (index % update_step == 0 or index == total_codes):
+                progress_callback("evaluate", index, total_codes, f"逐股评估中：{code}")
 
-        for code in universe_codes:
             stock_name = code_name_map.get(code, "")
             flow_pass = code in fund_flow_pass_codes
             period_hits = [period for period, code_set in fund_flow_map.items() if code in code_set]
@@ -340,6 +753,7 @@ def analyze_stocks_full_flow(
             shareholder_pass = False
             shareholder_note = "未执行"
             boll_signal = "未执行"
+            signal_type = "not_run"
             latest_close = None
             latest_lower = None
             latest_upper = None
@@ -350,6 +764,9 @@ def analyze_stocks_full_flow(
                 periods=report_periods,
                 debt_asset_ratio_limit=float(debt_asset_ratio_limit),
                 current_year=pd.to_datetime(end_date).year,
+                max_retries=safe_max_retries,
+                retry_backoff_seconds=safe_retry_backoff,
+                rate_limiter=network_limiter,
             )
             debt_ratio_percent = fundamental_info["debt_ratio_percent"]
             debt_pass = bool(fundamental_info["debt_pass"])
@@ -371,6 +788,9 @@ def analyze_stocks_full_flow(
                     code=code,
                     important_shareholders=important_shareholders,
                     important_holder_types=important_holder_types,
+                    max_retries=safe_max_retries,
+                    retry_backoff_seconds=safe_retry_backoff,
+                    rate_limiter=network_limiter,
                 )
             else:
                 if not flow_pass and not fundamental_pass:
@@ -383,26 +803,8 @@ def analyze_stocks_full_flow(
 
             if shareholder_pass:
                 shareholder_pass_codes.add(code)
-                k_df = _fetch_daily_k_data_in_session(
-                    code=code,
-                    start_date=start_date,
-                    end_date=end_date,
-                    adjust=adjust,
-                )
-                if not k_df.empty:
-                    boll_df = calc_bollinger(k_df, window=window, k=k)
-                    signal_info = evaluate_boll_signal(boll_df, near_ratio=near_ratio)
-                    data_map[code] = boll_df
-                    boll_signal = str(signal_info["signal"])
-                    hit = bool(signal_info["selected"])
-                    latest = boll_df.iloc[-1]
-                    latest_close = float(latest["close"]) if pd.notna(latest["close"]) else None
-                    latest_lower = float(latest["Lower"]) if pd.notna(latest["Lower"]) else None
-                    latest_upper = float(latest["Upper"]) if pd.notna(latest["Upper"]) else None
-                    if hit:
-                        boll_selected_codes.add(code)
-                else:
-                    boll_signal = "K线数据为空"
+                boll_signal = "待并发评估"
+                signal_type = "pending"
             elif prefilter_pass:
                 boll_signal = "股东未通过，未进入 Boll"
 
@@ -412,6 +814,7 @@ def analyze_stocks_full_flow(
                     "股票名称": stock_name,
                     "资金流通过": flow_pass,
                     "资金流说明": flow_note,
+                    "基本面通过": fundamental_pass,
                     "前置汇合通过": prefilter_pass,
                     "资产负债率(%)": round(debt_ratio_percent, 3) if debt_ratio_percent is not None else None,
                     "资产负债率通过": debt_pass,
@@ -428,15 +831,82 @@ def analyze_stocks_full_flow(
                     "下轨": round(latest_lower, 3) if latest_lower is not None else None,
                     "上轨": round(latest_upper, 3) if latest_upper is not None else None,
                     "信号": boll_signal,
+                    "信号类型": signal_type,
+                    "综合评分": 0,
+                    "评分等级": "D",
+                    "评分说明": "待计算",
                     "命中策略": hit,
                 }
             )
     finally:
         bs.logout()
 
+    boll_candidates = [str(row["股票代码"]) for row in rows if bool(row.get("重要股东通过", False))]
+    boll_signal_map, boll_data_map = _evaluate_boll_candidates_parallel(
+        codes=boll_candidates,
+        start_date=start_date,
+        end_date=end_date,
+        window=window,
+        k=k,
+        near_ratio=near_ratio,
+        adjust=adjust,
+        use_cache=use_cache,
+        force_refresh=force_refresh,
+        cache_max_age_hours=cache_max_age_hours,
+        max_workers=safe_max_workers,
+        max_retries=safe_max_retries,
+        retry_backoff_seconds=safe_retry_backoff,
+        rate_limiter=network_limiter,
+    )
+    data_map.update(boll_data_map)
+
+    for row in rows:
+        code = str(row["股票代码"])
+        if bool(row.get("重要股东通过", False)):
+            boll_info = boll_signal_map.get(code)
+            if boll_info is None:
+                boll_info = {
+                    "signal": "K线请求失败",
+                    "signal_type": "fetch_error",
+                    "selected": False,
+                    "latest_close": None,
+                    "latest_lower": None,
+                    "latest_upper": None,
+                }
+
+            row["信号"] = str(boll_info.get("signal", "K线数据为空"))
+            row["信号类型"] = str(boll_info.get("signal_type", "empty_k"))
+            row["命中策略"] = bool(boll_info.get("selected", False))
+            latest_close = boll_info.get("latest_close")
+            latest_lower = boll_info.get("latest_lower")
+            latest_upper = boll_info.get("latest_upper")
+            row["最新收盘"] = round(float(latest_close), 3) if latest_close is not None else None
+            row["下轨"] = round(float(latest_lower), 3) if latest_lower is not None else None
+            row["上轨"] = round(float(latest_upper), 3) if latest_upper is not None else None
+
+            if bool(row.get("命中策略", False)):
+                boll_selected_codes.add(code)
+
+        score, score_grade, score_note = _score_full_flow_result(
+            flow_pass=bool(row.get("资金流通过", False)),
+            debt_pass=bool(row.get("资产负债率通过", False)),
+            profit_pass=bool(row.get("净利润通过", False)),
+            cash_pass=bool(row.get("现金流通过", False)),
+            forecast_pass=bool(row.get("盈利预期通过", False)),
+            shareholder_pass=bool(row.get("重要股东通过", False)),
+            signal_type=str(row.get("信号类型", "not_run")),
+            hit=bool(row.get("命中策略", False)),
+        )
+        row["综合评分"] = score
+        row["评分等级"] = score_grade
+        row["评分说明"] = score_note
+
     result_df = pd.DataFrame(rows)
     if not result_df.empty:
-        result_df = result_df.sort_values(by=["命中策略", "股票代码"], ascending=[False, True]).reset_index(drop=True)
+        result_df = result_df.sort_values(
+            by=["命中策略", "综合评分", "股票代码"],
+            ascending=[False, False, True],
+        ).reset_index(drop=True)
 
     flow_stats = {
         "输入代码数": len(normalized_codes),
@@ -450,4 +920,11 @@ def analyze_stocks_full_flow(
         "5日资金命中": len(set(universe_codes) & fund_flow_map.get("5日排行", set())),
         "10日资金命中": len(set(universe_codes) & fund_flow_map.get("10日排行", set())),
     }
+    if not result_df.empty and "综合评分" in result_df.columns:
+        flow_stats["平均评分"] = round(float(result_df["综合评分"].mean()), 2)
+        flow_stats["A档数量"] = int((result_df["评分等级"] == "A").sum())
+
+    if progress_callback is not None:
+        progress_callback("done", len(universe_codes), len(universe_codes), "全流程分析完成")
+
     return result_df, data_map, flow_stats

@@ -30,3 +30,15 @@ def test_evaluate_boll_signal_insufficient() -> None:
     result = evaluate_boll_signal(df)
     assert result["signal_type"] == "insufficient"
     assert result["selected"] is False
+
+
+def test_evaluate_boll_signal_suppress_continuous_oversold() -> None:
+    df = pd.DataFrame(
+        [
+            {"close": 9.0, "Lower": 10.0, "Upper": 12.0},
+            {"close": 8.8, "Lower": 10.0, "Upper": 12.0},
+        ]
+    )
+    result = evaluate_boll_signal(df)
+    assert result["signal_type"] == "oversold_continuous"
+    assert result["selected"] is False

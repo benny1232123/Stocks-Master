@@ -34,8 +34,33 @@ if not "%PORT%"=="8520" (
     echo [Boll Visualizer] Port 8520 is busy, switched to %PORT%.
 )
 
-echo [Boll Visualizer] Starting at http://localhost:%PORT%
-start "" "http://localhost:%PORT%"
-"%PYTHON_EXE%" -m streamlit run src\app.py --server.port %PORT%
+set "LOCAL_URL=http://localhost:%PORT%"
+set "LAN_IP="
+for /f "usebackq delims=" %%i in (`powershell -NoProfile -Command "$ErrorActionPreference='SilentlyContinue';$ip=(Get-NetIPAddress -AddressFamily IPv4 ^| Where-Object { $_.IPAddress -ne '127.0.0.1' -and $_.IPAddress -notlike '169.254*' -and $_.InterfaceAlias -notmatch 'Loopback^|vEthernet^|Hyper-V^|Virtual' } ^| Select-Object -First 1 -ExpandProperty IPAddress);if($ip){$ip}"`) do set "LAN_IP=%%i"
+
+echo [Boll Visualizer] Local URL: %LOCAL_URL%
+if defined LAN_IP (
+    echo [Boll Visualizer] LAN URL: http://%LAN_IP%:%PORT%
+    echo [Boll Visualizer] Same-network devices can open the LAN URL.
+) else (
+    echo [Boll Visualizer] LAN URL: unavailable
+)
+
+set "PUBLIC_TUNNEL="
+where cloudflared >nul 2>&1
+if not errorlevel 1 (
+    set /p "PUBLIC_TUNNEL=[Boll Visualizer] cloudflared found. Create shareable public URL? (y/N): "
+) else (
+    echo [Boll Visualizer] cloudflared not found, skip public URL.
+    echo [Boll Visualizer] Install guide: https://developers.cloudflare.com/cloudflare-one/connections/connect-apps/install-and-setup/installation/
+)
+
+if /I "%PUBLIC_TUNNEL%"=="y" (
+    echo [Boll Visualizer] Starting public tunnel in another window...
+    start "Boll Visualizer Tunnel" cmd /k "timeout /t 5 >nul ^& cloudflared tunnel --url http://localhost:%PORT%"
+)
+
+start "" "%LOCAL_URL%"
+"%PYTHON_EXE%" -m streamlit run src\app.py --server.port %PORT% --server.address 0.0.0.0
 
 pause

@@ -9,7 +9,7 @@ import baostock as bs
 
 '''0.准备工作'''
 # --- 配置区 ---
-PRICE_UPPER_LIMIT = 30          # 股价上限
+PRICE_UPPER_LIMIT = 35          # 股价上限
 DEBT_ASSET_RATIO_LIMIT = 70     # 资产负债率上限
 CURRENT_YEAR = datetime.now().year
 LAST_YEAR = CURRENT_YEAR - 1

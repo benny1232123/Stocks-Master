@@ -29,10 +29,20 @@ def render_overview_metrics(result_df: pd.DataFrame) -> None:
     hit = int(result_df["命中策略"].sum()) if (not result_df.empty and "命中策略" in result_df.columns) else 0
     hit_ratio = f"{(hit / total * 100):.1f}%" if total else "0.0%"
 
-    col1, col2, col3 = st.columns(3)
-    col1.metric("分析股票数", total)
-    col2.metric("命中策略数", hit)
-    col3.metric("命中率", hit_ratio)
+    has_score = (not result_df.empty) and ("综合评分" in result_df.columns)
+    avg_score = round(float(result_df["综合评分"].mean()), 2) if has_score else None
+
+    if has_score:
+        col1, col2, col3, col4 = st.columns(4)
+        col1.metric("分析股票数", total)
+        col2.metric("命中策略数", hit)
+        col3.metric("命中率", hit_ratio)
+        col4.metric("平均评分", avg_score)
+    else:
+        col1, col2, col3 = st.columns(3)
+        col1.metric("分析股票数", total)
+        col2.metric("命中策略数", hit)
+        col3.metric("命中率", hit_ratio)
 
 
 def to_export_csv_bytes(result_df: pd.DataFrame) -> bytes:

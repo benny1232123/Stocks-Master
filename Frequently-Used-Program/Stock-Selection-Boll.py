@@ -11,7 +11,7 @@ import matplotlib.pyplot as plt
 
 '''0.准备工作'''
 # --- 配置区 ---
-PRICE_UPPER_LIMIT = 30  # 股价上限
+PRICE_UPPER_LIMIT = 35  # 股价上限
 DEBT_ASSET_RATIO_LIMIT = 70  # 资产负债率上限
 CURRENT_YEAR = datetime.now().year
 LAST_YEAR = CURRENT_YEAR - 1
@@ -444,6 +444,16 @@ start_date = (datetime.now() - timedelta(days=days_back)).strftime('%Y-%m-%d')
 boll_selected_codes = []
 plot_saved_count = 0
 
+
+def _count_trailing_true(mask_series):
+    flags = pd.Series(mask_series).fillna(False).astype(bool).tolist()
+    count = 0
+    for item in reversed(flags):
+        if not item:
+            break
+        count += 1
+    return count
+
 for fncode in final_candidate_codes:
     stock_name = code_name_map.get(format_stock_code(fncode), "")
 
@@ -481,16 +491,32 @@ for fncode in final_candidate_codes:
         result_df['Lower'] = result_df['MA20'] - k * result_df['STD20']
         
         latest = result_df.iloc[-1]
+        selected_zone_mask = result_df['close'] <= result_df['Lower'] * 1.015
+        oversold_mask = result_df['close'] < result_df['Lower']
+        oversold_streak = _count_trailing_true(oversold_mask)
+        selected_zone_streak = _count_trailing_true(selected_zone_mask)
 
         selected = False
         if latest['close'] < latest['Lower']:
-            print(f"{fncode} {stock_name} 价格低于布林带下轨 (90%概率)，超卖".strip())
-            boll_selected_codes.append(fncode)
-            selected = True
+            if oversold_streak > 1:
+                print(
+                    f"{fncode} {stock_name} 连续{oversold_streak}日低于布林带下轨，"
+                    "本日不重复触发".strip()
+                )
+            else:
+                print(f"{fncode} {stock_name} 价格低于布林带下轨 (90%概率)，超卖".strip())
+                boll_selected_codes.append(fncode)
+                selected = True
         elif latest['close'] <= latest['Lower'] * 1.015:
-            print(f"{fncode} {stock_name} 价格接近布林带下轨 (90%概率)，关注".strip())
-            boll_selected_codes.append(fncode)
-            selected = True
+            if selected_zone_streak > 1:
+                print(
+                    f"{fncode} {stock_name} 连续{selected_zone_streak}日处于下轨附近，"
+                    "本日不重复触发".strip()
+                )
+            else:
+                print(f"{fncode} {stock_name} 价格接近布林带下轨 (90%概率)，关注".strip())
+                boll_selected_codes.append(fncode)
+                selected = True
 
         if ENABLE_VISUALIZATION and plot_saved_count < PLOT_MAX_COUNT:
             if (not PLOT_ONLY_SELECTED) or selected:

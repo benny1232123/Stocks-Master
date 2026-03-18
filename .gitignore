@@ -1,0 +1,30 @@
+# Python bytecode and caches
+__pycache__/
+*.py[cod]
+*.pyo
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# Virtual environments
+.venv/
+venv/
+env/
+
+# Coverage and test artifacts
+.coverage
+coverage.xml
+htmlcov/
+
+# IDE settings
+.vscode/
+.idea/
+
+# Runtime-generated cache/result artifacts
+Frequently-Used-Program/boll-visualizer/stock_data/cache/
+Frequently-Used-Program/boll-visualizer/stock_data/checkpoints/
+stock_data/checkpoints/
+
+# Misc
+*.log
+*.tmp
