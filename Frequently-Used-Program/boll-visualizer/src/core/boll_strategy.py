@@ -130,7 +130,7 @@ def analyze_stocks(
     if progress_callback is not None:
         progress_callback("init", 0, total_codes, "初始化 Boll 任务")
 
-    update_step = 1 if total_codes <= 500 else 10
+    update_step = 1
 
     if worker_count <= 1:
         login_result = bs.login()

@@ -1,7 +1,9 @@
 from __future__ import annotations
 
-from concurrent.futures import ThreadPoolExecutor, as_completed
+from concurrent.futures import ThreadPoolExecutor, TimeoutError as FuturesTimeoutError, as_completed
 from datetime import date, datetime
+import json
+from pathlib import Path
 from threading import Lock
 import time
 from typing import Callable, TypeVar
@@ -20,11 +22,64 @@ from core.data_fetcher import (
     to_baostock_code,
 )
 from core.indicators import calc_bollinger, evaluate_boll_signal
-from utils.config import DEFAULT_FUND_FLOW_PERIODS, IMPORTANT_SHAREHOLDER_TYPES, IMPORTANT_SHAREHOLDERS
+from utils.config import (
+    DEFAULT_FUND_FLOW_PERIODS,
+    IMPORTANT_SHAREHOLDER_TYPES,
+    IMPORTANT_SHAREHOLDERS,
+    STOCK_DATA_DIR,
+)
 
 
 ProgressCallback = Callable[[str, int, int, str], None]
 T = TypeVar("T")
+
+FULL_FLOW_CACHE_DIR = STOCK_DATA_DIR / "cache" / "full_flow"
+FINANCIAL_CACHE_DIR = FULL_FLOW_CACHE_DIR / "financial"
+SHAREHOLDER_CACHE_DIR = FULL_FLOW_CACHE_DIR / "shareholder"
+BOLL_STAGE_TIMEOUT_PER_CODE_SECONDS = 2.0
+BOLL_STAGE_TIMEOUT_MIN_SECONDS = 120.0
+
+
+def _is_cache_fresh(cache_path: Path, max_cache_age_hours: float) -> bool:
+    if not cache_path.exists():
+        return False
+    if max_cache_age_hours <= 0:
+        return True
+    age_seconds = datetime.now().timestamp() - cache_path.stat().st_mtime
+    return age_seconds <= max_cache_age_hours * 3600
+
+
+def _load_json_cache(
+    cache_path: Path,
+    max_cache_age_hours: float,
+    allow_stale: bool = False,
+) -> dict[str, object] | None:
+    if not cache_path.exists():
+        return None
+    if not allow_stale and not _is_cache_fresh(cache_path, max_cache_age_hours=max_cache_age_hours):
+        return None
+
+    try:
+        payload = json.loads(cache_path.read_text(encoding="utf-8"))
+    except Exception:
+        return None
+    if not isinstance(payload, dict):
+        return None
+    return payload
+
+
+def _save_json_cache(cache_path: Path, payload: dict[str, object]) -> None:
+    cache_path.parent.mkdir(parents=True, exist_ok=True)
+    cache_path.write_text(json.dumps(payload, ensure_ascii=False), encoding="utf-8")
+
+
+def _build_financial_cache_path(code: str, periods: list[tuple[int, int]]) -> Path:
+    period_text = "_".join(f"{year}Q{quarter}" for year, quarter in periods[:2]) or "latest"
+    return FINANCIAL_CACHE_DIR / f"{str(code)}_{period_text}.json"
+
+
+def _build_shareholder_cache_path(code: str) -> Path:
+    return SHAREHOLDER_CACHE_DIR / f"{str(code)}.json"
 
 
 class _RateLimiter:
@@ -300,68 +355,117 @@ def _evaluate_fundamental(
     max_retries: int,
     retry_backoff_seconds: float,
     rate_limiter: _RateLimiter | None,
+    use_cache: bool = True,
+    force_refresh: bool = False,
+    cache_max_age_hours: float = 24.0,
+    use_profit_forecast: bool = True,
 ) -> dict[str, object]:
-    balance_df = _query_financial_with_fallback(
-        code,
-        bs.query_balance_data,
-        periods,
-        max_retries=max_retries,
-        retry_backoff_seconds=retry_backoff_seconds,
-        rate_limiter=rate_limiter,
-    )
-    profit_df = _query_financial_with_fallback(
-        code,
-        bs.query_profit_data,
-        periods,
-        max_retries=max_retries,
-        retry_backoff_seconds=retry_backoff_seconds,
-        rate_limiter=rate_limiter,
-    )
-    cash_df = _query_financial_with_fallback(
-        code,
-        bs.query_cash_flow_data,
-        periods,
-        max_retries=max_retries,
-        retry_backoff_seconds=retry_backoff_seconds,
-        rate_limiter=rate_limiter,
-    )
-    growth_df = _query_financial_with_fallback(
-        code,
-        bs.query_growth_data,
-        periods,
-        max_retries=max_retries,
-        retry_backoff_seconds=retry_backoff_seconds,
-        rate_limiter=rate_limiter,
-    )
+    cache_path = _build_financial_cache_path(code, periods)
+    cache_payload: dict[str, object] | None = None
+    if use_cache and not force_refresh:
+        cache_payload = _load_json_cache(
+            cache_path,
+            max_cache_age_hours=max(1.0, float(cache_max_age_hours)),
+            allow_stale=False,
+        )
 
-    debt_ratio_percent = _calc_liability_ratio_percent(balance_df)
-    debt_pass = debt_ratio_percent is not None and debt_ratio_percent < float(debt_asset_ratio_limit)
+    metric_keys = {"debt_ratio_percent", "net_profit", "cfo_to_np", "cfo_to_or", "yoy_ni"}
+    forecast_ready = bool(cache_payload.get("forecast_ready", False)) if cache_payload else False
+    cache_ready = bool(cache_payload and metric_keys.issubset(cache_payload.keys()))
+    if use_profit_forecast:
+        cache_ready = bool(cache_ready and forecast_ready)
 
+    debt_ratio_percent = None
     net_profit = None
-    if not profit_df.empty and "netProfit" in profit_df.columns:
-        net_profit = _to_float(profit_df.iloc[-1].get("netProfit"))
-    profit_pass = net_profit is not None and net_profit > 0
-
     cfo_to_np = None
     cfo_to_or = None
-    if not cash_df.empty:
-        if "CFOToNP" in cash_df.columns:
-            cfo_to_np = _to_float(cash_df.iloc[-1].get("CFOToNP"))
-        if "CFOToOR" in cash_df.columns:
-            cfo_to_or = _to_float(cash_df.iloc[-1].get("CFOToOR"))
+    yoy_ni = None
+    forecast_eps_mean = None
+
+    if cache_ready and cache_payload is not None:
+        debt_ratio_percent = _to_float(cache_payload.get("debt_ratio_percent"))
+        net_profit = _to_float(cache_payload.get("net_profit"))
+        cfo_to_np = _to_float(cache_payload.get("cfo_to_np"))
+        cfo_to_or = _to_float(cache_payload.get("cfo_to_or"))
+        yoy_ni = _to_float(cache_payload.get("yoy_ni"))
+        if use_profit_forecast:
+            forecast_eps_mean = _to_float(cache_payload.get("forecast_eps_mean"))
+    else:
+        balance_df = _query_financial_with_fallback(
+            code,
+            bs.query_balance_data,
+            periods,
+            max_retries=max_retries,
+            retry_backoff_seconds=retry_backoff_seconds,
+            rate_limiter=rate_limiter,
+        )
+        profit_df = _query_financial_with_fallback(
+            code,
+            bs.query_profit_data,
+            periods,
+            max_retries=max_retries,
+            retry_backoff_seconds=retry_backoff_seconds,
+            rate_limiter=rate_limiter,
+        )
+        cash_df = _query_financial_with_fallback(
+            code,
+            bs.query_cash_flow_data,
+            periods,
+            max_retries=max_retries,
+            retry_backoff_seconds=retry_backoff_seconds,
+            rate_limiter=rate_limiter,
+        )
+        growth_df = _query_financial_with_fallback(
+            code,
+            bs.query_growth_data,
+            periods,
+            max_retries=max_retries,
+            retry_backoff_seconds=retry_backoff_seconds,
+            rate_limiter=rate_limiter,
+        )
+
+        debt_ratio_percent = _calc_liability_ratio_percent(balance_df)
+
+        if not profit_df.empty and "netProfit" in profit_df.columns:
+            net_profit = _to_float(profit_df.iloc[-1].get("netProfit"))
+
+        if not cash_df.empty:
+            if "CFOToNP" in cash_df.columns:
+                cfo_to_np = _to_float(cash_df.iloc[-1].get("CFOToNP"))
+            if "CFOToOR" in cash_df.columns:
+                cfo_to_or = _to_float(cash_df.iloc[-1].get("CFOToOR"))
+
+        if not growth_df.empty and "YOYNI" in growth_df.columns:
+            yoy_ni = _to_float(growth_df.iloc[-1].get("YOYNI"))
+
+        if use_profit_forecast:
+            forecast_eps_mean = _fetch_forecast_eps_mean(
+                code,
+                current_year=current_year,
+                max_retries=max_retries,
+                retry_backoff_seconds=retry_backoff_seconds,
+                rate_limiter=rate_limiter,
+            )
+
+        if use_cache:
+            _save_json_cache(
+                cache_path,
+                {
+                    "debt_ratio_percent": debt_ratio_percent,
+                    "net_profit": net_profit,
+                    "cfo_to_np": cfo_to_np,
+                    "cfo_to_or": cfo_to_or,
+                    "yoy_ni": yoy_ni,
+                    "forecast_eps_mean": forecast_eps_mean,
+                    "forecast_ready": bool(use_profit_forecast),
+                    "updated_at": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+                },
+            )
+
+    debt_pass = debt_ratio_percent is not None and debt_ratio_percent < float(debt_asset_ratio_limit)
+    profit_pass = net_profit is not None and net_profit > 0
     cash_pass = bool((cfo_to_np is not None and cfo_to_np > 0) or (cfo_to_or is not None and cfo_to_or > 0))
 
-    yoy_ni = None
-    if not growth_df.empty and "YOYNI" in growth_df.columns:
-        yoy_ni = _to_float(growth_df.iloc[-1].get("YOYNI"))
-
-    forecast_eps_mean = _fetch_forecast_eps_mean(
-        code,
-        current_year=current_year,
-        max_retries=max_retries,
-        retry_backoff_seconds=retry_backoff_seconds,
-        rate_limiter=rate_limiter,
-    )
     forecast_pass = bool(
         (forecast_eps_mean is not None and forecast_eps_mean > 0)
         or (yoy_ni is not None and yoy_ni > 0)
@@ -389,7 +493,23 @@ def _check_important_shareholder(
     max_retries: int,
     retry_backoff_seconds: float,
     rate_limiter: _RateLimiter | None,
+    use_cache: bool = True,
+    force_refresh: bool = False,
+    cache_max_age_hours: float = 24.0,
 ) -> tuple[bool, str]:
+    cache_path = _build_shareholder_cache_path(code)
+    if use_cache and not force_refresh:
+        cached = _load_json_cache(
+            cache_path,
+            max_cache_age_hours=max(1.0, float(cache_max_age_hours)),
+            allow_stale=False,
+        )
+        if cached is not None:
+            cached_pass = cached.get("shareholder_pass")
+            cached_note = cached.get("shareholder_note")
+            if isinstance(cached_pass, bool) and isinstance(cached_note, str):
+                return cached_pass, cached_note
+
     try:
         holder_df = _retry_action(
             lambda: ak.stock_circulate_stock_holder(symbol=code),
@@ -398,6 +518,17 @@ def _check_important_shareholder(
             rate_limiter=rate_limiter,
         )
     except Exception:
+        if use_cache:
+            stale = _load_json_cache(
+                cache_path,
+                max_cache_age_hours=max(1.0, float(cache_max_age_hours)),
+                allow_stale=True,
+            )
+            if stale is not None:
+                stale_pass = stale.get("shareholder_pass")
+                stale_note = stale.get("shareholder_note")
+                if isinstance(stale_pass, bool) and isinstance(stale_note, str):
+                    return stale_pass, f"{stale_note}（使用过期缓存）"
         return True, "股东接口异常，默认保留"
 
     if not isinstance(holder_df, pd.DataFrame) or holder_df.empty or holder_df.shape[1] < 7:
@@ -417,13 +548,91 @@ def _check_important_shareholder(
 
     for important_holder in important_shareholders:
         if any(important_holder in holder_name for holder_name in top_names):
+            if use_cache:
+                _save_json_cache(
+                    cache_path,
+                    {
+                        "shareholder_pass": True,
+                        "shareholder_note": f"命中重点股东：{important_holder}",
+                        "updated_at": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+                    },
+                )
             return True, f"命中重点股东：{important_holder}"
 
     for holder_type in important_holder_types:
         if any(holder_type in stock_type for stock_type in top_types):
+            if use_cache:
+                _save_json_cache(
+                    cache_path,
+                    {
+                        "shareholder_pass": True,
+                        "shareholder_note": f"命中股东性质：{holder_type}",
+                        "updated_at": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+                    },
+                )
             return True, f"命中股东性质：{holder_type}"
 
+    if use_cache:
+        _save_json_cache(
+            cache_path,
+            {
+                "shareholder_pass": False,
+                "shareholder_note": "未命中重点股东",
+                "updated_at": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+            },
+        )
+
     return False, "未命中重点股东"
+
+
+def _evaluate_shareholder_candidates_parallel(
+    codes: list[str],
+    important_shareholders: tuple[str, ...],
+    important_holder_types: tuple[str, ...],
+    use_cache: bool,
+    force_refresh: bool,
+    cache_max_age_hours: float,
+    max_workers: int,
+    max_retries: int,
+    retry_backoff_seconds: float,
+    rate_limiter: _RateLimiter | None,
+    progress_callback: ProgressCallback | None = None,
+) -> dict[str, tuple[bool, str]]:
+    if not codes:
+        return {}
+
+    worker_count = max(1, min(int(max_workers), len(codes)))
+    total = len(codes)
+    result_map: dict[str, tuple[bool, str]] = {}
+
+    with ThreadPoolExecutor(max_workers=worker_count) as executor:
+        future_map = {
+            executor.submit(
+                _check_important_shareholder,
+                code,
+                important_shareholders,
+                important_holder_types,
+                max_retries,
+                retry_backoff_seconds,
+                rate_limiter,
+                use_cache,
+                force_refresh,
+                cache_max_age_hours,
+            ): code
+            for code in codes
+        }
+
+        for done_count, future in enumerate(as_completed(future_map), start=1):
+            code = future_map[future]
+            try:
+                result_map[code] = future.result()
+            except Exception:
+                result_map[code] = (True, "股东接口异常，默认保留")
+
+            if progress_callback is not None:
+                progress_callback("shareholder", done_count, total, f"股东评估中：{code}")
+
+    return result_map
 
 
 def _score_full_flow_result(
@@ -595,6 +804,7 @@ def _evaluate_boll_candidates_parallel(
     max_retries: int,
     retry_backoff_seconds: float,
     rate_limiter: _RateLimiter | None,
+    progress_callback: ProgressCallback | None = None,
 ) -> tuple[dict[str, dict[str, object]], dict[str, pd.DataFrame]]:
     if not codes:
         return {}, {}
@@ -603,7 +813,8 @@ def _evaluate_boll_candidates_parallel(
     signal_map: dict[str, dict[str, object]] = {}
     data_map: dict[str, pd.DataFrame] = {}
 
-    with ThreadPoolExecutor(max_workers=worker_count) as executor:
+    executor = ThreadPoolExecutor(max_workers=worker_count)
+    try:
         future_map = {
             executor.submit(
                 _evaluate_boll_candidate,
@@ -624,25 +835,59 @@ def _evaluate_boll_candidates_parallel(
             for code in codes
         }
 
-        for future in as_completed(future_map):
-            code = future_map[future]
-            try:
-                code_key, boll_df, signal_info = future.result()
-            except Exception:
-                code_key = code
-                boll_df = pd.DataFrame()
-                signal_info = {
-                    "signal": "K线请求失败",
-                    "signal_type": "fetch_error",
-                    "selected": False,
-                    "latest_close": None,
-                    "latest_lower": None,
-                    "latest_upper": None,
-                }
+        total = len(codes)
+        done_count = 0
+        processed_futures: set = set()
+        stage_timeout_seconds = max(
+            float(BOLL_STAGE_TIMEOUT_MIN_SECONDS),
+            float(total) * float(BOLL_STAGE_TIMEOUT_PER_CODE_SECONDS),
+        )
 
-            signal_map[code_key] = signal_info
-            if not boll_df.empty:
-                data_map[code_key] = boll_df
+        try:
+            for future in as_completed(future_map, timeout=stage_timeout_seconds):
+                processed_futures.add(future)
+                code = future_map[future]
+                try:
+                    code_key, boll_df, signal_info = future.result()
+                except Exception:
+                    code_key = code
+                    boll_df = pd.DataFrame()
+                    signal_info = {
+                        "signal": "K线请求失败",
+                        "signal_type": "fetch_error",
+                        "selected": False,
+                        "latest_close": None,
+                        "latest_lower": None,
+                        "latest_upper": None,
+                    }
+
+                signal_map[code_key] = signal_info
+                if not boll_df.empty:
+                    data_map[code_key] = boll_df
+
+                done_count += 1
+                if progress_callback is not None:
+                    progress_callback("boll", done_count, total, f"Boll信号评估中：{code_key}")
+        except FuturesTimeoutError:
+            pass
+
+        timeout_futures = set(future_map.keys()) - processed_futures
+        for future in timeout_futures:
+            code = future_map[future]
+            future.cancel()
+            signal_map[code] = {
+                "signal": "K线请求超时，已跳过",
+                "signal_type": "fetch_timeout",
+                "selected": False,
+                "latest_close": None,
+                "latest_lower": None,
+                "latest_upper": None,
+            }
+            done_count += 1
+            if progress_callback is not None:
+                progress_callback("boll", done_count, total, f"Boll信号超时：{code}")
+    finally:
+        executor.shutdown(wait=False, cancel_futures=True)
 
     return signal_map, data_map
 
@@ -668,6 +913,7 @@ def analyze_stocks_full_flow(
     max_retries: int = 2,
     retry_backoff_seconds: float = 0.5,
     request_interval_seconds: float = 0.0,
+    fast_mode: bool = False,
     progress_callback: ProgressCallback | None = None,
 ) -> tuple[pd.DataFrame, dict[str, pd.DataFrame], dict[str, int | float]]:
     normalized_codes = [format_stock_code(code) for code in codes]
@@ -717,129 +963,173 @@ def analyze_stocks_full_flow(
 
     data_map: dict[str, pd.DataFrame] = {}
     rows: list[dict[str, object]] = []
+    row_map: dict[str, dict[str, object]] = {}
     fundamental_pass_codes: set[str] = set()
     shareholder_pass_codes: set[str] = set()
     boll_selected_codes: set[str] = set()
 
-    login_result = bs.login()
-    if login_result.error_code != "0":
-        raise RuntimeError(f"baostock 登录失败: {login_result.error_msg}")
+    safe_fast_mode = bool(fast_mode)
+    fundamental_cache_age_hours = max(1.0, float(cache_max_age_hours))
+    shareholder_cache_age_hours = max(
+        fundamental_cache_age_hours,
+        168.0 if safe_fast_mode else fundamental_cache_age_hours,
+    )
 
-    try:
-        total_codes = len(universe_codes)
-        update_step = 1 if total_codes <= 500 else 10
-        for index, code in enumerate(universe_codes, start=1):
-            if progress_callback is not None and (index % update_step == 0 or index == total_codes):
-                progress_callback("evaluate", index, total_codes, f"逐股评估中：{code}")
+    total_codes = len(universe_codes)
+    update_step = 1
+    for index, code in enumerate(universe_codes, start=1):
+        if progress_callback is not None and (index % update_step == 0 or index == total_codes):
+            progress_callback("evaluate", index, total_codes, f"建立股票行：{code}")
 
-            stock_name = code_name_map.get(code, "")
-            flow_pass = code in fund_flow_pass_codes
-            period_hits = [period for period, code_set in fund_flow_map.items() if code in code_set]
-            if period_hits:
-                flow_note = f"通过：{','.join(period_hits)}净流入>0 且最新价<{float(price_upper_limit):g}"
-            else:
-                flow_note = f"未通过：3/5/10日均未满足净流入>0 且最新价<{float(price_upper_limit):g}"
+        stock_name = code_name_map.get(code, "")
+        flow_pass = code in fund_flow_pass_codes
+        period_hits = [period for period, code_set in fund_flow_map.items() if code in code_set]
+        if period_hits:
+            flow_note = f"通过：{','.join(period_hits)}净流入>0 且最新价<{float(price_upper_limit):g}"
+        else:
+            flow_note = f"未通过：3/5/10日均未满足净流入>0 且最新价<{float(price_upper_limit):g}"
 
-            debt_ratio_percent = None
-            debt_pass = False
-            net_profit = None
-            profit_pass = False
-            cfo_to_np = None
-            cash_pass = False
-            forecast_eps_mean = None
-            yoy_ni = None
-            forecast_pass = False
-            fundamental_pass = False
-            shareholder_pass = False
-            shareholder_note = "未执行"
-            boll_signal = "未执行"
-            signal_type = "not_run"
-            latest_close = None
-            latest_lower = None
-            latest_upper = None
-            hit = False
+        row: dict[str, object] = {
+            "股票代码": code,
+            "股票名称": stock_name,
+            "资金流通过": flow_pass,
+            "资金流说明": flow_note,
+            "基本面通过": False,
+            "前置汇合通过": False,
+            "资产负债率(%)": None,
+            "资产负债率通过": False,
+            "净利润": None,
+            "净利润通过": False,
+            "CFO/净利润": None,
+            "现金流通过": False,
+            "预测EPS均值": None,
+            "YOY净利润": None,
+            "盈利预期通过": False,
+            "重要股东通过": False,
+            "股东说明": "未执行",
+            "最新收盘": None,
+            "下轨": None,
+            "上轨": None,
+            "信号": "未执行",
+            "信号类型": "not_run",
+            "综合评分": 0,
+            "评分等级": "D",
+            "评分说明": "待计算",
+            "命中策略": False,
+        }
+        rows.append(row)
+        row_map[code] = row
 
-            fundamental_info = _evaluate_fundamental(
-                code=code,
-                periods=report_periods,
-                debt_asset_ratio_limit=float(debt_asset_ratio_limit),
-                current_year=pd.to_datetime(end_date).year,
-                max_retries=safe_max_retries,
-                retry_backoff_seconds=safe_retry_backoff,
-                rate_limiter=network_limiter,
-            )
-            debt_ratio_percent = fundamental_info["debt_ratio_percent"]
-            debt_pass = bool(fundamental_info["debt_pass"])
-            net_profit = fundamental_info["net_profit"]
-            profit_pass = bool(fundamental_info["profit_pass"])
-            cfo_to_np = fundamental_info["cfo_to_np"]
-            cash_pass = bool(fundamental_info["cash_pass"])
-            forecast_eps_mean = fundamental_info["forecast_eps_mean"]
-            yoy_ni = fundamental_info["yoy_ni"]
-            forecast_pass = bool(fundamental_info["forecast_pass"])
-            fundamental_pass = bool(fundamental_info["fundamental_pass"])
+    fundamental_candidates = [code for code in universe_codes if code in fund_flow_pass_codes]
+    if not safe_fast_mode:
+        fundamental_candidates = list(universe_codes)
 
-            if fundamental_pass:
-                fundamental_pass_codes.add(code)
+    if fundamental_candidates:
+        login_result = bs.login()
+        if login_result.error_code != "0":
+            raise RuntimeError(f"baostock 登录失败: {login_result.error_msg}")
 
-            prefilter_pass = bool(flow_pass and fundamental_pass)
-            if prefilter_pass:
-                shareholder_pass, shareholder_note = _check_important_shareholder(
+        try:
+            total_fundamentals = len(fundamental_candidates)
+            fund_update_step = 1
+            for index, code in enumerate(fundamental_candidates, start=1):
+                if progress_callback is not None and (index % fund_update_step == 0 or index == total_fundamentals):
+                    progress_callback("fundamental", index, total_fundamentals, f"基本面评估中：{code}")
+
+                fundamental_info = _evaluate_fundamental(
                     code=code,
-                    important_shareholders=important_shareholders,
-                    important_holder_types=important_holder_types,
+                    periods=report_periods,
+                    debt_asset_ratio_limit=float(debt_asset_ratio_limit),
+                    current_year=pd.to_datetime(end_date).year,
                     max_retries=safe_max_retries,
                     retry_backoff_seconds=safe_retry_backoff,
                     rate_limiter=network_limiter,
+                    use_cache=use_cache,
+                    force_refresh=force_refresh,
+                    cache_max_age_hours=fundamental_cache_age_hours,
+                    use_profit_forecast=not safe_fast_mode,
                 )
-            else:
-                if not flow_pass and not fundamental_pass:
-                    shareholder_note = "未进入股东环节：资金流与基本面均未通过"
-                elif not flow_pass:
-                    shareholder_note = "未进入股东环节：资金流未通过"
-                else:
-                    shareholder_note = "未进入股东环节：基本面未通过"
-                boll_signal = "未进入 Boll"
 
-            if shareholder_pass:
-                shareholder_pass_codes.add(code)
-                boll_signal = "待并发评估"
-                signal_type = "pending"
-            elif prefilter_pass:
-                boll_signal = "股东未通过，未进入 Boll"
+                row = row_map.get(code)
+                if row is None:
+                    continue
 
-            rows.append(
-                {
-                    "股票代码": code,
-                    "股票名称": stock_name,
-                    "资金流通过": flow_pass,
-                    "资金流说明": flow_note,
-                    "基本面通过": fundamental_pass,
-                    "前置汇合通过": prefilter_pass,
-                    "资产负债率(%)": round(debt_ratio_percent, 3) if debt_ratio_percent is not None else None,
-                    "资产负债率通过": debt_pass,
-                    "净利润": round(net_profit, 3) if net_profit is not None else None,
-                    "净利润通过": profit_pass,
-                    "CFO/净利润": round(cfo_to_np, 4) if cfo_to_np is not None else None,
-                    "现金流通过": cash_pass,
-                    "预测EPS均值": round(forecast_eps_mean, 4) if forecast_eps_mean is not None else None,
-                    "YOY净利润": round(yoy_ni, 4) if yoy_ni is not None else None,
-                    "盈利预期通过": forecast_pass,
-                    "重要股东通过": shareholder_pass,
-                    "股东说明": shareholder_note,
-                    "最新收盘": round(latest_close, 3) if latest_close is not None else None,
-                    "下轨": round(latest_lower, 3) if latest_lower is not None else None,
-                    "上轨": round(latest_upper, 3) if latest_upper is not None else None,
-                    "信号": boll_signal,
-                    "信号类型": signal_type,
-                    "综合评分": 0,
-                    "评分等级": "D",
-                    "评分说明": "待计算",
-                    "命中策略": hit,
-                }
-            )
-    finally:
-        bs.logout()
+                debt_ratio_percent = fundamental_info["debt_ratio_percent"]
+                net_profit = fundamental_info["net_profit"]
+                cfo_to_np = fundamental_info["cfo_to_np"]
+                forecast_eps_mean = fundamental_info["forecast_eps_mean"]
+                yoy_ni = fundamental_info["yoy_ni"]
+
+                row["资产负债率(%)"] = round(debt_ratio_percent, 3) if debt_ratio_percent is not None else None
+                row["资产负债率通过"] = bool(fundamental_info["debt_pass"])
+                row["净利润"] = round(net_profit, 3) if net_profit is not None else None
+                row["净利润通过"] = bool(fundamental_info["profit_pass"])
+                row["CFO/净利润"] = round(cfo_to_np, 4) if cfo_to_np is not None else None
+                row["现金流通过"] = bool(fundamental_info["cash_pass"])
+                row["预测EPS均值"] = round(forecast_eps_mean, 4) if forecast_eps_mean is not None else None
+                row["YOY净利润"] = round(yoy_ni, 4) if yoy_ni is not None else None
+                row["盈利预期通过"] = bool(fundamental_info["forecast_pass"])
+                row["基本面通过"] = bool(fundamental_info["fundamental_pass"])
+
+                if bool(row["基本面通过"]):
+                    fundamental_pass_codes.add(code)
+        finally:
+            bs.logout()
+
+    for code, row in row_map.items():
+        flow_pass = bool(row.get("资金流通过", False))
+        fundamental_pass = bool(row.get("基本面通过", False))
+        prefilter_pass = bool(flow_pass and fundamental_pass)
+        row["前置汇合通过"] = prefilter_pass
+
+        if prefilter_pass:
+            row["股东说明"] = "待评估"
+            row["信号"] = "待股东评估"
+            row["信号类型"] = "pending_shareholder"
+            continue
+
+        if not flow_pass and not fundamental_pass:
+            row["股东说明"] = "未进入股东环节：资金流与基本面均未通过"
+        elif not flow_pass:
+            row["股东说明"] = "未进入股东环节：资金流未通过"
+        else:
+            row["股东说明"] = "未进入股东环节：基本面未通过"
+        row["信号"] = "未进入 Boll"
+        row["信号类型"] = "not_run"
+
+    shareholder_candidates = [
+        code for code, row in row_map.items() if bool(row.get("前置汇合通过", False))
+    ]
+    shareholder_result_map = _evaluate_shareholder_candidates_parallel(
+        codes=shareholder_candidates,
+        important_shareholders=important_shareholders,
+        important_holder_types=important_holder_types,
+        use_cache=use_cache,
+        force_refresh=force_refresh,
+        cache_max_age_hours=shareholder_cache_age_hours,
+        max_workers=safe_max_workers,
+        max_retries=safe_max_retries,
+        retry_backoff_seconds=safe_retry_backoff,
+        rate_limiter=network_limiter,
+        progress_callback=progress_callback,
+    )
+
+    for code in shareholder_candidates:
+        row = row_map.get(code)
+        if row is None:
+            continue
+
+        shareholder_pass, shareholder_note = shareholder_result_map.get(code, (False, "股东评估失败"))
+        row["重要股东通过"] = bool(shareholder_pass)
+        row["股东说明"] = str(shareholder_note)
+
+        if bool(shareholder_pass):
+            shareholder_pass_codes.add(code)
+            row["信号"] = "待并发评估"
+            row["信号类型"] = "pending"
+        else:
+            row["信号"] = "股东未通过，未进入 Boll"
+            row["信号类型"] = "not_run"
 
     boll_candidates = [str(row["股票代码"]) for row in rows if bool(row.get("重要股东通过", False))]
     boll_signal_map, boll_data_map = _evaluate_boll_candidates_parallel(
@@ -857,6 +1147,7 @@ def analyze_stocks_full_flow(
         max_retries=safe_max_retries,
         retry_backoff_seconds=safe_retry_backoff,
         rate_limiter=network_limiter,
+        progress_callback=progress_callback,
     )
     data_map.update(boll_data_map)
 

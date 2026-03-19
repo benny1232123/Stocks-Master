@@ -1,6 +1,7 @@
 from pathlib import Path
 import importlib
 import sys
+import time
 from types import SimpleNamespace
 
 import pandas as pd
@@ -116,3 +117,115 @@ def test_analyze_stocks_full_flow_parallel_and_retry(monkeypatch) -> None:
     assert set(data_map.keys()) == set(codes)
     assert int(flow_stats.get("Boll命中", 0)) == 2
     assert result_df["命中策略"].astype(bool).all()
+
+
+def test_analyze_stocks_full_flow_fast_mode_skips_non_flow_fundamental(monkeypatch) -> None:
+    codes = ["600000", "600001", "600002"]
+
+    monkeypatch.setattr(strategy.bs, "login", lambda: SimpleNamespace(error_code="0", error_msg=""))
+    monkeypatch.setattr(strategy.bs, "logout", lambda: None)
+
+    monkeypatch.setattr(
+        strategy,
+        "fetch_code_name_map",
+        lambda *args, **kwargs: {"600000": "A", "600001": "B", "600002": "C"},
+    )
+
+    monkeypatch.setattr(
+        strategy,
+        "_fetch_fund_flow_union",
+        lambda *args, **kwargs: ({"600000"}, {"3日排行": {"600000"}, "5日排行": set(), "10日排行": set()}),
+    )
+
+    calls: list[tuple[str, bool]] = []
+
+    def _fake_fundamental(*args, **kwargs):
+        code = str(kwargs.get("code", ""))
+        calls.append((code, bool(kwargs.get("use_profit_forecast", True))))
+        return {
+            "fundamental_pass": True,
+            "debt_ratio_percent": 40.0,
+            "debt_pass": True,
+            "net_profit": 1.0,
+            "profit_pass": True,
+            "cfo_to_np": 1.2,
+            "cash_pass": True,
+            "forecast_eps_mean": None,
+            "yoy_ni": 1.0,
+            "forecast_pass": True,
+        }
+
+    monkeypatch.setattr(strategy, "_evaluate_fundamental", _fake_fundamental)
+    monkeypatch.setattr(strategy, "_check_important_shareholder", lambda *args, **kwargs: (True, "ok"))
+    monkeypatch.setattr(
+        strategy,
+        "evaluate_boll_signal",
+        lambda *args, **kwargs: {"signal": "中性", "selected": False, "signal_type": "neutral"},
+    )
+    monkeypatch.setattr(strategy, "fetch_daily_k_data", lambda *args, **kwargs: _mock_k_df())
+
+    result_df, _data_map, _flow_stats = strategy.analyze_stocks_full_flow(
+        codes=codes,
+        start_date="2026-01-01",
+        end_date="2026-03-01",
+        max_workers=2,
+        max_retries=0,
+        retry_backoff_seconds=0.0,
+        request_interval_seconds=0.0,
+        fast_mode=True,
+    )
+
+    assert calls == [("600000", False)]
+    assert len(result_df) == 3
+
+    row_non_flow = result_df[result_df["股票代码"].astype(str) == "600001"].iloc[0]
+    assert not bool(row_non_flow["资金流通过"])
+    assert not bool(row_non_flow["前置汇合通过"])
+
+
+def test_evaluate_boll_candidates_parallel_timeout(monkeypatch) -> None:
+    codes = ["600000", "600001"]
+
+    monkeypatch.setattr(strategy, "BOLL_STAGE_TIMEOUT_MIN_SECONDS", 0.01)
+    monkeypatch.setattr(strategy, "BOLL_STAGE_TIMEOUT_PER_CODE_SECONDS", 0.01)
+
+    def _fake_eval(code: str, *args, **kwargs):
+        if code == "600001":
+            time.sleep(0.2)
+        return (
+            code,
+            pd.DataFrame(),
+            {
+                "signal": "测试",
+                "signal_type": "neutral",
+                "selected": False,
+                "latest_close": None,
+                "latest_lower": None,
+                "latest_upper": None,
+            },
+        )
+
+    monkeypatch.setattr(strategy, "_evaluate_boll_candidate", _fake_eval)
+
+    signal_map, data_map = strategy._evaluate_boll_candidates_parallel(
+        codes=codes,
+        start_date="2026-01-01",
+        end_date="2026-03-01",
+        window=20,
+        k=1.645,
+        near_ratio=1.015,
+        adjust="qfq",
+        use_cache=True,
+        force_refresh=False,
+        cache_max_age_hours=24.0,
+        max_workers=2,
+        max_retries=0,
+        retry_backoff_seconds=0.0,
+        rate_limiter=None,
+        progress_callback=None,
+    )
+
+    assert "600000" in signal_map
+    assert "600001" in signal_map
+    assert signal_map["600001"]["signal_type"] == "fetch_timeout"
+    assert data_map == {}

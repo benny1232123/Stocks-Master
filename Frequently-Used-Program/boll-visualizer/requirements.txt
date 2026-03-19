@@ -4,4 +4,3 @@ pandas>=2.0
 numpy>=1.24
 akshare>=1.13
 baostock>=0.8
-pytest>=8.0

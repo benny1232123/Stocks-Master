@@ -32,6 +32,7 @@ DEFAULT_MAX_WORKERS = 4
 DEFAULT_MAX_RETRIES = 2
 DEFAULT_RETRY_BACKOFF_SECONDS = 0.5
 DEFAULT_REQUEST_INTERVAL_SECONDS = 0.0
+DEFAULT_FAST_MODE = True
 
 
 def parse_args() -> argparse.Namespace:
@@ -75,6 +76,11 @@ def parse_args() -> argparse.Namespace:
         type=float,
         default=DEFAULT_REQUEST_INTERVAL_SECONDS,
         help="请求限流间隔秒数，默认 0（不限流）。",
+    )
+    parser.add_argument(
+        "--slow-accurate",
+        action="store_true",
+        help="关闭极速模式，完整执行慢接口（耗时会显著增加）。",
     )
     return parser.parse_args()
 
@@ -180,6 +186,7 @@ def main() -> None:
     max_retries = max(0, int(args.max_retries))
     retry_backoff = max(0.0, float(args.retry_backoff))
     request_interval = max(0.0, float(args.request_interval))
+    fast_mode = DEFAULT_FAST_MODE and (not bool(args.slow_accurate))
 
     full_path = STOCK_DATA_DIR / f"Stock-Selection-Boll-All-{today_text}.csv"
     hit_path = STOCK_DATA_DIR / f"Stock-Selection-Boll-All-Hits-{today_text}.csv"
@@ -208,7 +215,7 @@ def main() -> None:
         print(f"已启用断点续跑，分块大小: {chunk_size}")
     print(
         f"并发参数: workers={max_workers}, retries={max_retries}, "
-        f"backoff={retry_backoff}, interval={request_interval}"
+        f"backoff={retry_backoff}, interval={request_interval}, fast_mode={fast_mode}"
     )
 
     checkpoint_df = _load_checkpoint(checkpoint_path) if args.resume else pd.DataFrame()
@@ -242,6 +249,7 @@ def main() -> None:
             max_retries=max_retries,
             retry_backoff_seconds=retry_backoff,
             request_interval_seconds=request_interval,
+            fast_mode=bool(fast_mode),
             progress_callback=_on_progress,
         )
 
