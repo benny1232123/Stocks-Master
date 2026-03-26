@@ -457,24 +457,41 @@ def _count_trailing_true(mask_series):
 for fncode in final_candidate_codes:
     stock_name = code_name_map.get(format_stock_code(fncode), "")
 
-    rs = bs.query_history_k_data_plus(
-        add_market_prefix_dotted(fncode),
-        "date,code,open,high,low,close,preclose,volume,amount,adjustflag,turn,tradestatus,pctChg,isST",
-        start_date=start_date,
-        end_date=f"{CURRENT_YEAR}-{current_month}-{current_day}",
-        frequency="d",
-        adjustflag="2"
-    )
+    try:
+        rs = bs.query_history_k_data_plus(
+            add_market_prefix_dotted(fncode),
+            "date,code,open,high,low,close,preclose,volume,amount,adjustflag,turn,tradestatus,pctChg,isST",
+            start_date=start_date,
+            end_date=f"{CURRENT_YEAR}-{current_month}-{current_day}",
+            frequency="d",
+            adjustflag="2"
+        )
 
-    print('query_history_k_data_plus respond error_code:'+rs.error_code)
-    print('query_history_k_data_plus respond  error_msg:'+rs.error_msg)
-      
-    data_list = []
-    while (rs.error_code == '0') & rs.next():
-       data_list.append(rs.get_row_data())
+        print('query_history_k_data_plus respond error_code:'+rs.error_code)
+        print('query_history_k_data_plus respond  error_msg:'+rs.error_msg)
 
-    result_df = pd.DataFrame(data_list, columns=rs.fields)
-    result_df=result_df[['date','code','open','high','low','close','preclose']]  
+        if rs.error_code != '0':
+            print(f"{fncode} {stock_name} K线接口返回异常，跳过")
+            continue
+
+        data_list = []
+        while rs.next():
+            data_list.append(rs.get_row_data())
+
+        if not data_list or not rs.fields:
+            print(f"{fncode} {stock_name} K线数据为空，跳过")
+            continue
+
+        result_df = pd.DataFrame(data_list, columns=rs.fields)
+        required_cols = ['date', 'code', 'open', 'high', 'low', 'close', 'preclose']
+        if not set(required_cols).issubset(result_df.columns):
+            print(f"{fncode} {stock_name} K线字段缺失，跳过")
+            continue
+
+        result_df = result_df[required_cols]
+    except Exception as e:
+        print(f"{fncode} {stock_name} 获取K线异常，跳过: {e}")
+        continue
 
     # 将收盘价转换为数值类型
     result_df['close'] = pd.to_numeric(result_df['close'], errors='coerce')
