@@ -4,9 +4,9 @@ setlocal
 cd /d "%~dp0"
 
 set "TASK_NAME_EVENING=StocksMaster-Boll-Daily"
-set "TASK_NAME_NOON=StocksMaster-Boll-Noon"
+set "OLD_TASK_STARTUP=StocksMaster-Boll-Startup"
+set "OLD_TASK_NOON=StocksMaster-Boll-Noon"
 set "RUN_TIME_EVENING=19:00"
-set "RUN_TIME_NOON=12:00"
 
 set "VENV_PY=%~dp0.venv\Scripts\python.exe"
 if exist "%VENV_PY%" (
@@ -18,31 +18,24 @@ if exist "%VENV_PY%" (
 set "SCRIPT_PATH=%~dp0Frequently-Used-Program\auto_notify_boll.py"
 set "TASK_CMD=\"%PYTHON_EXE%\" \"%SCRIPT_PATH%\""
 
-echo [Stocks-Master] Create/Update daily tasks
+echo [Stocks-Master] Create/Update daily task
 echo [Stocks-Master] Evening: %TASK_NAME_EVENING% at %RUN_TIME_EVENING%
-echo [Stocks-Master] Noon:    %TASK_NAME_NOON% at %RUN_TIME_NOON%
 echo [Stocks-Master] Command: %TASK_CMD%
+
+schtasks /Delete /TN "%OLD_TASK_STARTUP%" /F >nul 2>&1
+schtasks /Delete /TN "%OLD_TASK_NOON%" /F >nul 2>&1
 
 schtasks /Create /SC DAILY /TN "%TASK_NAME_EVENING%" /TR "%TASK_CMD%" /ST %RUN_TIME_EVENING% /F
 
 if errorlevel 1 (
-    echo [Stocks-Master] Failed to create evening task. Try run as Administrator.
+    echo [Stocks-Master] Failed to create daily task. Try run as Administrator.
     pause
     exit /b 1
 )
 
-schtasks /Create /SC DAILY /TN "%TASK_NAME_NOON%" /TR "%TASK_CMD%" /ST %RUN_TIME_NOON% /F
+powershell -NoProfile -ExecutionPolicy Bypass -Command "try { $settings = New-ScheduledTaskSettingsSet -StartWhenAvailable; Set-ScheduledTask -TaskName '%TASK_NAME_EVENING%' -Settings $settings | Out-Null; Write-Host '[Stocks-Master] Enabled StartWhenAvailable (missed time will run once after boot).' } catch { Write-Host '[Stocks-Master] Could not set StartWhenAvailable automatically. You can enable it manually in Task Scheduler.'; Write-Host $_.Exception.Message }"
 
-if errorlevel 1 (
-    echo [Stocks-Master] Failed to create noon task. Try run as Administrator.
-    pause
-    exit /b 1
-)
-
-powershell -NoProfile -ExecutionPolicy Bypass -Command "try { $settings = New-ScheduledTaskSettingsSet -StartWhenAvailable; Set-ScheduledTask -TaskName '%TASK_NAME_EVENING%' -Settings $settings | Out-Null; Set-ScheduledTask -TaskName '%TASK_NAME_NOON%' -Settings $settings | Out-Null; Write-Host '[Stocks-Master] Enabled StartWhenAvailable for both tasks: if PC is off at schedule time, it will run ASAP after startup.' } catch { Write-Host '[Stocks-Master] Could not set StartWhenAvailable automatically. You can enable it manually in Task Scheduler.'; Write-Host $_.Exception.Message }"
-
-echo [Stocks-Master] Tasks created. You can check with:
+echo [Stocks-Master] Task created. You can check with:
 echo schtasks /Query /TN "%TASK_NAME_EVENING%" /V /FO LIST
-echo schtasks /Query /TN "%TASK_NAME_NOON%" /V /FO LIST
 
 pause

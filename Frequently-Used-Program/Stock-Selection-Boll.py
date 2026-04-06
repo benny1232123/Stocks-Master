@@ -3,6 +3,7 @@ import pandas as pd
 import numpy as np
 import time
 import sqlite3
+import atexit
 from datetime import datetime, timedelta
 import baostock as bs
 import os
@@ -245,13 +246,18 @@ profit_forecast_df = fetch_data_with_fallback(
     "stock_data/stock_profit_forecast_em.csv"
 )
 profit_forecast_codes = []
+use_profit_forecast_filter = False
 if not profit_forecast_df.empty:
     forecast_col = f'{CURRENT_YEAR}预测每股收益'
     if forecast_col in profit_forecast_df.columns:
-        good_profit_forecast_df = profit_forecast_df[profit_forecast_df[forecast_col] > 0]
+        forecast_series = pd.to_numeric(profit_forecast_df[forecast_col], errors='coerce')
+        good_profit_forecast_df = profit_forecast_df[forecast_series > 0]
         profit_forecast_codes = good_profit_forecast_df['代码'].tolist()
+        use_profit_forecast_filter = True
     else:
-        print(f"'{forecast_col}' not found in profit forecast data.")
+        print(f"'{forecast_col}' not found in profit forecast data. 跳过盈利预测条件")
+else:
+    print("盈利预测数据为空，跳过盈利预测条件")
 time.sleep(3)
 
 
@@ -262,12 +268,16 @@ print(f"  现金流: {len(cashflow_codes)}")
 print(f"  利润表: {len(profit_codes)}")
 print(f"  资产负债率: {len(zcfz_codes)}")
 print(f"  盈利预测: {len(profit_forecast_codes)}")
+print(f"  盈利预测条件启用: {'是' if use_profit_forecast_filter else '否'}")
 print(f"  3日资金: {len(format_three_days_positive_funds_codes)}")
 print(f"  5日资金: {len(format_five_days_positive_funds_codes)}")
 print(f"  10日资金: {len(format_ten_days_positive_funds_codes)}")
 
 # 分步计算
-fundamental_intersection = set(cashflow_codes) & set(profit_codes) & set(zcfz_codes) & set(profit_forecast_codes)
+fundamental_sets = [set(cashflow_codes), set(profit_codes), set(zcfz_codes)]
+if use_profit_forecast_filter:
+    fundamental_sets.append(set(profit_forecast_codes))
+fundamental_intersection = set.intersection(*fundamental_sets) if fundamental_sets else set()
 print(f"基本面条件交集: {len(fundamental_intersection)}")
 
 set_3d = set(format_three_days_positive_funds_codes)
@@ -325,8 +335,7 @@ if candidate_codes:
             else:
                 print(f"{code}：无重要股东持股")
         except Exception as e:
-            print(f"获取 {code} 流通股东数据时出错: {e}. 默认保留该股票。")
-            final_candidate_codes.append(code) # 出错时默认保留
+            print(f"获取 {code} 流通股东数据时出错: {e}. 跳过该股票。")
 else:
     print("没有候选股票进行流通股东分析")
 
@@ -340,6 +349,9 @@ lg = bs.login()
 # 显示登陆返回信息
 print('login respond error_code:'+lg.error_code)
 print('login respond  error_msg:'+lg.error_msg)
+if lg.error_code == '0':
+    # 异常中断时也尽量释放连接
+    atexit.register(bs.logout)
 
 # 先拉取一次全市场代码-名称映射（用于最终 CSV 和图片命名）
 code_name_map: dict[str, str] = {}

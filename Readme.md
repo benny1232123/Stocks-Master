@@ -1,78 +1,96 @@
-使用前更新：pip install akshare --upgrade -i https://pypi.org/simple
+# Stocks-Master
 
-震荡市/股：布林带下线到中线
-趋势市/股：斜率倾斜波动向上
+Stocks-Master 是一个以 A 股筛选为主的脚本集合。为避免“脚本太多找不到入口”，建议优先使用统一入口：`stocks-master.bat`。
 
----
+## 统一入口（推荐）
 
-Streamlit Community Cloud 发布（固定外网链接）
+- 运行：`stocks-master.bat`
+- 一个菜单覆盖常用操作：手动执行、注册任务、触发任务、检查任务、清理数据、启动可视化、邮件配置/测试、数据索引
 
-1. 将当前仓库推送到 GitHub（公开或私有均可）。
-2. 打开 https://share.streamlit.io 并登录 GitHub。
-3. 点击 New app，选择你的仓库与分支。
-4. Main file path 选择：streamlit_app.py
-5. 点击 Deploy，等待安装依赖并启动。
-6. 部署完成后会得到固定访问链接（形如 https://stock-master-benny.streamlit.app）。
+## 原入口（兼容保留）
 
-说明：
-- 根目录 requirements.txt 已指向子项目依赖。
-- 根目录 requirements-dev.txt 包含测试依赖（如 pytest）。
-- runtime.txt 已锁定 Python 3.11，降低依赖兼容问题。
-- 页面入口会自动转到 Frequently-Used-Program/boll-visualizer/src/app.py。
+1. 手动跑一次并推送结果：`run-boll-auto-notify.bat`
+2. 注册每日任务（19:00）：`register-boll-daily-task.bat`
+3. 立即触发一次已注册任务（显示进度）：`run-boll-daily-task-now.bat`
+4. 查看任务状态：`check-boll-daily-task.bat`
+5. 清理历史数据（默认保留 30 天）：`clean-stock-data.bat`
+6. 生成数据总览索引：`index-stock-data.bat`
+7. 自动归档历史数据（默认根目录保留 7 天）：`auto-archive-stock-data.bat`
 
----
+## 目录说明（精简版）
 
-每日自动运行并推送结果（Windows）
+- `Frequently-Used-Program/`: 主程序脚本（选股、推送、清理）
+- `Frequently-Used-Program/README.md`: 主程序分组导航（BOLL/CCTV/分析/工具）
+- `stock_data/`: 结果与缓存数据
+- `Unnecessary-Programs/`: 历史原型与低频脚本
 
-已提供脚本：
-- `Frequently-Used-Program/auto_notify_boll.py`：执行 `Stock-Selection-Boll.py`，读取当日结果 CSV，并推送消息。
-- `run-boll-auto-notify.bat`：手动执行一次（便于先验证）。
-- `register-boll-daily-task.bat`：注册 Windows 每日计划任务（中午 12:00 + 晚上 19:00），并启用“错过后尽快运行”。
+## 首次使用
 
-推荐推送方式一：企业微信机器人（最简单）
+1. 创建并激活虚拟环境（可选但推荐）
+2. 安装依赖：`pip install -r requirements.txt`
+3. 如需邮件推送，先运行：`configure-email-smtp.bat`
+4. 验证邮件配置：`test-email-notify.bat`
 
-1. 在企业微信群中添加“群机器人”，复制 Webhook 地址。
-2. 在系统环境变量中新增：
-	- `WECOM_WEBHOOK_URL` = 你的 webhook 地址
-3. 双击 `run-boll-auto-notify.bat` 先手动验证。
-4. 双击 `register-boll-daily-task.bat` 创建每日任务。
+## 自动推送说明
 
-可选推送方式二：邮件（支持附带当日 CSV）
+- 主流程脚本：`Frequently-Used-Program/auto_notify_boll.py`
+- 支持企业微信机器人（`WECOM_WEBHOOK_URL`）
+- 支持 SMTP 邮件（`SMTP_HOST/PORT/USER/PASS/TO`）
+- 自动任务默认启用补跑：若错过计划时间，开机后执行一次
+- 自动任务默认按天分类归档结果到 `stock_data/archive/YYYYMM/分类/`（可用 `ARCHIVE_ALL_ROOT_DATED=0` 改回仅归档旧文件）
 
-设置以下环境变量（全部都要填）：
-- `SMTP_HOST`
-- `SMTP_PORT`（常见 465）
-- `SMTP_USER`
-- `SMTP_PASS`
-- `SMTP_TO`
+## 数据清理说明
 
-说明：
-- 日志会写入 `stock_data/auto_logs/`。
-- 结果 CSV 仍在 `stock_data/Stock-Selection-Boll-YYYYMMDD.csv`。
-- 若同时配置企业微信和 SMTP，会同时尝试推送。
-- 若 12:00 或 19:00 时电脑关机，开机后会自动尽快补跑（StartWhenAvailable）。
+- 清理脚本：`Frequently-Used-Program/cleanup_stock_data.py`
+- 默认保留 30 天（日期结果、日志、图片）
+- 手动执行示例：`clean-stock-data.bat 20`
 
-后台管理与快速测试
+可选环境变量：
 
-新增管理脚本：
-- `configure-email-smtp.bat`：交互式写入 SMTP 环境变量（用户级）。
-- `test-email-notify.bat`：仅测试 SMTP 邮件，不跑选股。
-- `check-boll-daily-task.bat`：查看中午/晚间两个计划任务状态（上次/下次运行、结果码）。
-- `run-boll-daily-task-now.bat`：立即触发中午/晚间两个计划任务。
+- `ENABLE_AUTO_CLEANUP=0` 关闭自动清理
+- `CLEANUP_KEEP_DAYS=30` 日期文件保留天数
+- `CLEANUP_LOG_KEEP_DAYS=30` 日志保留天数
+- `CLEANUP_PLOTS_KEEP_DAYS=30` 图片保留天数
+- `CLEANUP_DRY_RUN=1` 仅预览，不删除
 
-推荐测试流程：
-1. 先运行 `configure-email-smtp.bat` 写入 SMTP 环境变量（SMTP_HOST/PORT/USER/PASS/TO）。
-2. 运行 `test-email-notify.bat`，确认邮箱可收到测试邮件。
-3. 运行 `register-boll-daily-task.bat` 注册每日任务。
-4. 运行 `run-boll-daily-task-now.bat` 立即触发，验证全流程。
-5. 运行 `check-boll-daily-task.bat` 检查任务结果码。
+## 自动归档说明
 
-若测试失败：
-- 查看 `stock_data/auto_logs/` 最新日志。
-- 日志会显示缺失的 SMTP 变量名（例如缺 `SMTP_TO`）。
+- 归档脚本：`Frequently-Used-Program/archive_stock_data.py`
+- 一键入口：`auto-archive-stock-data.bat`
+- 默认策略：
+	- 先整理已有归档目录，再执行归档
+	- `stock_data/` 根目录仅保留最近 7 天日期文件
+	- 更早文件移动到 `stock_data/archive/YYYYMM/类型/`
+	- 归档区默认保留 365 天，超期自动删除
 
-高级：
-- 命令行测试全部推送（企业微信 + 邮件）：
-	`python Frequently-Used-Program/auto_notify_boll.py --test-notify`
-- 自定义测试邮件标题：
-	`python Frequently-Used-Program/auto_notify_boll.py --test-email-only --subject "SMTP联调测试"`
+二级目录类型示例：
+
+- `stock_data/archive/202603/boll/`
+- `stock_data/archive/202603/cctv/`
+- `stock_data/archive/202603/theme/`
+- `stock_data/archive/202603/news/`
+
+可选环境变量（自动任务中生效）：
+
+- `ENABLE_AUTO_ARCHIVE=1` 开关自动归档（`0` 关闭）
+- `ARCHIVE_KEEP_ROOT_DAYS=7` 根目录保留天数
+- `ARCHIVE_KEEP_DAYS=365` 归档区保留天数
+- `ARCHIVE_DRY_RUN=1` 仅预览，不移动删除
+
+## stock_data 快速定位
+
+- 执行：`index-stock-data.bat`
+- 作用：自动生成 `stock_data/INDEX.md`
+- 你可以在 `INDEX.md` 里一眼看到：
+	- 今日新增文件
+	- 每类数据的最新文件
+	- 最近日期文件列表
+	- 子目录（如 `auto_logs`、`plots`）文件数量与占用
+
+## CCTV 板块策略（可选）
+
+- 脚本：`Frequently-Used-Program/Stock-Selection-CCTV-Sectors.py`
+- 运行：`python Frequently-Used-Program/Stock-Selection-CCTV-Sectors.py`
+- 输出到 `stock_data/` 下的 `CCTV-*` 文件
+
+如只关注每日选股与通知，可暂时忽略该模块。

@@ -1,6 +1,14 @@
 @echo off
 setlocal
 
+echo [Boll Visualizer] This web UI is now optional and disabled by default.
+set /p "RUN_WEB=[Boll Visualizer] Continue to start web UI? (y/N): "
+if /I not "%RUN_WEB%"=="y" (
+    echo [Boll Visualizer] Skipped.
+    pause
+    exit /b 0
+)
+
 cd /d "%~dp0Frequently-Used-Program\boll-visualizer"
 
 set "VENV_PY=..\..\.venv\Scripts\python.exe"
