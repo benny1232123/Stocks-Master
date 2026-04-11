@@ -73,6 +73,7 @@ def parse_args():
     parser.add_argument("--stock-map-config", default=STOCK_MAP_CONFIG_PATH)
     parser.add_argument("--emerging-top-n", type=int, default=EMERGING_TOP_N)
     parser.add_argument("--backtest-days", type=int, default=0, help="回测最近N个交易信号日")
+    parser.add_argument("--unit-days", type=int, default=1, help="按最近N天聚合输出榜单，默认1表示仅当日")
     return parser.parse_args()
 
 
@@ -360,6 +361,71 @@ def enrich_with_prev_change(date_str, sector_df):
     return sector_df
 
 
+def build_n_day_sector_board(current_date_str, unit_days):
+    if unit_days <= 1:
+        return pd.DataFrame(), []
+
+    file_re = re.compile(r"^CCTV-Hot-Sectors-(\d{8})(?:-\d{6})?\.csv$")
+    sources = list(DATA_DIR.glob("CCTV-Hot-Sectors-*.csv"))
+    sources += list((DATA_DIR / "archive").glob("*/cctv/CCTV-Hot-Sectors-*.csv"))
+
+    dated_files = []
+    for p in sources:
+        m = file_re.match(p.name)
+        if not m:
+            continue
+        ds = m.group(1)
+        if ds <= current_date_str:
+            dated_files.append((ds, p))
+
+    if not dated_files:
+        return pd.DataFrame(), []
+
+    latest_by_day = {}
+    for ds, p in sorted(dated_files, key=lambda x: (x[0], x[1].name)):
+        latest_by_day[ds] = p
+
+    selected_days = sorted(latest_by_day.keys())[-unit_days:]
+    if not selected_days:
+        return pd.DataFrame(), []
+
+    frames = []
+    for ds in selected_days:
+        p = latest_by_day[ds]
+        try:
+            df = pd.read_csv(p, encoding="utf-8-sig")
+        except Exception:
+            continue
+        if df is None or df.empty:
+            continue
+        if "板块" not in df.columns:
+            continue
+        tmp = df.copy()
+        for col in ["热度分", "提及次数", "舆论分"]:
+            if col not in tmp.columns:
+                tmp[col] = 0
+            tmp[col] = pd.to_numeric(tmp[col], errors="coerce").fillna(0)
+        tmp["日期"] = ds
+        frames.append(tmp[["日期", "板块", "热度分", "提及次数", "舆论分"]])
+
+    if not frames:
+        return pd.DataFrame(), []
+
+    all_df = pd.concat(frames, ignore_index=True)
+    board_df = all_df.groupby("板块", as_index=False).agg(
+        入榜天数=("日期", "nunique"),
+        累计提及次数=("提及次数", "sum"),
+        累计舆论分=("舆论分", "sum"),
+        累计热度分=("热度分", "sum"),
+        平均热度分=("热度分", "mean"),
+    )
+    board_df["平均热度分"] = board_df["平均热度分"].round(2)
+    board_df["累计舆论分"] = board_df["累计舆论分"].round(2)
+    board_df["累计热度分"] = board_df["累计热度分"].round(2)
+    board_df = board_df.sort_values(["累计热度分", "累计提及次数", "入榜天数"], ascending=False).reset_index(drop=True)
+    return board_df, selected_days
+
+
 def _confidence_tier(heat_score, mention, sentiment):
     signal = heat_score + mention * 0.5 + max(sentiment, 0) * 0.3
     if signal >= 20:
@@ -450,7 +516,7 @@ def run_backtest(backtest_days=5):
     return summary
 
 
-def write_markdown_report(date_str, sector_df, quality_df, emerging_df, suggestion_df, top_n):
+def write_markdown_report(date_str, sector_df, quality_df, emerging_df, suggestion_df, top_n, unit_df=None, used_days=None):
     path = DATA_DIR / f"CCTV-Hot-Sectors-{date_str}.md"
     q = quality_df.iloc[0].to_dict() if not quality_df.empty else {}
     lines = [
@@ -467,6 +533,20 @@ def write_markdown_report(date_str, sector_df, quality_df, emerging_df, suggesti
     ]
     for i, row in sector_df.head(top_n).reset_index(drop=True).iterrows():
         lines.append(f"| {i+1} | {row['板块']} | {row['热度分']:.1f} | {int(row['提及次数'])} | {float(row['舆论分']):.1f} | {row['较上一期热度变化']} |")
+
+    if unit_df is not None and not unit_df.empty and used_days:
+        lines += [
+            "",
+            f"## 最近{len(used_days)}天聚合榜单（{used_days[0]}-{used_days[-1]}）",
+            "",
+            "| 排名 | 板块 | 入榜天数 | 累计提及次数 | 累计舆论分 | 累计热度分 | 平均热度分 |",
+            "|---|---|---:|---:|---:|---:|---:|",
+        ]
+        for i, row in unit_df.head(top_n).reset_index(drop=True).iterrows():
+            lines.append(
+                f"| {i+1} | {row['板块']} | {int(row['入榜天数'])} | {int(row['累计提及次数'])} | "
+                f"{float(row['累计舆论分']):.2f} | {float(row['累计热度分']):.2f} | {float(row['平均热度分']):.2f} |"
+            )
     if not emerging_df.empty:
         lines += ["", "## 新热点候选词", "", "| 词 | 次数 |", "|---|---:|"]
         for _, r in emerging_df.head(20).iterrows():
@@ -481,6 +561,9 @@ def write_markdown_report(date_str, sector_df, quality_df, emerging_df, suggesti
 
 def main():
     args = parse_args()
+    if args.unit_days <= 0:
+        print("--unit-days 必须 >= 1")
+        return
     year = args.date[:4] if args.date else datetime.date.today().strftime("%Y")
     sector_keywords = _load_sector_keywords(args.keyword_config, args.accepted_keywords, year)
     stock_hints = _load_sector_stock_hints(args.stock_map_config)
@@ -518,7 +601,32 @@ def main():
     if not stock_pool_df.empty:
         stock_pool_df.to_csv(stock_pool_path, index=False, encoding="utf-8-sig")
 
-    report_path = write_markdown_report(date_str, sector_df, quality_df, emerging_df, suggestion_df, args.top_n)
+    unit_df = pd.DataFrame()
+    used_days = []
+    unit_board_path = None
+    if args.unit_days > 1:
+        unit_df, used_days = build_n_day_sector_board(date_str, args.unit_days)
+        if not unit_df.empty and used_days:
+            day_start = used_days[0]
+            day_end = used_days[-1]
+            unit_board_path = DATA_DIR / f"CCTV-Hot-Sectors-{date_str}-{args.unit_days}D.csv"
+            unit_df.to_csv(unit_board_path, index=False, encoding="utf-8-sig")
+            print(f"\n最近{len(used_days)}天聚合榜单（{day_start}-{day_end}）Top 列表：")
+            print(unit_df.head(args.top_n))
+            print(f"已保存: {unit_board_path}")
+        else:
+            print(f"\n最近{args.unit_days}天聚合榜单无可用数据，跳过输出")
+
+    report_path = write_markdown_report(
+        date_str,
+        sector_df,
+        quality_df,
+        emerging_df,
+        suggestion_df,
+        args.top_n,
+        unit_df=unit_df,
+        used_days=used_days,
+    )
 
     if args.backtest_days > 0:
         bt = run_backtest(args.backtest_days)
@@ -539,6 +647,8 @@ def main():
     if not suggestion_df.empty:
         print(f"已保存: {suggest_path}")
     print(f"已保存: {report_path}")
+    if unit_board_path is not None:
+        print(f"已保存: {unit_board_path}")
 
 
 if __name__ == "__main__":

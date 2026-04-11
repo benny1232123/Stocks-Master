@@ -1,6 +1,7 @@
 import argparse
 import datetime
 import json
+import time
 from pathlib import Path
 
 import baostock as bs
@@ -10,6 +11,8 @@ import pandas as pd
 ROOT_DIR = Path(__file__).resolve().parents[1]
 DATA_DIR = ROOT_DIR / "stock_data"
 DATA_DIR.mkdir(parents=True, exist_ok=True)
+LOG_DIR = DATA_DIR / "auto_logs"
+LOG_DIR.mkdir(parents=True, exist_ok=True)
 
 SECTOR_HINTS_PATH = DATA_DIR / "cctv_sector_stock_map.json"
 HOT_SECTOR_PATTERN = "CCTV-Hot-Sectors-*.csv"
@@ -94,9 +97,26 @@ def _match_theme(stock_name, hot_sectors, sector_hints):
     return matched
 
 
-def _query_all_a_stocks(max_stocks):
-    today_text = datetime.datetime.now().strftime("%Y-%m-%d")
-    rs = bs.query_all_stock(day=today_text)
+def _latest_trading_day(today_text, lookback_days=45):
+    start_text = (datetime.datetime.strptime(today_text, "%Y-%m-%d") - datetime.timedelta(days=lookback_days)).strftime("%Y-%m-%d")
+    rs = bs.query_trade_dates(start_date=start_text, end_date=today_text)
+    if rs.error_code != "0":
+        return today_text
+
+    latest_trade_day = None
+    while rs.next():
+        row = rs.get_row_data()
+        if not row or len(row) < 2:
+            continue
+        trade_date, is_trading = row[0], row[1]
+        if is_trading == "1":
+            latest_trade_day = trade_date
+
+    return latest_trade_day or today_text
+
+
+def _query_all_a_stocks(max_stocks, day_text):
+    rs = bs.query_all_stock(day=day_text)
     if rs.error_code != "0":
         rs = bs.query_all_stock()
     if rs.error_code != "0":
@@ -171,22 +191,47 @@ def _calc_score(row):
     return round(turn_score + flow_score + mom_score + high_score + theme_score - penalty, 2)
 
 
-def build_strategy_candidates(args):
+def _append_log(log_path, message):
+    if not log_path:
+        return
+    try:
+        timestamp = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        with log_path.open("a", encoding="utf-8") as f:
+            f.write(f"[{timestamp}] {message}\n")
+    except Exception:
+        pass
+
+
+def build_strategy_candidates(args, log_path=None):
     hot_sectors = _load_hot_sectors(args.hot_sector_top_n)
     sector_hints = _load_sector_hints()
 
-    universe = _query_all_a_stocks(args.max_stocks)
+    today_text = datetime.datetime.now().strftime("%Y-%m-%d")
+    trade_day_text = _latest_trading_day(today_text)
+    universe = _query_all_a_stocks(args.max_stocks, trade_day_text)
     print(f"扫描股票数量: {len(universe)}")
     print(f"热点板块: {', '.join(hot_sectors) if hot_sectors else '无'}")
+    _append_log(log_path, f"扫描股票数量: {len(universe)}")
+    _append_log(log_path, f"热点板块: {', '.join(hot_sectors) if hot_sectors else '无'}")
 
-    end_date_text = datetime.datetime.now().strftime("%Y-%m-%d")
+    # Align K data window with the latest trading day to avoid empty results on non-trading days.
+    end_date_text = trade_day_text
     rows = []
+    total_count = len(universe)
+    started_at = time.time()
+    last_report_at = started_at
+    progress_every = 30
+    report_interval_sec = 12
 
     for idx, item in enumerate(universe, start=1):
         code = item["code"]
         name = item["name"]
 
+        start_ts = time.time()
         kdf = _fetch_recent_k(code, end_date_text)
+        cost = time.time() - start_ts
+        if cost >= 5.0:
+            _append_log(log_path, f"slow k data: {code} {name} cost={cost:.2f}s")
         if len(kdf) < 25:
             continue
 
@@ -247,8 +292,18 @@ def build_strategy_candidates(args):
         row["综合分"] = _calc_score(row)
         rows.append(row)
 
-        if idx % 120 == 0:
-            print(f"进度: {idx}/{len(universe)}")
+        now_ts = time.time()
+        should_report = (idx % progress_every == 0) or ((now_ts - last_report_at) >= report_interval_sec)
+        if should_report:
+            elapsed = max(now_ts - started_at, 1e-6)
+            speed = idx / elapsed
+            remain = max(total_count - idx, 0)
+            eta_sec = int(remain / speed) if speed > 1e-9 else -1
+            eta_text = f"{eta_sec}s" if eta_sec >= 0 else "N/A"
+            msg = f"进度: {idx}/{total_count} ({idx/total_count:.1%}) | 速率: {speed:.2f}只/s | 预计剩余: {eta_text}"
+            print(msg)
+            _append_log(log_path, msg)
+            last_report_at = now_ts
 
     if not rows:
         return pd.DataFrame(), hot_sectors
@@ -261,13 +316,17 @@ def build_strategy_candidates(args):
 def main():
     args = parse_args()
 
+    log_file = LOG_DIR / f"theme_{datetime.datetime.now().strftime('%Y%m%d_%H%M%S')}.log"
+    _append_log(log_file, f"start: {__file__}")
+    _append_log(log_file, f"args: {args}")
+
     login_res = bs.login()
     if login_res.error_code != "0":
         print(f"baostock 登录失败: {login_res.error_msg}")
         return 1
 
     try:
-        result_df, hot_sectors = build_strategy_candidates(args)
+        result_df, hot_sectors = build_strategy_candidates(args, log_path=log_file)
     finally:
         bs.logout()
 
