@@ -74,6 +74,21 @@ def parse_args():
     parser.add_argument("--emerging-top-n", type=int, default=EMERGING_TOP_N)
     parser.add_argument("--backtest-days", type=int, default=0, help="回测最近N个交易信号日")
     parser.add_argument("--unit-days", type=int, default=1, help="按最近N天聚合输出榜单，默认1表示仅当日")
+    parser.add_argument("--auto-accept-keywords", action="store_true", help="自动将高置信候选词写入 accepted 关键词库")
+    parser.add_argument("--auto-accept-min-count", type=int, default=4, help="自动入库最低出现次数")
+    parser.add_argument(
+        "--auto-accept-min-confidence",
+        default="中",
+        choices=["低", "中", "高"],
+        help="自动入库最低置信度",
+    )
+    parser.add_argument("--disable-extra-news", action="store_true", help="禁用补充资讯源抓取")
+    parser.add_argument(
+        "--extra-news-sources",
+        default="cls,sina",
+        help="补充资讯源，逗号分隔，例如 cls,sina,em",
+    )
+    parser.add_argument("--extra-news-limit", type=int, default=120, help="每个补充源最多抓取条数")
     return parser.parse_args()
 
 
@@ -235,6 +250,109 @@ def fetch_cctv_news(target_date="", fallback=True):
     return None, pd.DataFrame(), 0
 
 
+def _normalize_generic_news_df(df, source_name):
+    if df is None or df.empty:
+        return pd.DataFrame()
+
+    title_cols = ["title", "标题", "新闻标题", "摘要"]
+    content_cols = ["content", "内容", "正文", "detail", "text", "摘要"]
+    date_cols = ["datetime", "时间", "发布时间", "date", "日期"]
+
+    rows = []
+    for _, row in df.iterrows():
+        title = ""
+        for c in title_cols:
+            if c in row.index and _safe_text(row[c]):
+                title = _safe_text(row[c])
+                break
+
+        content = ""
+        for c in content_cols:
+            if c in row.index and _safe_text(row[c]):
+                content = _safe_text(row[c])
+                break
+
+        if not title and not content:
+            txt = _safe_text(" ".join(_safe_text(v) for v in row.values if _safe_text(v)))
+            if not txt:
+                continue
+            title = txt[:60]
+            content = txt
+
+        pub_time = ""
+        for c in date_cols:
+            if c in row.index and _safe_text(row[c]):
+                pub_time = _safe_text(row[c])
+                break
+
+        rows.append(
+            {
+                "title": title,
+                "content": content,
+                "source": source_name,
+                "pub_time": pub_time,
+            }
+        )
+
+    if not rows:
+        return pd.DataFrame()
+
+    out = pd.DataFrame(rows)
+    out["_k"] = (out["title"].fillna("") + "|" + out["content"].fillna("")).str.replace(r"\s+", "", regex=True)
+    out = out.drop_duplicates(subset=["_k"]).drop(columns=["_k"]).reset_index(drop=True)
+    return out
+
+
+def _try_fetch_ak_news(function_names, source_name, limit=120):
+    for fn in function_names:
+        try:
+            func = getattr(ak, fn, None)
+            if func is None:
+                continue
+            df = func()
+            out = _normalize_generic_news_df(df, source_name)
+            if out.empty:
+                continue
+            return out.head(max(int(limit), 1)).reset_index(drop=True), fn
+        except Exception:
+            continue
+    return pd.DataFrame(), ""
+
+
+def fetch_extra_news_bundle(sources_text="cls,sina", per_source_limit=120):
+    source_map = {
+        "cls": ["news_cls", "stock_info_global_cls"],
+        "sina": ["news_sina", "stock_info_global_sina"],
+        "em": ["news_em", "stock_info_global_em"],
+    }
+
+    tags = [t.strip().lower() for t in _safe_text(sources_text).split(",") if t.strip()]
+    if not tags:
+        return pd.DataFrame(), []
+
+    frames = []
+    logs = []
+    for tag in tags:
+        fn_list = source_map.get(tag, [])
+        if not fn_list:
+            logs.append(f"跳过未知补充源: {tag}")
+            continue
+        df, fn = _try_fetch_ak_news(fn_list, source_name=tag, limit=per_source_limit)
+        if df.empty:
+            logs.append(f"补充源抓取失败或为空: {tag}")
+            continue
+        frames.append(df)
+        logs.append(f"补充源抓取成功: {tag} via {fn}, rows={len(df)}")
+
+    if not frames:
+        return pd.DataFrame(), logs
+
+    out = pd.concat(frames, ignore_index=True)
+    out["_k"] = (out["title"].fillna("") + "|" + out["content"].fillna("")).str.replace(r"\s+", "", regex=True)
+    out = out.drop_duplicates(subset=["_k"]).drop(columns=["_k"]).reset_index(drop=True)
+    return out, logs
+
+
 def build_sector_heat(news_df, sector_keywords):
     if news_df.empty:
         return pd.DataFrame(), pd.DataFrame(), {"matched_news": 0}
@@ -340,6 +458,88 @@ def suggest_keyword_sector(emerging_df, sector_keywords):
             "建议置信度": "高" if best_score >= 4 else ("中" if best_score >= 2 else "低"),
         })
     return pd.DataFrame(suggestions)
+
+
+def _load_or_init_accepted_config(path_obj):
+    if path_obj.exists():
+        try:
+            data = json.loads(path_obj.read_text(encoding="utf-8"))
+            if isinstance(data, dict):
+                data.setdefault("base", {})
+                data.setdefault("yearly", {})
+                if not isinstance(data["base"], dict):
+                    data["base"] = {}
+                if not isinstance(data["yearly"], dict):
+                    data["yearly"] = {}
+                return data
+        except Exception:
+            pass
+    return {"base": {}, "yearly": {}}
+
+
+def _auto_accept_keywords(suggestion_df, accepted_path, year_str, min_count=4, min_confidence="中"):
+    if suggestion_df is None or suggestion_df.empty:
+        return []
+
+    conf_rank = {"低": 1, "中": 2, "高": 3}
+    min_rank = conf_rank.get(min_confidence, 2)
+
+    accepted_file = _resolve_path(accepted_path)
+    accepted_file.parent.mkdir(parents=True, exist_ok=True)
+    cfg = _load_or_init_accepted_config(accepted_file)
+
+    yearly = cfg.setdefault("yearly", {})
+    year_map = yearly.setdefault(str(year_str), {})
+    if not isinstance(year_map, dict):
+        year_map = {}
+        yearly[str(year_str)] = year_map
+
+    existing_all = set()
+    for sec, kws in cfg.get("base", {}).items():
+        if isinstance(sec, str) and isinstance(kws, list):
+            for kw in kws:
+                if isinstance(kw, str) and kw.strip():
+                    existing_all.add(kw.strip().lower())
+    for ymap in cfg.get("yearly", {}).values():
+        if not isinstance(ymap, dict):
+            continue
+        for sec, kws in ymap.items():
+            if isinstance(sec, str) and isinstance(kws, list):
+                for kw in kws:
+                    if isinstance(kw, str) and kw.strip():
+                        existing_all.add(kw.strip().lower())
+
+    added = []
+    for _, row in suggestion_df.iterrows():
+        kw = _safe_text(row.get("候选关键词", ""))
+        sec = _safe_text(row.get("建议板块", ""))
+        try:
+            cnt = int(row.get("出现次数", 0))
+        except Exception:
+            cnt = 0
+        conf = _safe_text(row.get("建议置信度", "低")) or "低"
+
+        if not kw or not sec or sec == "待人工判断":
+            continue
+        if cnt < max(int(min_count), 1):
+            continue
+        if conf_rank.get(conf, 1) < min_rank:
+            continue
+        if kw.lower() in existing_all:
+            continue
+
+        sec_list = year_map.setdefault(sec, [])
+        if not isinstance(sec_list, list):
+            sec_list = []
+            year_map[sec] = sec_list
+        if kw not in sec_list:
+            sec_list.append(kw)
+            added.append((sec, kw, cnt, conf))
+            existing_all.add(kw.lower())
+
+    if added:
+        accepted_file.write_text(json.dumps(cfg, ensure_ascii=False, indent=2), encoding="utf-8")
+    return added
 
 
 def enrich_with_prev_change(date_str, sector_df):
@@ -573,14 +773,47 @@ def main():
         print("未获取到可用 CCTV 新闻，退出")
         return
 
+    keyword_news_df = news_df
+    extra_news_df = pd.DataFrame()
+    if not args.disable_extra_news:
+        extra_news_df, extra_logs = fetch_extra_news_bundle(args.extra_news_sources, args.extra_news_limit)
+        for line in extra_logs:
+            print(line)
+        if not extra_news_df.empty:
+            keyword_news_df = pd.concat([news_df, extra_news_df], ignore_index=True, sort=False)
+            print(f"关键词样本扩展: CCTV={len(news_df)} + EXTRA={len(extra_news_df)} => TOTAL={len(keyword_news_df)}")
+            extra_path = DATA_DIR / f"CCTV-Extra-News-{date_str}.csv"
+            extra_news_df.to_csv(extra_path, index=False, encoding="utf-8-sig")
+            print(f"已保存: {extra_path}")
+
     sector_df, matched_df, _ = build_sector_heat(news_df, sector_keywords)
     if sector_df.empty:
         print("未匹配到板块关键词，可扩展词库")
         return
 
     sector_df = enrich_with_prev_change(date_str, sector_df)
-    emerging_df = extract_emerging_keywords(news_df, sector_keywords, args.emerging_top_n)
+    emerging_df = extract_emerging_keywords(keyword_news_df, sector_keywords, args.emerging_top_n)
     suggestion_df = suggest_keyword_sector(emerging_df, sector_keywords)
+
+    auto_added = []
+    if args.auto_accept_keywords:
+        auto_added = _auto_accept_keywords(
+            suggestion_df,
+            args.accepted_keywords,
+            year,
+            min_count=args.auto_accept_min_count,
+            min_confidence=args.auto_accept_min_confidence,
+        )
+        if auto_added:
+            print(
+                f"自动更新关键词完成: 新增{len(auto_added)}个（min_count={args.auto_accept_min_count}, min_conf={args.auto_accept_min_confidence}）"
+            )
+            preview = auto_added[:15]
+            for sec, kw, cnt, conf in preview:
+                print(f"  + {sec}: {kw} (次数={cnt}, 置信度={conf})")
+        else:
+            print("自动更新关键词: 本次无满足条件的新词")
+
     quality_df = build_quality_metrics(date_str, raw_news_count, len(news_df), matched_df, sector_df)
     stock_pool_df = build_sector_stock_pool(date_str, sector_df, stock_hints)
 

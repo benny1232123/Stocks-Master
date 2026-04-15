@@ -12,7 +12,8 @@ import matplotlib.pyplot as plt
 
 '''0.准备工作'''
 # --- 配置区 ---
-PRICE_UPPER_LIMIT = 35  # 股价上限
+PRICE_UPPER_LIMIT = 30  # 股价上限
+PRICE_LOWER_LIMIT = 5   # 股价下限
 DEBT_ASSET_RATIO_LIMIT = 70  # 资产负债率上限
 CURRENT_YEAR = datetime.now().year
 LAST_YEAR = CURRENT_YEAR - 1
@@ -187,7 +188,7 @@ for period in ["3日排行", "5日排行", "10日排行"]:
     )
     if not df.empty:
         df['资金流入净额'] = df['资金流入净额'].apply(convert_fund_flow)
-        positive_df = df[(df['资金流入净额'] > 0) & (df['最新价'] < PRICE_UPPER_LIMIT)]
+        positive_df = df[(df['资金流入净额'] > 0) & (df['最新价'] < PRICE_UPPER_LIMIT) & (df['最新价'] >= PRICE_LOWER_LIMIT)]
         codes = positive_df['股票代码'].apply(format_stock_code).tolist()
         all_fund_flow_codes[f'format_{period_name}_days_positive_funds_codes'] = codes
     else:
@@ -366,6 +367,16 @@ try:
         code_name_map = dict(zip(tmp["code"], tmp["name"]))
 except Exception as e:
     print(f"获取股票名称映射失败: {e}（将仅输出股票代码）")
+
+shared_seed_path = os.path.join("stock_data", f"Stock-Selection-Shared-Seed-{today}.csv")
+shared_seed_df = pd.DataFrame(
+    {
+        "股票代码": [format_stock_code(code) for code in final_candidate_codes],
+        "股票名称": [code_name_map.get(format_stock_code(code), "") for code in final_candidate_codes],
+    }
+)
+shared_seed_df.to_csv(shared_seed_path, index=False, encoding="utf-8-sig")
+print(f"共享候选池已保存: {shared_seed_path}（供 Relativity 复用前置筛选结果）")
 
 def format_stock_code(code):
     """将股票代码格式化为6位数"""

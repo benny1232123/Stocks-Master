@@ -14,13 +14,16 @@ if /I "%~1"=="test-email" goto test_email
 if /I "%~1"=="cctv" goto cctv
 if /I "%~1"=="index" goto index
 if /I "%~1"=="archive" goto archive
+if /I "%~1"=="signal-backtest" goto signal_backtest
+if /I "%~1"=="trade-backtest" goto trade_backtest
+if /I "%~1"=="backtest-ui" goto backtest_ui
 
 :menu
 echo ========================================
 echo Stocks-Master Unified Launcher
 echo ========================================
 echo [1] Run BOLL notify now
-echo [2] Register daily task (19:00)
+echo [2] Register daily task (21:30)
 echo [3] Trigger daily task now
 echo [4] Check task status
 echo [5] Cleanup stock_data (default 30 days)
@@ -30,9 +33,12 @@ echo [8] Test email notify
 echo [9] Run CCTV sectors strategy
 echo [10] Build stock_data quick index
 echo [11] Organize + secondary archive stock_data
+echo [12] Run signal backtest
+echo [13] Run tradebook backtest
+echo [14] Open backtest software UI
 echo [0] Exit
 echo.
-set /p "CHOICE=Select an option (0-11): "
+set /p "CHOICE=Select an option (0-14): "
 
 if "%CHOICE%"=="1" goto run
 if "%CHOICE%"=="2" goto register
@@ -45,6 +51,9 @@ if "%CHOICE%"=="8" goto test_email
 if "%CHOICE%"=="9" goto cctv
 if "%CHOICE%"=="10" goto index
 if "%CHOICE%"=="11" goto archive
+if "%CHOICE%"=="12" goto signal_backtest
+if "%CHOICE%"=="13" goto trade_backtest
+if "%CHOICE%"=="14" goto backtest_ui
 if "%CHOICE%"=="0" goto end
 echo Invalid option.
 echo.
@@ -120,6 +129,18 @@ if /I "%ARCHIVE_ALL%"=="y" (
 ) else (
     call auto-archive-stock-data.bat %KEEP_ROOT_DAYS% %ARCHIVE_KEEP_DAYS%
 )
+goto end
+
+:signal_backtest
+call run-backtest-signal-picks.bat
+goto end
+
+:trade_backtest
+call run-backtest-tradebook.bat
+goto end
+
+:backtest_ui
+call start-backtest-center.bat
 goto end
 
 :end

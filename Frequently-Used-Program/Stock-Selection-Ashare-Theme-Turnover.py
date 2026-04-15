@@ -26,6 +26,8 @@ def parse_args():
     parser.add_argument("--min-latest-turn", type=float, default=0.8, help="最新换手率下限(%)")
     parser.add_argument("--min-avg-turn5", type=float, default=0.6, help="近5日平均换手率下限(%)")
     parser.add_argument("--min-latest-amount", type=float, default=2.0e8, help="最新成交额下限(元)")
+    parser.add_argument("--min-latest-price", type=float, default=5.0, help="最新价格下限(元)")
+    parser.add_argument("--max-latest-price", type=float, default=30.0, help="最新价格上限(元)")
     parser.add_argument("--output", default="", help="自定义输出CSV路径")
     return parser.parse_args()
 
@@ -263,6 +265,10 @@ def build_strategy_candidates(args, log_path=None):
         near_high = latest_close / max20 if max20 > 0 else 0.0
 
         if latest_turn < args.min_latest_turn:
+            continue
+        if latest_close < args.min_latest_price:
+            continue
+        if latest_close > args.max_latest_price:
             continue
         if avg_turn5 < args.min_avg_turn5:
             continue

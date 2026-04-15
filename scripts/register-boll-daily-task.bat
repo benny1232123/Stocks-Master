@@ -6,7 +6,7 @@ cd /d "%~dp0"
 set "TASK_NAME_EVENING=StocksMaster-Boll-Daily"
 set "OLD_TASK_STARTUP=StocksMaster-Boll-Startup"
 set "OLD_TASK_NOON=StocksMaster-Boll-Noon"
-set "RUN_TIME_EVENING=19:00"
+set "RUN_TIME_EVENING=21:30"
 
 set "VENV_PY=%~dp0.venv\Scripts\python.exe"
 if exist "%VENV_PY%" (

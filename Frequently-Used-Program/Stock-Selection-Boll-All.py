@@ -1,4 +1,5 @@
 from __future__ import annotations
+# pyright: reportMissingImports=false
 
 import argparse
 import sys
@@ -12,14 +13,18 @@ PROJECT_ROOT = Path(__file__).resolve().parents[1]
 VISUALIZER_SRC = PROJECT_ROOT / "Frequently-Used-Program" / "boll-visualizer" / "src"
 STOCK_DATA_DIR = PROJECT_ROOT / "stock_data"
 
+if not VISUALIZER_SRC.exists():
+    raise FileNotFoundError(f"未找到可视化策略源码目录: {VISUALIZER_SRC}")
+
 if str(VISUALIZER_SRC) not in sys.path:
     sys.path.insert(0, str(VISUALIZER_SRC))
 
 from core.data_fetcher import fetch_all_a_share_codes
 from core.full_flow_strategy import analyze_stocks_full_flow
+from strategy_common import load_checkpoint_df, merge_result_rows, normalize_code_series, save_checkpoint_df
 
 
-PRICE_UPPER_LIMIT = 35.0
+PRICE_UPPER_LIMIT = 30.0
 DEBT_ASSET_RATIO_LIMIT = 70.0
 WINDOW = 20
 K = 1.645
@@ -134,45 +139,6 @@ def _build_flow_stats_from_result(result_df: pd.DataFrame, input_count: int) -> 
     return stats
 
 
-def _load_checkpoint(checkpoint_path: Path) -> pd.DataFrame:
-    if not checkpoint_path.exists():
-        return pd.DataFrame()
-    try:
-        checkpoint_df = pd.read_csv(checkpoint_path)
-        if "股票代码" in checkpoint_df.columns:
-            checkpoint_df["股票代码"] = checkpoint_df["股票代码"].astype(str).str.zfill(6)
-        return checkpoint_df
-    except Exception:
-        return pd.DataFrame()
-
-
-def _save_checkpoint(checkpoint_path: Path, checkpoint_df: pd.DataFrame) -> None:
-    checkpoint_path.parent.mkdir(parents=True, exist_ok=True)
-    checkpoint_df.to_csv(checkpoint_path, index=False, encoding="utf-8-sig")
-
-
-def _merge_result_rows(existing_df: pd.DataFrame, new_df: pd.DataFrame) -> pd.DataFrame:
-    if existing_df.empty:
-        merged = new_df.copy()
-    elif new_df.empty:
-        merged = existing_df.copy()
-    else:
-        merged = pd.concat([existing_df, new_df], ignore_index=True)
-
-    if merged.empty:
-        return merged
-
-    if "股票代码" in merged.columns:
-        merged["股票代码"] = merged["股票代码"].astype(str).str.zfill(6)
-        merged = merged.drop_duplicates(subset=["股票代码"], keep="last")
-
-    sort_cols = [col for col in ["命中策略", "综合评分", "股票代码"] if col in merged.columns]
-    if sort_cols:
-        ascending = [False if col in {"命中策略", "综合评分"} else True for col in sort_cols]
-        merged = merged.sort_values(by=sort_cols, ascending=ascending)
-    return merged.reset_index(drop=True)
-
-
 def main() -> None:
     args = parse_args()
 
@@ -218,8 +184,8 @@ def main() -> None:
         f"backoff={retry_backoff}, interval={request_interval}, fast_mode={fast_mode}"
     )
 
-    checkpoint_df = _load_checkpoint(checkpoint_path) if args.resume else pd.DataFrame()
-    done_codes = set(checkpoint_df["股票代码"].astype(str).str.zfill(6).tolist()) if not checkpoint_df.empty else set()
+    checkpoint_df = load_checkpoint_df(checkpoint_path) if args.resume else pd.DataFrame()
+    done_codes = set(normalize_code_series(checkpoint_df["股票代码"]).tolist()) if not checkpoint_df.empty else set()
     pending_codes = [code for code in codes if code not in done_codes]
 
     if args.resume and done_codes:
@@ -253,9 +219,14 @@ def main() -> None:
             progress_callback=_on_progress,
         )
 
-        result_df = _merge_result_rows(result_df, chunk_df)
+        result_df = merge_result_rows(
+            result_df,
+            chunk_df,
+            code_col="股票代码",
+            sort_cols=["命中策略", "综合评分", "股票代码"],
+        )
         if args.resume:
-            _save_checkpoint(checkpoint_path, result_df)
+            save_checkpoint_df(checkpoint_path, result_df)
             print(f"检查点已更新: {checkpoint_path}")
 
     if result_df.empty and not pending_codes:
