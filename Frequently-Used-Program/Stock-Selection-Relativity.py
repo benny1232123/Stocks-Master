@@ -1,8 +1,11 @@
 from __future__ import annotations
 
 import argparse
+import os
 import re
+import socket
 import sqlite3
+import threading
 import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime, timedelta
@@ -30,7 +33,7 @@ RS_MIN_OVERLAP_DAYS = 30
 RS_UP_TOL = -0.025
 RS_DOWN_OUTPERF = 0.0
 RS_MIN_UP_RATIO = 0.6
-RS_MIN_DOWN_RATIO = 0.6
+RS_MIN_DOWN_RATIO = 0.7
 RS_MIN_UP_DAYS = 5
 RS_MIN_DOWN_DAYS = 5
 
@@ -43,8 +46,18 @@ IMPORTANT_SHAREHOLDERS = [
 ]
 IMPORTANT_SHAREHOLDER_TYPES = ["社保基金"]
 
-DEFAULT_SLEEP_SECONDS = 3.0
-DEFAULT_MAX_WORKERS = 1
+DEFAULT_SLEEP_SECONDS = 0.0
+DEFAULT_MAX_WORKERS = max(4, min(16, (os.cpu_count() or 8)))
+DEFAULT_HOLDER_MAX_WORKERS = DEFAULT_MAX_WORKERS
+CHECKPOINT_SAVE_EVERY = 20
+RS_CHECKPOINT_PASS_COL = "是否通过"
+DEFAULT_BS_TIMEOUT_SECONDS = float(os.getenv("BS_REQUEST_TIMEOUT_SECONDS", "15"))
+DEFAULT_BS_REQUEST_INTERVAL_SECONDS = float(os.getenv("BS_REQUEST_INTERVAL_SECONDS", "0.05"))
+DEFAULT_BS_MAX_RETRIES = int(os.getenv("BS_MAX_RETRIES", "2"))
+
+
+_BS_RATE_LIMIT_LOCK = threading.Lock()
+_BS_NEXT_ALLOWED_AT = 0.0
 
 
 # pandas 显示设置
@@ -61,12 +74,62 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--debt-asset-ratio-limit", type=float, default=DEBT_ASSET_RATIO_LIMIT, help="资产负债率上限")
     parser.add_argument("--index-code", default=RS_INDEX_CODE, help="对比指数代码（baostock）")
     parser.add_argument("--rs-lookback-days", type=int, default=RS_LOOKBACK_DAYS, help="相对强弱回看天数")
-    parser.add_argument("--max-workers", type=int, default=DEFAULT_MAX_WORKERS, help="相对强弱评估并发数，默认1")
+    parser.add_argument("--max-workers", type=int, default=DEFAULT_MAX_WORKERS, help="相对强弱评估并发数，默认自适应CPU(4~16)")
+    parser.add_argument("--holder-max-workers", type=int, default=DEFAULT_HOLDER_MAX_WORKERS, help="股东筛选并发数")
+    parser.add_argument("--min-down-ratio", type=float, default=RS_MIN_DOWN_RATIO, help="抗跌满足率下限，支持 0~1 或 0~100")
     parser.add_argument("--resume", action="store_true", help="启用相对强弱阶段断点续跑")
-    parser.add_argument("--sleep-seconds", type=float, default=DEFAULT_SLEEP_SECONDS, help="慢接口调用间隔秒数")
+    parser.add_argument("--sleep-seconds", type=float, default=DEFAULT_SLEEP_SECONDS, help="慢接口调用间隔秒数，默认0")
     parser.add_argument("--disable-rs", action="store_true", help="关闭相对强弱筛选，仅输出前置候选")
     parser.add_argument("--seed-csv", default="", help="复用已有候选CSV（如当日Boll结果），跳过前置资金流/基本面/股东筛选")
+    parser.add_argument("--bs-timeout-seconds", type=float, default=DEFAULT_BS_TIMEOUT_SECONDS, help="baostock请求超时秒数")
+    parser.add_argument("--bs-request-interval-seconds", type=float, default=DEFAULT_BS_REQUEST_INTERVAL_SECONDS, help="baostock请求最小间隔秒数")
+    parser.add_argument("--bs-max-retries", type=int, default=DEFAULT_BS_MAX_RETRIES, help="baostock请求失败重试次数")
     return parser.parse_args()
+
+
+def _throttle_bs_request(interval_seconds: float) -> None:
+    interval = max(0.0, float(interval_seconds))
+    if interval <= 0:
+        return
+
+    global _BS_NEXT_ALLOWED_AT
+    with _BS_RATE_LIMIT_LOCK:
+        now = time.time()
+        if now < _BS_NEXT_ALLOWED_AT:
+            time.sleep(_BS_NEXT_ALLOWED_AT - now)
+            now = time.time()
+        _BS_NEXT_ALLOWED_AT = now + interval
+
+
+def _latest_trade_day_bs(today_text: str, lookback_days: int, request_interval_seconds: float, max_retries: int) -> str:
+    try:
+        start_text = (datetime.strptime(today_text, "%Y-%m-%d") - timedelta(days=max(lookback_days, 30))).strftime("%Y-%m-%d")
+    except Exception:
+        return today_text
+
+    retries = max(0, int(max_retries))
+    rs = None
+    for attempt in range(retries + 1):
+        _throttle_bs_request(request_interval_seconds)
+        rs = bs.query_trade_dates(start_date=start_text, end_date=today_text)
+        if rs is not None and rs.error_code == "0":
+            break
+        if attempt < retries:
+            time.sleep(min(0.2 * (attempt + 1), 1.0))
+
+    if rs is None or rs.error_code != "0":
+        return today_text
+
+    latest_trade_day = None
+    while rs.next():
+        row = rs.get_row_data()
+        if not row or len(row) < 2:
+            continue
+        trade_date, is_trading = row[0], row[1]
+        if is_trading == "1":
+            latest_trade_day = trade_date
+
+    return latest_trade_day or today_text
 
 
 def add_market_prefix(code) -> str:
@@ -97,27 +160,32 @@ def _cache_table_name(cache_key: str) -> str:
 
 
 def fetch_data_with_fallback(api_func, cache_key: str, *args, **kwargs) -> pd.DataFrame:
-    """优先调用 API 并写入 sqlite 缓存，失败时回退读取本地缓存表。"""
+    """优先读取 sqlite 缓存，缺失时再调用 API 并写回本地缓存。"""
     DB_PATH.parent.mkdir(parents=True, exist_ok=True)
     table_name = _cache_table_name(cache_key)
 
     conn = sqlite3.connect(DB_PATH)
     try:
+        try:
+            df = pd.read_sql(f"SELECT * FROM {table_name}", conn)
+            if not df.empty:
+                print(f"成功读取本地数据库表: {table_name}")
+                return df
+            print(f"本地数据库表为空: {table_name}，准备调用 API 补充")
+        except Exception:
+            print(f"本地数据库缺少表: {table_name}，准备调用 API 补充")
+
         df = api_func(*args, **kwargs)
         if isinstance(df, pd.DataFrame) and not df.empty:
             df.to_sql(table_name, conn, if_exists="replace", index=False)
             print(f"API调用成功。数据已保存至数据库表: {table_name}")
             return df
-        raise RuntimeError("api returned empty dataframe")
+
+        print(f"API返回空数据: {table_name}")
+        return pd.DataFrame()
     except Exception as exc:
-        print(f"API调用失败或为空: {exc}。尝试读取本地数据库缓存...")
-        try:
-            df = pd.read_sql(f"SELECT * FROM {table_name}", conn)
-            print(f"成功读取本地数据库表: {table_name}")
-            return df
-        except Exception as exc2:
-            print(f"读取本地数据库失败 {table_name}: {exc2}")
-            return pd.DataFrame()
+        print(f"本地读取和API调用都失败: {exc}")
+        return pd.DataFrame()
     finally:
         conn.close()
 
@@ -347,68 +415,169 @@ def get_code_name_map_from_cache() -> dict[str, str]:
         conn.close()
 
 
-def filter_by_shareholders(candidate_codes: list[str], report_date_holder: str, sleep_seconds: float) -> list[str]:
+def _print_progress(stage: str, done: int, total: int, *, passed: int | None = None) -> None:
+    pct = 100.0 if total <= 0 else (done * 100.0 / total)
+    if passed is None:
+        print(f"[{stage}进度] {done}/{total} ({pct:.1f}%)")
+    else:
+        print(f"[{stage}进度] {done}/{total} ({pct:.1f}%) | 当前通过={passed}")
+
+
+def _evaluate_shareholder_single(code: str, report_date_holder: str) -> tuple[str, bool, str]:
+    code_fmt = format_stock_code(code)
+    try:
+        new_code = add_market_prefix(code_fmt)
+        share_holders_df = ak.stock_gdfx_free_top_10_em(symbol=new_code, date=report_date_holder)
+
+        has_important = False
+        if not share_holders_df.empty:
+            top5_names = share_holders_df["股东名称"].head(5).astype(str).tolist()
+            top5_types = share_holders_df["股东性质"].head(5).astype(str).tolist()
+
+            if any(any(imp in name for name in top5_names) for imp in IMPORTANT_SHAREHOLDERS):
+                has_important = True
+            if (not has_important) and any(
+                any(imp_type in t for t in top5_types) for imp_type in IMPORTANT_SHAREHOLDER_TYPES
+            ):
+                has_important = True
+
+        if has_important:
+            return code_fmt, True, f"{code_fmt}：大股东持股稳定，符合条件"
+        return code_fmt, False, f"{code_fmt}：无重要股东持股"
+    except Exception as exc:
+        return code_fmt, True, f"获取 {code_fmt} 流通股东数据时出错: {exc}. 默认保留该股票。"
+
+
+def filter_by_shareholders(
+    candidate_codes: list[str],
+    report_date_holder: str,
+    sleep_seconds: float,
+    *,
+    max_workers: int,
+) -> list[str]:
     final_candidate_codes: list[str] = []
     if not candidate_codes:
         print("没有候选股票进行流通股东分析")
         return final_candidate_codes
 
-    for code in candidate_codes:
-        try:
-            new_code = add_market_prefix(code)
-            share_holders_df = ak.stock_gdfx_free_top_10_em(symbol=new_code, date=report_date_holder)
+    total = len(candidate_codes)
+    processed = 0
+    passed = 0
 
-            has_important = False
-            if not share_holders_df.empty:
-                top5_names = share_holders_df["股东名称"].head(5).astype(str).tolist()
-                top5_types = share_holders_df["股东性质"].head(5).astype(str).tolist()
+    if max_workers <= 1:
+        for code in candidate_codes:
+            code_fmt, keep, msg = _evaluate_shareholder_single(code, report_date_holder)
+            print(msg)
+            if keep:
+                final_candidate_codes.append(code_fmt)
+                passed += 1
+            processed += 1
+            _print_progress("股东筛选", processed, total, passed=passed)
+            time.sleep(max(sleep_seconds, 0.0))
+        return final_candidate_codes
 
-                if any(any(imp in name for name in top5_names) for imp in IMPORTANT_SHAREHOLDERS):
-                    has_important = True
-                if (not has_important) and any(
-                    any(imp_type in t for t in top5_types) for imp_type in IMPORTANT_SHAREHOLDER_TYPES
-                ):
-                    has_important = True
-
-            if has_important:
-                print(f"{code}：大股东持股稳定，符合条件")
-                final_candidate_codes.append(code)
-            else:
-                print(f"{code}：无重要股东持股")
-        except Exception as exc:
-            print(f"获取 {code} 流通股东数据时出错: {exc}. 默认保留该股票。")
-            final_candidate_codes.append(code)
-        time.sleep(max(sleep_seconds, 0.0))
+    print(f"[股东筛选] 已启用并发评估 workers={max_workers}")
+    with ThreadPoolExecutor(max_workers=max_workers) as ex:
+        futures = {
+            ex.submit(_evaluate_shareholder_single, code, report_date_holder): format_stock_code(code)
+            for code in candidate_codes
+        }
+        for fut in as_completed(futures):
+            code_fmt = futures[fut]
+            try:
+                _code_fmt, keep, msg = fut.result()
+                print(msg)
+                if keep:
+                    final_candidate_codes.append(code_fmt)
+                    passed += 1
+            except Exception as exc:
+                print(f"获取 {code_fmt} 流通股东数据时出错: {exc}. 默认保留该股票。")
+                final_candidate_codes.append(code_fmt)
+                passed += 1
+            processed += 1
+            _print_progress("股东筛选", processed, total, passed=passed)
+            time.sleep(max(sleep_seconds, 0.0))
 
     return final_candidate_codes
 
 
-def fetch_bs_daily_close(code_bs: str, start_date: str, end_date: str) -> pd.DataFrame:
-    rs = bs.query_history_k_data_plus(
-        code_bs,
-        "date,close,tradestatus",
-        start_date=start_date,
-        end_date=end_date,
-        frequency="d",
-        adjustflag="2",
-    )
+def fetch_bs_daily_close(
+    code_bs: str,
+    start_date: str,
+    end_date: str,
+    *,
+    request_interval_seconds: float,
+    max_retries: int,
+) -> pd.DataFrame:
+    retries = max(0, int(max_retries))
     data_list = []
-    while (rs.error_code == "0") and rs.next():
-        data_list.append(rs.get_row_data())
-    if rs.error_code != "0":
+    rs_fields = []
+    last_error_code = ""
+    last_error_msg = ""
+
+    for attempt in range(retries + 1):
+        _throttle_bs_request(request_interval_seconds)
+        rs = bs.query_history_k_data_plus(
+            code_bs,
+            "date,close,tradestatus",
+            start_date=start_date,
+            end_date=end_date,
+            frequency="d",
+            adjustflag="2",
+        )
+        if rs is None or rs.error_code != "0":
+            if rs is not None:
+                last_error_code = str(getattr(rs, "error_code", "") or "")
+                last_error_msg = str(getattr(rs, "error_msg", "") or "")
+            if attempt < retries:
+                time.sleep(min(0.2 * (attempt + 1), 1.0))
+            continue
+
+        data_list = []
+        while rs.next():
+            data_list.append(rs.get_row_data())
+        rs_fields = list(getattr(rs, "fields", []) or [])
+        if data_list and rs_fields:
+            break
+
+        if attempt < retries:
+            time.sleep(min(0.2 * (attempt + 1), 1.0))
+
+    if not data_list or not rs_fields:
+        if last_error_code or last_error_msg:
+            print(
+                f"[相对强弱] baostock日线为空 {code_bs} {start_date}~{end_date} | "
+                f"error_code={last_error_code} error_msg={last_error_msg}"
+            )
         return pd.DataFrame()
 
-    df = pd.DataFrame(data_list, columns=rs.fields)
+    df = pd.DataFrame(data_list, columns=rs_fields)
     if df.empty:
         return df
 
+    raw_close_df = df[["date", "close"]].copy() if {"date", "close"}.issubset(df.columns) else pd.DataFrame()
+
     if "tradestatus" in df.columns:
-        df = df[df["tradestatus"].astype(str) == "1"]
+        active_df = df[df["tradestatus"].astype(str) == "1"]
+        if not active_df.empty:
+            df = active_df
+        else:
+            # 某些日期区间会出现 tradestatus 异常值，回退到原始行情避免误判为 empty_close。
+            print(f"[相对强弱] tradestatus过滤后为空，回退原始收盘数据: {code_bs}")
 
     df = df[["date", "close"]].copy()
     df["date"] = pd.to_datetime(df["date"], errors="coerce")
     df["close"] = pd.to_numeric(df["close"], errors="coerce")
     df = df.dropna(subset=["date", "close"]).sort_values("date")
+
+    if df.empty and not raw_close_df.empty:
+        raw_close_df["date"] = pd.to_datetime(raw_close_df["date"], errors="coerce")
+        raw_close_df["close"] = pd.to_numeric(raw_close_df["close"], errors="coerce")
+        raw_close_df = raw_close_df.dropna(subset=["date", "close"]).sort_values("date")
+        if not raw_close_df.empty:
+            print(f"[相对强弱] 使用原始收盘回退成功: {code_bs} rows={len(raw_close_df)}")
+            return raw_close_df
+
     return df
 
 
@@ -478,9 +647,11 @@ def relative_strength_pass(
     }
 
 
-def _checkpoint_path(today_text: str) -> Path:
+def _checkpoint_path(today_text: str, index_code: str, lookback_days: int) -> Path:
     CHECKPOINT_DIR.mkdir(parents=True, exist_ok=True)
-    return CHECKPOINT_DIR / f"Stock-Selection-Relativity-Checkpoint-{today_text}.csv"
+    idx = re.sub(r"[^0-9a-zA-Z]+", "", str(index_code or "").lower()) or "index"
+    lb = max(int(lookback_days), 1)
+    return CHECKPOINT_DIR / f"Stock-Selection-Relativity-Checkpoint-{today_text}-{idx}-lb{lb}.csv"
 
 
 def _load_rs_checkpoint(path: Path) -> pd.DataFrame:
@@ -493,6 +664,21 @@ def _save_rs_checkpoint(path: Path, rows: list[dict]) -> None:
     save_checkpoint_df(path, pd.DataFrame(rows))
 
 
+def _is_retryable_fail_reason(reason: str) -> bool:
+    text = str(reason or "").strip().lower()
+    if not text:
+        return False
+    retryable_tokens = [
+        "empty_close",
+        "exception",
+        "query_failed",
+        "timeout",
+        "network",
+        "connect",
+    ]
+    return any(token in text for token in retryable_tokens)
+
+
 def _evaluate_single_code(
     code: str,
     stock_name: str,
@@ -501,10 +687,25 @@ def _evaluate_single_code(
     end_date: str,
     price_lower_limit: float,
     price_upper_limit: float,
+    min_down_ratio: float,
+    bs_request_interval_seconds: float,
+    bs_max_retries: int,
 ) -> tuple[str, bool, dict]:
-    stock_close_df = fetch_bs_daily_close(add_market_prefix_dotted(code), start_date=start_date, end_date=end_date)
+    code_bs = add_market_prefix_dotted(code)
+    stock_close_df = fetch_bs_daily_close(
+        code_bs,
+        start_date=start_date,
+        end_date=end_date,
+        request_interval_seconds=bs_request_interval_seconds,
+        max_retries=bs_max_retries,
+    )
     if stock_close_df.empty:
-        return format_stock_code(code), False, {"reason": "empty_close"}
+        return format_stock_code(code), False, {
+            "reason": "empty_close",
+            "code_bs": code_bs,
+            "start_date": start_date,
+            "end_date": end_date,
+        }
 
     latest_close = float(stock_close_df["close"].iloc[-1])
     if latest_close < price_lower_limit:
@@ -519,7 +720,7 @@ def _evaluate_single_code(
         up_tol=RS_UP_TOL,
         down_outperf=RS_DOWN_OUTPERF,
         min_up_ratio=RS_MIN_UP_RATIO,
-        min_down_ratio=RS_MIN_DOWN_RATIO,
+        min_down_ratio=min_down_ratio,
         min_up_days=RS_MIN_UP_DAYS,
         min_down_days=RS_MIN_DOWN_DAYS,
     )
@@ -538,23 +739,64 @@ def run_relative_strength(
     resume: bool,
     price_lower_limit: float,
     price_upper_limit: float,
+    min_down_ratio: float,
+    bs_request_interval_seconds: float,
+    bs_max_retries: int,
 ) -> list[dict]:
     if not final_candidate_codes:
         return []
 
-    checkpoint = _checkpoint_path(today_text)
+    checkpoint = _checkpoint_path(today_text, index_code, lookback_days)
     checkpoint_df = _load_rs_checkpoint(checkpoint) if resume else pd.DataFrame()
-    selected_rows = checkpoint_df.to_dict(orient="records") if not checkpoint_df.empty else []
-    done_codes = set(normalize_code_series(checkpoint_df["股票代码"]).tolist()) if not checkpoint_df.empty else set()
+    if not checkpoint_df.empty and RS_CHECKPOINT_PASS_COL in checkpoint_df.columns:
+        normalized_codes = normalize_code_series(checkpoint_df["股票代码"])
+        retryable_codes: set[str] = set()
+        if "原因" in checkpoint_df.columns:
+            fail_mask = checkpoint_df[RS_CHECKPOINT_PASS_COL].fillna(0).astype(int) == 0
+            fail_df = checkpoint_df[fail_mask].copy()
+            if not fail_df.empty:
+                fail_df["_code"] = normalize_code_series(fail_df["股票代码"])
+                retryable_codes = {
+                    row["_code"]
+                    for _, row in fail_df.iterrows()
+                    if _is_retryable_fail_reason(row.get("原因", ""))
+                }
+
+        done_codes = {c for c in normalized_codes.tolist() if c not in retryable_codes}
+        selected_rows = checkpoint_df[checkpoint_df[RS_CHECKPOINT_PASS_COL] == 1].copy().to_dict(orient="records")
+
+        if retryable_codes:
+            print(f"[相对强弱] 断点续跑将重试临时失败股票: {len(retryable_codes)}")
+    else:
+        selected_rows = checkpoint_df.to_dict(orient="records") if not checkpoint_df.empty else []
+        done_codes = set(normalize_code_series(checkpoint_df["股票代码"]).tolist()) if not checkpoint_df.empty else set()
+
+    # 新格式检查点记录所有已处理股票（含失败），提升断点续跑速度。
+    checkpoint_rows: list[dict] = checkpoint_df.to_dict(orient="records") if not checkpoint_df.empty else []
 
     pending_codes = [c for c in final_candidate_codes if format_stock_code(c) not in done_codes]
+    total_all = len(final_candidate_codes)
+    processed = len(done_codes)
     if resume and done_codes:
         print(f"[相对强弱] 检查点已完成: {len(done_codes)}，待处理: {len(pending_codes)}")
+        _print_progress("相对强弱", processed, total_all, passed=len(selected_rows))
 
-    end_date = datetime.now().strftime("%Y-%m-%d")
-    start_date = (datetime.now() - timedelta(days=max(int(lookback_days), 10))).strftime("%Y-%m-%d")
+    now_text = datetime.now().strftime("%Y-%m-%d")
+    end_date = _latest_trade_day_bs(
+        now_text,
+        lookback_days=max(int(lookback_days), 45),
+        request_interval_seconds=bs_request_interval_seconds,
+        max_retries=bs_max_retries,
+    )
+    start_date = (datetime.strptime(end_date, "%Y-%m-%d") - timedelta(days=max(int(lookback_days), 10))).strftime("%Y-%m-%d")
 
-    index_close_df = fetch_bs_daily_close(index_code, start_date=start_date, end_date=end_date)
+    index_close_df = fetch_bs_daily_close(
+        index_code,
+        start_date=start_date,
+        end_date=end_date,
+        request_interval_seconds=bs_request_interval_seconds,
+        max_retries=bs_max_retries,
+    )
     if index_close_df.empty:
         print(f"[相对强弱] 指数数据为空：{index_code}，无法执行相对强弱筛选。")
         return selected_rows
@@ -566,6 +808,7 @@ def run_relative_strength(
         return {
             "股票代码": meta["code"],
             "股票名称": meta.get("name", ""),
+            RS_CHECKPOINT_PASS_COL: 1,
             "上涨满足率": meta.get("up_ratio"),
             "抗跌满足率": meta.get("down_ratio"),
             "对齐交易日": meta.get("overlap_days"),
@@ -574,6 +817,27 @@ def run_relative_strength(
             "个股上涨日数(对齐后)": meta.get("stock_up_days"),
             "个股下跌日数(对齐后)": meta.get("stock_down_days"),
         }
+
+    def fail_row_from_meta(code_fmt: str, stock_name: str, meta: dict) -> dict:
+        return {
+            "股票代码": code_fmt,
+            "股票名称": stock_name,
+            RS_CHECKPOINT_PASS_COL: 0,
+            "原因": str(meta.get("reason", "not_passed")),
+        }
+
+    pending_processed = 0
+    checkpoint_dirty = False
+
+    def maybe_flush_checkpoint(force: bool = False) -> None:
+        nonlocal checkpoint_dirty
+        if not resume:
+            return
+        if not checkpoint_dirty:
+            return
+        if force or (pending_processed > 0 and pending_processed % CHECKPOINT_SAVE_EVERY == 0):
+            _save_rs_checkpoint(checkpoint, checkpoint_rows)
+            checkpoint_dirty = False
 
     if max_workers <= 1:
         for code in pending_codes:
@@ -586,6 +850,9 @@ def run_relative_strength(
                 end_date,
                 price_lower_limit,
                 price_upper_limit,
+                min_down_ratio,
+                bs_request_interval_seconds,
+                bs_max_retries,
             )
             if passed:
                 print(
@@ -593,11 +860,19 @@ def run_relative_strength(
                     f"上涨满足率={meta.get('up_ratio', 0):.2f} 抗跌满足率={meta.get('down_ratio', 0):.2f} "
                     f"对齐交易日={meta.get('overlap_days', 0)}"
                 )
-                selected_rows.append(row_from_meta(meta))
-                if resume:
-                    _save_rs_checkpoint(checkpoint, selected_rows)
+                pass_row = row_from_meta(meta)
+                selected_rows.append(pass_row)
+                checkpoint_rows.append(pass_row)
+                checkpoint_dirty = True
             else:
                 print(f"[相对强弱] FAIL {code_fmt} {stock_name} | {meta}")
+                checkpoint_rows.append(fail_row_from_meta(code_fmt, stock_name, meta))
+                checkpoint_dirty = True
+
+            processed += 1
+            pending_processed += 1
+            _print_progress("相对强弱", processed, total_all, passed=len(selected_rows))
+            maybe_flush_checkpoint()
     else:
         with ThreadPoolExecutor(max_workers=max_workers) as ex:
             futures = {}
@@ -613,6 +888,9 @@ def run_relative_strength(
                     end_date,
                     price_lower_limit,
                     price_upper_limit,
+                    min_down_ratio,
+                    bs_request_interval_seconds,
+                    bs_max_retries,
                 )
                 futures[fut] = (code_fmt, stock_name)
 
@@ -626,13 +904,32 @@ def run_relative_strength(
                             f"上涨满足率={meta.get('up_ratio', 0):.2f} 抗跌满足率={meta.get('down_ratio', 0):.2f} "
                             f"对齐交易日={meta.get('overlap_days', 0)}"
                         )
-                        selected_rows.append(row_from_meta(meta))
-                        if resume:
-                            _save_rs_checkpoint(checkpoint, selected_rows)
+                        pass_row = row_from_meta(meta)
+                        selected_rows.append(pass_row)
+                        checkpoint_rows.append(pass_row)
+                        checkpoint_dirty = True
                     else:
                         print(f"[相对强弱] FAIL {code_fmt} {stock_name} | {meta}")
+                        checkpoint_rows.append(fail_row_from_meta(code_fmt, stock_name, meta))
+                        checkpoint_dirty = True
                 except Exception as exc:
                     print(f"[相对强弱] FAIL {code_fmt} {stock_name} | 评估异常: {exc}")
+                    checkpoint_rows.append(
+                        {
+                            "股票代码": code_fmt,
+                            "股票名称": stock_name,
+                            RS_CHECKPOINT_PASS_COL: 0,
+                            "原因": f"exception: {exc}",
+                        }
+                    )
+                    checkpoint_dirty = True
+
+                processed += 1
+                pending_processed += 1
+                _print_progress("相对强弱", processed, total_all, passed=len(selected_rows))
+                maybe_flush_checkpoint()
+
+    maybe_flush_checkpoint(force=True)
 
     return selected_rows
 
@@ -646,6 +943,7 @@ def print_param_warnings() -> None:
 
 def main() -> None:
     args = parse_args()
+    socket.setdefaulttimeout(max(3.0, float(args.bs_timeout_seconds)))
     STOCK_DATA_DIR.mkdir(parents=True, exist_ok=True)
 
     print_param_warnings()
@@ -657,8 +955,15 @@ def main() -> None:
     print(
         f"参数: {args.price_lower_limit}<=price<{args.price_upper_limit}, debt<{args.debt_asset_ratio_limit}, "
         f"index={args.index_code}, lookback={args.rs_lookback_days}, "
-        f"workers={max(1, int(args.max_workers))}, resume={bool(args.resume)}, disable_rs={bool(args.disable_rs)}, seed_csv={bool(args.seed_csv)}"
+        f"workers={max(1, int(args.max_workers))}, holder_workers={max(1, int(args.holder_max_workers))}, "
+        f"min_down_ratio={args.min_down_ratio}, resume={bool(args.resume)}, disable_rs={bool(args.disable_rs)}, seed_csv={bool(args.seed_csv)}, "
+        f"bs_timeout={args.bs_timeout_seconds}s, bs_interval={args.bs_request_interval_seconds}s, bs_retries={args.bs_max_retries}"
     )
+
+    min_down_ratio = float(args.min_down_ratio)
+    if min_down_ratio > 1.5:
+        min_down_ratio = min_down_ratio / 100.0
+    min_down_ratio = max(0.0, min(min_down_ratio, 1.0))
 
     seed_codes: list[str] = []
     seed_name_map: dict[str, str] = {}
@@ -687,7 +992,12 @@ def main() -> None:
             fund_flow_codes,
         )
 
-        final_candidate_codes = filter_by_shareholders(candidate_codes, report_date_holder, args.sleep_seconds)
+        final_candidate_codes = filter_by_shareholders(
+            candidate_codes,
+            report_date_holder,
+            args.sleep_seconds,
+            max_workers=max(1, int(args.holder_max_workers)),
+        )
         code_name_map = get_code_name_map()
 
     if final_candidate_codes and any(not code_name_map.get(format_stock_code(c), "") for c in final_candidate_codes):
@@ -730,12 +1040,17 @@ def main() -> None:
                 resume=bool(args.resume),
                 price_lower_limit=float(args.price_lower_limit),
                 price_upper_limit=float(args.price_upper_limit),
+                min_down_ratio=min_down_ratio,
+                bs_request_interval_seconds=float(args.bs_request_interval_seconds),
+                bs_max_retries=int(args.bs_max_retries),
             )
     finally:
         bs.logout()
 
     if selected_rows:
         out_df = pd.DataFrame(selected_rows)
+        if RS_CHECKPOINT_PASS_COL in out_df.columns:
+            out_df = out_df.drop(columns=[RS_CHECKPOINT_PASS_COL], errors="ignore")
         if "抗跌满足率" in out_df.columns and "上涨满足率" in out_df.columns:
             out_df = out_df.sort_values(["抗跌满足率", "上涨满足率"], ascending=False, na_position="last")
         out_path = STOCK_DATA_DIR / f"Stock-Selection-Relativity-{today_text}.csv"

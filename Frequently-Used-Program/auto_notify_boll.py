@@ -2,13 +2,19 @@ import csv
 import argparse
 import json
 import os
+import queue
 import re
+import sqlite3
 import smtplib
 import subprocess
 import sys
+import threading
 import time
+import traceback
+from concurrent.futures import FIRST_COMPLETED, ThreadPoolExecutor, wait
 from datetime import datetime, timedelta
 from email.message import EmailMessage
+from functools import lru_cache
 from pathlib import Path
 from urllib import error, request
 
@@ -27,6 +33,9 @@ ARCHIVE_SCRIPT_PATH = ROOT_DIR / "Frequently-Used-Program" / "archive_stock_data
 STOCK_DATA_DIR = ROOT_DIR / "stock_data"
 LOG_DIR = STOCK_DATA_DIR / "auto_logs"
 PIPELINE_TOTAL_STEPS = 7
+DB_PATH = STOCK_DATA_DIR / "stocks_data.db"
+RUN_LOG_FILE = None
+RUN_LOG_LOCK = threading.Lock()
 
 
 def _append_log(log_lines, message):
@@ -34,6 +43,14 @@ def _append_log(log_lines, message):
     line = f"[{ts}] {message}"
     print(line)
     log_lines.append(line)
+    if RUN_LOG_FILE is not None:
+        try:
+            with RUN_LOG_LOCK:
+                RUN_LOG_FILE.parent.mkdir(parents=True, exist_ok=True)
+                with RUN_LOG_FILE.open("a", encoding="utf-8") as f:
+                    f.write(line + "\n")
+        except Exception:
+            pass
 
 
 def _stage_tag(step_index, stage_name, *, percent=None, total_steps=PIPELINE_TOTAL_STEPS):
@@ -43,7 +60,16 @@ def _stage_tag(step_index, stage_name, *, percent=None, total_steps=PIPELINE_TOT
     return f"[{pct:>3d}%][{safe_step}/{total_steps} {stage_name}]"
 
 
-def _run_command_with_live_output(log_lines, *, cmd, cwd, step_index, stage_name):
+def _run_command_with_live_output(
+    log_lines,
+    *,
+    cmd,
+    cwd,
+    step_index,
+    stage_name,
+    idle_timeout_seconds=0,
+    kill_grace_seconds=8,
+):
     start_percent = int((step_index - 1) * 100 / PIPELINE_TOTAL_STEPS)
     running_percent = max(start_percent, int(step_index * 100 / PIPELINE_TOTAL_STEPS) - 1)
     done_percent = int(step_index * 100 / PIPELINE_TOTAL_STEPS)
@@ -73,21 +99,96 @@ def _run_command_with_live_output(log_lines, *, cmd, cwd, step_index, stage_name
     )
 
     lines = []
-    if proc.stdout is not None:
-        for raw in proc.stdout:
-            line = raw.rstrip("\r\n")
-            if not line:
-                continue
-            lines.append(line)
-            _append_log(log_lines, f"{_stage_tag(step_index, stage_name, percent=running_percent)} {line}")
+    out_queue = queue.Queue()
+
+    def _reader() -> None:
+        try:
+            if proc.stdout is None:
+                return
+            for raw in proc.stdout:
+                out_queue.put(raw)
+        finally:
+            out_queue.put(None)
+
+    reader_thread = threading.Thread(target=_reader, name=f"reader-{stage_name}", daemon=True)
+    reader_thread.start()
+
+    idle_timeout = max(0, int(float(idle_timeout_seconds or 0)))
+    timed_out = False
+    deadline = time.monotonic() + idle_timeout if idle_timeout > 0 else None
+
+    while True:
+        try:
+            raw = out_queue.get(timeout=1.0)
+        except queue.Empty:
+            raw = ""
+
+        if raw is None:
+            if proc.poll() is not None:
+                break
+            continue
+
+        if raw:
+            line = str(raw).rstrip("\r\n")
+            if line:
+                lines.append(line)
+                _append_log(log_lines, f"{_stage_tag(step_index, stage_name, percent=running_percent)} {line}")
+                if deadline is not None:
+                    deadline = time.monotonic() + idle_timeout
+
+        if deadline is not None and time.monotonic() > deadline and proc.poll() is None:
+            timed_out = True
+            _append_log(
+                log_lines,
+                f"{_stage_tag(step_index, stage_name, percent=running_percent)} no output for {idle_timeout}s, terminating...",
+            )
+            try:
+                proc.terminate()
+                proc.wait(timeout=max(1, int(kill_grace_seconds)))
+            except Exception:
+                try:
+                    proc.kill()
+                except Exception:
+                    pass
+            break
+
+        if proc.poll() is not None and out_queue.empty():
+            break
 
     returncode = proc.wait()
+    if timed_out and returncode == 0:
+        returncode = 124
     elapsed = time.monotonic() - started
     status = "OK" if returncode == 0 else f"FAILED({returncode})"
     _append_log(log_lines, f"{_stage_tag(step_index, stage_name, percent=done_percent)} done: {status}, elapsed={elapsed:.1f}s")
 
     tail = "\n".join(lines[-40:]) if lines else ""
     return returncode, tail
+
+
+def _run_command_capture(*, cmd, cwd):
+    started = time.monotonic()
+    cmd = list(cmd)
+    env = os.environ.copy()
+    env.setdefault("PYTHONUNBUFFERED", "1")
+    env.setdefault("PYTHONIOENCODING", "utf-8")
+    env.setdefault("PYTHONUTF8", "1")
+
+    completed = subprocess.run(
+        cmd,
+        cwd=str(cwd),
+        env=env,
+        capture_output=True,
+        text=True,
+        encoding="utf-8",
+        errors="replace",
+    )
+    elapsed = time.monotonic() - started
+    output = completed.stdout or ""
+    if completed.stderr:
+        output = output + ("\n" if output else "") + completed.stderr
+    tail = "\n".join([line for line in output.splitlines() if line][-80:])
+    return int(completed.returncode), tail, elapsed
 
 
 def _find_result_csv(today_yyyymmdd):
@@ -169,7 +270,43 @@ def _read_rows(csv_path, limit=20):
     return rows, preview
 
 
-def _read_theme_rows(csv_path, limit=20):
+def _cache_table_name(cache_key):
+    key = cache_key.replace("stock_data/", "").replace(".csv", "")
+    key = re.sub(r"[^0-9a-zA-Z_]+", "_", key)
+    key = re.sub(r"_+", "_", key).strip("_")
+    if not key:
+        key = "table"
+    if key[0].isdigit():
+        key = f"t_{key}"
+    return key
+
+
+def _read_cache_df(table_name):
+    if not DB_PATH.exists():
+        return pd.DataFrame()
+    conn = sqlite3.connect(DB_PATH)
+    try:
+        return pd.read_sql(f'SELECT * FROM "{table_name}"', conn)
+    except Exception:
+        return pd.DataFrame()
+    finally:
+        conn.close()
+
+
+def _write_cache_df(table_name, df):
+    if df is None or df.empty:
+        return
+    DB_PATH.parent.mkdir(parents=True, exist_ok=True)
+    conn = sqlite3.connect(DB_PATH)
+    try:
+        df.to_sql(table_name, conn, if_exists="replace", index=False)
+    except Exception:
+        pass
+    finally:
+        conn.close()
+
+
+def _read_theme_rows(csv_path, limit=None):
     rows = []
     with csv_path.open("r", encoding="utf-8-sig", newline="") as f:
         reader = csv.DictReader(f)
@@ -183,7 +320,59 @@ def _read_theme_rows(csv_path, limit=20):
                     "turn": (row.get("最新换手率%") or "").strip(),
                 }
             )
-    return rows[:limit]
+    if isinstance(limit, int) and limit > 0:
+        return rows[:limit]
+    return rows
+
+
+def _find_cctv_stock_pool_csv(today_yyyymmdd):
+    preferred = STOCK_DATA_DIR / f"CCTV-Sector-Stock-Pool-{today_yyyymmdd}.csv"
+    if preferred.exists():
+        return preferred
+
+    # 若当天文件不存在，回退最近一期，避免跨日运行时题材被清空。
+    candidates = sorted(
+        STOCK_DATA_DIR.glob("CCTV-Sector-Stock-Pool-*.csv"),
+        key=lambda p: p.stat().st_mtime,
+        reverse=True,
+    )
+    return candidates[0] if candidates else None
+
+
+@lru_cache(maxsize=32)
+def _load_cctv_codes_by_date(date_yyyymmdd):
+    path = _find_cctv_stock_pool_csv(str(date_yyyymmdd or "").strip())
+    if not path or (not path.exists()):
+        return frozenset()
+
+    try:
+        df = pd.read_csv(path, encoding="utf-8-sig")
+    except Exception:
+        return frozenset()
+    if df.empty:
+        return frozenset()
+
+    code_col = ""
+    lower_map = {str(c).strip().lower(): str(c) for c in df.columns}
+    for key in ["股票代码", "code", "symbol", "证券代码"]:
+        col = lower_map.get(key.lower(), "")
+        if col:
+            code_col = col
+            break
+    if not code_col:
+        return frozenset()
+
+    codes = df[code_col].astype(str).apply(_normalize_code)
+    return frozenset(c for c in codes.tolist() if len(c) == 6)
+
+
+def _filter_theme_rows_with_cctv(theme_rows, *, date_yyyymmdd):
+    if not theme_rows:
+        return []
+    cctv_codes = _load_cctv_codes_by_date(date_yyyymmdd)
+    if not cctv_codes:
+        return []
+    return [item for item in theme_rows if _normalize_code(item.get("code")) in cctv_codes]
 
 
 def _normalize_code(code):
@@ -229,6 +418,15 @@ def _safe_pct(numerator, denominator):
     return (numerator / denominator - 1.0) * 100.0
 
 
+def _to_percent_like(value):
+    num = _to_float(value)
+    if num is None:
+        return None
+    if num <= 1.5:
+        return num * 100.0
+    return num
+
+
 def _fmt_pct(value, digits=2, signed=False, na="N/A"):
     num = _to_float(value)
     if num is None:
@@ -245,6 +443,14 @@ def _fmt_num(value, digits=2, na="N/A"):
 
 
 def _fetch_bs_latest_row(bs_code, end_date_text, lookback_days=40):
+    cache_key = f"stock_data/bs_latest_row_{bs_code}_{end_date_text}.csv"
+    table_name = _cache_table_name(cache_key)
+    cached_df = _read_cache_df(table_name)
+    if not cached_df.empty:
+        row = cached_df.iloc[-1].to_dict()
+        if row:
+            return row
+
     start_date_text = (datetime.strptime(end_date_text, "%Y-%m-%d") - timedelta(days=lookback_days)).strftime("%Y-%m-%d")
     rs = bs.query_history_k_data_plus(
         bs_code,
@@ -263,87 +469,88 @@ def _fetch_bs_latest_row(bs_code, end_date_text, lookback_days=40):
     if not data_list or not rs.fields:
         return None
     row = dict(zip(rs.fields, data_list[-1]))
+    _write_cache_df(table_name, pd.DataFrame([row]))
     return row
 
 
-def _fetch_market_index_series(bs_code, end_date_text, lookback_days=90):
-    market_code = str(bs_code or "").strip().lower().replace(".", "")
-    if not market_code:
-        return []
+def _to_ak_index_symbol(index_code):
+    text = str(index_code or "").strip().lower().replace(".", "")
+    if text.startswith("sh") or text.startswith("sz"):
+        return text
+    if text.isdigit() and len(text) == 6:
+        return ("sh" + text) if text.startswith("0") else ("sz" + text)
+    return text
 
-    start_date_text = (datetime.strptime(end_date_text, "%Y-%m-%d") - timedelta(days=lookback_days)).strftime("%Y-%m-%d")
 
-    try:
-        df = ak.stock_zh_index_daily_em(symbol=market_code)
-    except Exception:
-        return []
-    if df is None or df.empty:
-        return []
+def _fetch_index_close_series(index_code, start_date_text, end_date_text):
+    def _normalize_index_df(df):
+        if df is None or df.empty:
+            return pd.DataFrame()
 
-    col_map = {str(c).strip(): str(c) for c in df.columns}
-    date_col = col_map.get("date", "")
-    close_col = col_map.get("close", "")
-    if not date_col or not close_col:
-        return []
+        col_map_raw = {str(c).strip(): str(c) for c in df.columns}
+        date_col = col_map_raw.get("date", "")
+        close_col = col_map_raw.get("close", "")
 
-    work = df[[date_col, close_col]].copy()
-    work["date"] = pd.to_datetime(work[date_col], errors="coerce")
-    work["close"] = pd.to_numeric(work[close_col], errors="coerce")
-    work = work.dropna(subset=["date", "close"]).sort_values("date").reset_index(drop=True)
+        if not date_col or not close_col:
+            col_map_lc = {str(c).strip().lower(): str(c) for c in df.columns}
+            date_col = col_map_lc.get("date", "")
+            close_col = col_map_lc.get("close", "")
+
+        if not date_col or not close_col:
+            return pd.DataFrame()
+
+        out_df = pd.DataFrame()
+        out_df["date"] = pd.to_datetime(df[date_col], errors="coerce")
+        out_df["close"] = pd.to_numeric(df[close_col], errors="coerce")
+        out_df = out_df.dropna(subset=["date", "close"]).sort_values("date").reset_index(drop=True)
+        return out_df
+
+    symbol = _to_ak_index_symbol(index_code)
+    out = pd.DataFrame()
+
+    cache_key = f"stock_data/index_close_{symbol}_{start_date_text}_{end_date_text}.csv"
+    table_name = _cache_table_name(cache_key)
+    cached_df = _read_cache_df(table_name)
+    if not cached_df.empty:
+        out = _normalize_index_df(cached_df)
+    else:
+        try:
+            raw = ak.stock_zh_index_daily_em(symbol=symbol)
+            out = _normalize_index_df(raw)
+        except Exception:
+            out = pd.DataFrame()
+
+    if out.empty:
+        try:
+            raw_fallback = ak.stock_zh_index_daily(symbol=symbol)
+            out = _normalize_index_df(raw_fallback)
+        except Exception:
+            out = pd.DataFrame()
+
+    if out.empty:
+        return out
+
+    _write_cache_df(table_name, out)
 
     start_dt = pd.to_datetime(start_date_text, errors="coerce")
     end_dt = pd.to_datetime(end_date_text, errors="coerce")
     if pd.notna(start_dt):
-        work = work[work["date"] >= start_dt]
+        out = out[out["date"] >= start_dt]
     if pd.notna(end_dt):
-        work = work[work["date"] <= end_dt]
+        out = out[out["date"] <= end_dt]
+    return out.reset_index(drop=True)
 
-    if work.empty:
-        return []
 
-    work["pct_chg"] = work["close"].pct_change() * 100.0
-    out = [
-        {
-            "date": row.date.strftime("%Y-%m-%d"),
-            "close": float(row.close),
-            "pct_chg": (None if pd.isna(row.pct_chg) else float(row.pct_chg)),
-        }
-        for row in work.itertuples(index=False)
-    ]
+def _calc_index_metrics(index_df):
+    if index_df is None or index_df.empty:
+        return pd.DataFrame()
+
+    out = index_df[["date", "close"]].copy().sort_values("date").reset_index(drop=True)
+    out["ret_5d"] = (out["close"] / out["close"].shift(5) - 1.0) * 100.0
+    out["ret_20d"] = (out["close"] / out["close"].shift(20) - 1.0) * 100.0
+    daily_ret = out["close"].pct_change() * 100.0
+    out["vol_20d"] = daily_ret.rolling(20).std()
     return out
-
-
-def _compute_index_metrics(series):
-    if not series:
-        return {}
-    closes = [r["close"] for r in series if r.get("close") is not None]
-    if len(closes) < 6:
-        return {}
-
-    latest = closes[-1]
-    ret_5d = _safe_pct(latest, closes[-6])
-    ret_20d = _safe_pct(latest, closes[-21]) if len(closes) >= 21 else None
-
-    daily_rets = []
-    for i in range(1, len(closes)):
-        prev = closes[i - 1]
-        cur = closes[i]
-        if prev:
-            daily_rets.append((cur / prev - 1.0) * 100.0)
-    vol_20d = None
-    if len(daily_rets) >= 20:
-        sample = daily_rets[-20:]
-        mean_v = sum(sample) / len(sample)
-        var_v = sum((x - mean_v) ** 2 for x in sample) / len(sample)
-        vol_20d = var_v ** 0.5
-
-    return {
-        "latest": latest,
-        "ret_5d": ret_5d,
-        "ret_20d": ret_20d,
-        "vol_20d": vol_20d,
-        "last_date": series[-1].get("date") or "",
-    }
 
 
 def _macro_risk_level(macro_risk_summary):
@@ -487,23 +694,37 @@ def _build_strategy_allocation(regime, *, boll_rows_count, theme_rows_count, has
     else:
         adaption_line = "- 动态调整: 当前信号完整，按默认推荐比例执行。"
 
-    return [ratio_line, unit_line, priority_line, adaption_line]
+    return {
+        "base_weights": normalized,
+        "final_weights": final_weights,
+        "ratio_line": ratio_line,
+        "unit_line": unit_line,
+        "priority_line": priority_line,
+        "adaption_line": adaption_line,
+    }
 
 
-def _build_market_and_strategy_summary(*, boll_rows_count, theme_rows_count, macro_risk_summary, cctv_summary):
+def _build_market_and_strategy_summary(*, boll_rows_count, theme_rows_count, macro_risk_summary, cctv_summary, has_cctv_hot):
     end_date_text = datetime.now().strftime("%Y-%m-%d")
-    sh_series = _fetch_market_index_series("sh.000001", end_date_text, lookback_days=100)
-    hs300_series = _fetch_market_index_series("sh.000300", end_date_text, lookback_days=100)
+    start_date_text = (datetime.strptime(end_date_text, "%Y-%m-%d") - timedelta(days=100)).strftime("%Y-%m-%d")
 
-    sh_metrics = _compute_index_metrics(sh_series)
-    hs300_metrics = _compute_index_metrics(hs300_series)
+    with ThreadPoolExecutor(max_workers=2) as ex:
+        fut_sh = ex.submit(_fetch_index_close_series, "sh.000001", start_date_text, end_date_text)
+        fut_hs = ex.submit(_fetch_index_close_series, "sh.000300", start_date_text, end_date_text)
+        sh_df = fut_sh.result()
+        hs300_df = fut_hs.result()
 
-    sh_ret_20 = sh_metrics.get("ret_20d")
-    sh_ret_5 = sh_metrics.get("ret_5d")
-    sh_vol_20 = sh_metrics.get("vol_20d")
+    sh_metrics_df = _calc_index_metrics(sh_df)
+    hs300_metrics_df = _calc_index_metrics(hs300_df)
+
+    sh_metrics = sh_metrics_df.iloc[-1].to_dict() if not sh_metrics_df.empty else {}
+    hs300_metrics = hs300_metrics_df.iloc[-1].to_dict() if not hs300_metrics_df.empty else {}
+
+    sh_ret_20 = _to_float(sh_metrics.get("ret_20d"))
+    sh_ret_5 = _to_float(sh_metrics.get("ret_5d"))
+    sh_vol_20 = _to_float(sh_metrics.get("vol_20d"))
 
     macro_level = _macro_risk_level(macro_risk_summary)
-    has_cctv_hot = bool(cctv_summary and "Top5" in cctv_summary)
 
     regime = "震荡轮动"
     if sh_ret_20 is not None and sh_ret_5 is not None:
@@ -515,39 +736,55 @@ def _build_market_and_strategy_summary(*, boll_rows_count, theme_rows_count, mac
     if macro_level == "high":
         regime = "下行防御"
 
+    alloc = _build_strategy_allocation(
+        regime,
+        boll_rows_count=boll_rows_count,
+        theme_rows_count=theme_rows_count,
+        has_cctv_hot=has_cctv_hot,
+        macro_level=macro_level,
+    )
+
     lines = [
-        "\n市场状态体检:",
-        "- 数据源: akshare 指数日线（上证 sh000001 + 沪深300 sh000300）",
+        "\n## 3) 市场状态与策略总览",
+        "- 数据源: 回测同口径指数日线（akshare-Eastmoney主源 + Sina回退；上证 sh000001 + 沪深300 sh000300）",
+        f"- 宏观风险: {macro_level}",
+        f"- 市场判定: {regime}",
+        f"- 信号补充: Boll命中数={boll_rows_count} 题材候选数={theme_rows_count} CCTV热点={'有' if has_cctv_hot else '无'}",
     ]
 
     if sh_metrics:
         lines.append(
-            "- 上证: "
+            "- 上证指标: "
             f"5日{_fmt_pct(sh_metrics.get('ret_5d'), signed=True)} "
             f"20日{_fmt_pct(sh_metrics.get('ret_20d'), signed=True)} "
             f"20日波动{_fmt_pct(sh_metrics.get('vol_20d'))}"
         )
     if hs300_metrics:
         lines.append(
-            "- 沪深300: "
+            "- 沪深300指标: "
             f"5日{_fmt_pct(hs300_metrics.get('ret_5d'), signed=True)} "
             f"20日{_fmt_pct(hs300_metrics.get('ret_20d'), signed=True)}"
         )
 
-    lines.append(f"- 信号补充: Boll命中数={boll_rows_count} 题材候选数={theme_rows_count} CCTV热点={'有' if has_cctv_hot else '无'}")
-    lines.append(f"- 宏观风险: {macro_level}")
-    lines.append(f"- 市场判定: {regime}")
-    lines.append("- 今日策略配比: 已按市场状态分配仓位比例，避免所有策略等权执行。")
-
-    diag = [
-        "\n判定依据说明:",
-        "1. 趋势维度: 20日收益反映中短期方向，5日收益反映近端加速度。",
-        "2. 波动维度: 20日波动率衡量资金分歧，波动过高时提高防守权重。",
-        "3. 外生风险: 宏观新闻若出现高风险事件，优先下调风险敞口。",
-        "4. 交易拥挤度: CCTV热点和题材候选数量用于确认市场活跃度。",
+    explain = [
+        "\n## 4) 每日策略如何得到（可复盘）",
+        "1. 输入数据:",
+        f"- 指数与波动: 上证5日={_fmt_pct(sh_ret_5, signed=True)} 上证20日={_fmt_pct(sh_ret_20, signed=True)} 波动20日={_fmt_pct(sh_vol_20)}",
+        f"- 风险与热度: 宏观风险={macro_level} CCTV热点={'有' if has_cctv_hot else '无'}",
+        f"- 候选可用性: Boll={boll_rows_count} Theme={theme_rows_count}",
+        "2. 市场判定规则:",
+        "- 规则A: 若宏观风险=high，则直接切到下行防御。",
+        "- 规则B: 否则若上证20日>=4% 且 上证5日>=0 且 波动<=1.8%，判定趋势上行。",
+        "- 规则C: 否则若上证20日<=-4% 或（上证5日<=-3% 且 波动>=1.8%），判定下行防御。",
+        "- 规则D: 其余情形判定为震荡轮动。",
+        f"- 今日命中结果: {regime}",
+        "3. 配比生成:",
+        f"- 先按市场模板生成基础权重: boll={alloc['base_weights'].get('boll', 0)} theme={alloc['base_weights'].get('theme', 0)} cctv={alloc['base_weights'].get('cctv', 0)} relativity={alloc['base_weights'].get('relativity', 0)} cash={alloc['base_weights'].get('cash', 0)}",
+        "- 再按信号可用性回流: Boll=0回流现金；Theme=0回流现金；无CCTV时CCTV权重优先回流Theme，否则回流现金。",
+        f"- 最终执行权重: boll={alloc['final_weights'].get('boll', 0)} theme={alloc['final_weights'].get('theme', 0)} cctv={alloc['final_weights'].get('cctv', 0)} relativity={alloc['final_weights'].get('relativity', 0)} cash={alloc['final_weights'].get('cash', 0)}",
     ]
 
-    reco = ["\n策略建议:"]
+    reco = ["\n## 策略建议"]
     if regime == "趋势上行":
         reco.extend(
             [
@@ -580,24 +817,23 @@ def _build_market_and_strategy_summary(*, boll_rows_count, theme_rows_count, mac
         )
 
     reco.extend(
-        _build_strategy_allocation(
-            regime,
-            boll_rows_count=boll_rows_count,
-            theme_rows_count=theme_rows_count,
-            has_cctv_hot=has_cctv_hot,
-            macro_level=macro_level,
-        )
+        [
+            alloc["ratio_line"],
+            alloc["unit_line"],
+            alloc["priority_line"],
+            alloc["adaption_line"],
+        ]
     )
 
     risk_ctrl = [
-        "\n执行与风控清单:",
+        "\n## 执行与风控清单",
         "1. 单票仓位上限: 建议不超过总资金的10%-15%。",
         "2. 止损纪律: 破位或回撤超过预设阈值时机械止损。",
         "3. 止盈纪律: 分批止盈，避免盈利回吐。",
         "4. 复盘重点: 记录命中来源（Boll/题材/CCTV）与次日延续性。",
     ]
 
-    return "\n".join(lines + diag + reco + risk_ctrl), regime
+    return "\n".join(lines + explain + reco + risk_ctrl), regime
 
 
 def _build_fundamental_summary(rows, top_n=20):
@@ -607,7 +843,7 @@ def _build_fundamental_summary(rows, top_n=20):
 
     login_res = bs.login()
     if login_res.error_code != "0":
-        return "\n基本面速览: baostock 登录失败（已跳过）。"
+        return "- baostock 登录失败（已跳过）。"
 
     try:
         lines = []
@@ -656,7 +892,7 @@ def _build_fundamental_summary(rows, top_n=20):
 
     if not lines:
         return ""
-    return "\n基本面速览(前20):\n" + "\n".join(lines)
+    return "\n".join(lines)
 
 
 def _build_message(success, csv_path=None, rows=None, run_output_tail=""):
@@ -674,7 +910,7 @@ def _build_message(success, csv_path=None, rows=None, run_output_tail=""):
         return (
             "# Stocks-Master 日报\n"
             f"> 时间: {now}\n\n"
-            "## 执行总览\n"
+            "## 1) 执行总览\n"
             "- 主流程执行完成，但未找到 Boll 结果 CSV。"
         )
 
@@ -690,84 +926,103 @@ def _build_message(success, csv_path=None, rows=None, run_output_tail=""):
     return (
         "# Stocks-Master 日报\n"
         f"> 时间: {now}\n\n"
-        "## 执行总览\n"
+        "## 1) 执行总览\n"
         f"- Boll候选总数: {total}\n"
         f"- 结果文件: {csv_path}\n"
-        "- 说明: 本日报基于技术面(Boll)、题材热度、宏观新闻与CCTV热点综合生成。\n\n"
-        "## Boll候选明细(前20)\n"
+        "- 口径: 技术面(Boll) + 题材热度 + 相对强弱 + 宏观与CCTV热点。\n\n"
+        "## 2) Boll候选明细(前20)\n"
         f"{preview_block}"
     )
 
 
-def _build_theme_message(theme_csv_path=None, theme_rows=None):
+def _build_theme_message(
+    theme_csv_path=None,
+    theme_rows=None,
+    *,
+    raw_count=0,
+    cctv_only=False,
+    cctv_count=0,
+):
     if theme_csv_path is None:
-        return "\n题材策略: 本次未找到结果文件。"
+        return "\n## 5) 题材策略\n- 本次未找到结果文件。"
     picks = len(theme_rows or [])
     if picks == 0:
         return (
-            "\n题材策略:\n"
+            "\n## 5) 题材策略（仅显示命中当天 CCTV 热点）\n"
             f"- 结果文件: {theme_csv_path}\n"
+            f"- 原始候选数: {int(raw_count)}\n"
+            f"- CCTV匹配数: {int(cctv_count)}\n"
             "- 候选数: 0\n"
             "- 原理: 题材策略通过政策/舆情关键词 + 换手活跃度 + 动量筛选弹性方向。"
         )
 
     lines = []
-    for item in (theme_rows or [])[:20]:
+    for item in (theme_rows or []):
         score = item.get("score") or "N/A"
         turn = item.get("turn") or "N/A"
-        theme = item.get("theme") or ""
-        if theme:
-            lines.append(f"- {item['code']} {item['name']} | 分数:{score} 换手:{turn}% | {theme}")
-        else:
-            lines.append(f"- {item['code']} {item['name']} | 分数:{score} 换手:{turn}%")
+        theme = (item.get("theme") or "").strip()
+        theme_text = theme if theme else "无"
+        lines.append(f"- {item['code']} {item['name']} | 分数:{score} 换手:{turn}% | 匹配题材:{theme_text}")
+
+    title = "\n## 5) 题材策略（仅显示命中当天 CCTV 热点，全量）\n" if cctv_only else "\n## 5) 题材策略(全量)\n"
+    count_lines = [f"- 原始候选数: {int(raw_count)}"]
+    if cctv_only:
+        count_lines.append(f"- CCTV匹配数: {int(cctv_count)}")
+    count_lines.append(f"- 展示数量: {picks}")
 
     return (
-        "\n题材策略(前20):\n"
+        title
+        +
         f"- 结果文件: {theme_csv_path}\n"
-        f"- 展示数量: {picks}\n"
+        + "\n".join(count_lines)
+        + "\n"
+        +
         "- 原理: 综合分越高，通常代表题材匹配度更高、资金活跃度更强、短期动量更好。\n"
         "- 风险: 题材轮动切换快，需结合止盈止损，不可单凭分数重仓。\n"
         + "\n".join(lines)
     )
 
 
-def _read_relativity_rows(csv_path, limit=20):
+def _read_relativity_rows(csv_path, limit=20, min_down_ratio_pct=None):
     rows = []
     with csv_path.open("r", encoding="utf-8-sig", newline="") as f:
         reader = csv.DictReader(f)
         for row in reader:
-            rows.append(
-                {
-                    "code": (row.get("股票代码") or "").strip(),
-                    "name": (row.get("股票名称") or "").strip(),
-                    "up_ratio": (row.get("上涨满足率") or "").strip(),
-                    "down_ratio": (row.get("抗跌满足率") or "").strip(),
-                    "overlap_days": (row.get("对齐交易日") or "").strip(),
-                }
-            )
+            entry = {
+                "code": (row.get("股票代码") or "").strip(),
+                "name": (row.get("股票名称") or "").strip(),
+                "up_ratio": (row.get("上涨满足率") or "").strip(),
+                "down_ratio": (row.get("抗跌满足率") or "").strip(),
+                "overlap_days": (row.get("对齐交易日") or "").strip(),
+            }
+            if min_down_ratio_pct is not None:
+                down_pct = _to_percent_like(entry.get("down_ratio"))
+                if down_pct is None or down_pct < float(min_down_ratio_pct):
+                    continue
+            rows.append(entry)
     return rows[:limit]
 
 
 def _build_relativity_message(relativity_csv_path=None, relativity_rows=None):
     if relativity_csv_path is None:
-        return "\n相对强弱策略: 本次未找到结果文件。"
+        return "\n## 6) 相对强弱策略\n- 本次未找到结果文件。"
     picks = len(relativity_rows or [])
     if picks == 0:
-        return f"\n相对强弱策略:\n- 结果文件: {relativity_csv_path}\n- 候选数: 0"
+        return f"\n## 6) 相对强弱策略\n- 结果文件: {relativity_csv_path}\n- 候选数: 0"
 
     lines = []
     for item in (relativity_rows or [])[:20]:
-        up_ratio = _to_float(item.get("up_ratio"))
-        down_ratio = _to_float(item.get("down_ratio"))
-        up_text = f"{up_ratio * 100:.1f}%" if up_ratio is not None else "N/A"
-        down_text = f"{down_ratio * 100:.1f}%" if down_ratio is not None else "N/A"
+        up_pct = _to_percent_like(item.get("up_ratio"))
+        down_pct = _to_percent_like(item.get("down_ratio"))
+        up_text = f"{up_pct:.1f}%" if up_pct is not None else "N/A"
+        down_text = f"{down_pct:.1f}%" if down_pct is not None else "N/A"
         overlap = item.get("overlap_days") or "N/A"
         lines.append(
             f"- {item.get('code', '')} {item.get('name', '')} | 上涨满足率:{up_text} 抗跌满足率:{down_text} 对齐交易日:{overlap}"
         )
 
     return (
-        "\n相对强弱策略(前20):\n"
+        "\n## 6) 相对强弱策略(前20)\n"
         f"- 结果文件: {relativity_csv_path}\n"
         f"- 展示数量: {picks}\n"
         "- 原理: 对比指数涨跌日中的相对表现，优先筛选顺风不弱、逆风抗跌的个股。\n"
@@ -854,7 +1109,7 @@ def _collect_cctv_files_in_window(window_days=3):
     return sorted(candidates, key=lambda x: x[1])
 
 
-def _build_cctv_period_summary(window_days=3, top_n=5):
+def _build_cctv_period_summary(window_days=3, top_n=0):
     period_files = _collect_cctv_files_in_window(window_days=window_days)
     if not period_files:
         return ""
@@ -909,11 +1164,12 @@ def _build_cctv_period_summary(window_days=3, top_n=5):
         )
 
     rows.sort(key=lambda x: x["avg_heat"], reverse=True)
-    show_rows = rows[:top_n]
+    show_rows = rows[:top_n] if isinstance(top_n, int) and top_n > 0 else rows
     sample_days = len(period_files)
+    title_suffix = f"Top{top_n}" if isinstance(top_n, int) and top_n > 0 else "全覆盖"
 
     lines = [
-        f"\nCCTV 热门板块 Top{top_n}（近{max(int(window_days), 1)}日统计）:",
+        f"\nCCTV 热门板块 {title_suffix}（近{max(int(window_days), 1)}日统计）:",
         f"- 样本天数: {sample_days}",
         "- 口径: 按板块热度分做区间均值排序，并给出区间净变化",
     ]
@@ -950,7 +1206,7 @@ def _find_latest_news_file(today_yyyymmdd):
 
 def _build_macro_risk_summary(news_csv_path, top_n=3):
     if news_csv_path is None or not news_csv_path.exists():
-        return "\n宏观与国际风险提示:\n- 新闻源: 未找到可用新闻文件\n- 解读: 本次跳过宏观风险打分"
+        return "- 新闻源: 未找到可用新闻文件\n- 解读: 本次跳过宏观风险打分"
 
     # 关键词尽量贴近A股交易语境：地缘冲突、能源价格、航运与外需链条
     risk_rules = {
@@ -993,11 +1249,10 @@ def _build_macro_risk_summary(news_csv_path, top_n=3):
                     }
                 )
     except Exception:
-        return "\n宏观与国际风险提示:\n- 新闻源: 读取失败\n- 解读: 本次跳过宏观风险打分"
+        return "- 新闻源: 读取失败\n- 解读: 本次跳过宏观风险打分"
 
     if not events:
         return (
-            "\n宏观与国际风险提示:\n"
             f"- 新闻源: {news_csv_path.name}\n"
             "- 风险事件: 未命中高/中风险关键词\n"
             "- 解读: 当前宏观风险信号偏平稳"
@@ -1006,7 +1261,6 @@ def _build_macro_risk_summary(news_csv_path, top_n=3):
     events = sorted(events, key=lambda x: x["risk_score"], reverse=True)[:top_n]
 
     lines = [
-        "\n宏观与国际风险提示:",
         f"- 新闻源: {news_csv_path.name}",
         "- 解读: 仅用于交易关注方向，不构成投资建议",
     ]
@@ -1026,7 +1280,7 @@ def _read_cctv_top_summary(csv_path, top_n=5):
         with csv_path.open("r", encoding="utf-8-sig", newline="") as f:
             reader = csv.DictReader(f)
             for i, row in enumerate(reader):
-                if i >= top_n:
+                if isinstance(top_n, int) and top_n > 0 and i >= top_n:
                     break
                 sec = (row.get("板块") or "").strip()
                 heat = (row.get("热度分") or "").strip()
@@ -1036,7 +1290,8 @@ def _read_cctv_top_summary(csv_path, top_n=5):
         if not rows:
             return ""
 
-        lines = ["\nCCTV 热门板块 Top5:"]
+        title = "CCTV 热门板块 Top5:" if isinstance(top_n, int) and top_n > 0 else "CCTV 热门板块 全覆盖:"
+        lines = [f"\n{title}"]
         for idx, (sec, heat, change) in enumerate(rows, start=1):
             heat_text = _fmt_num(heat, digits=2, na="N/A")
             trend = "升温"
@@ -1262,8 +1517,14 @@ def _run_data_archive(log_lines):
 
 
 def main():
+    global RUN_LOG_FILE
     args = parse_args()
     LOG_DIR.mkdir(parents=True, exist_ok=True)
+    RUN_LOG_FILE = LOG_DIR / f"boll_auto_{datetime.now().strftime('%Y%m%d_%H%M%S')}.log"
+    try:
+        RUN_LOG_FILE.write_text("", encoding="utf-8")
+    except Exception:
+        RUN_LOG_FILE = None
     log_lines = []
     fast_mode = args.fast_mode or os.getenv("FAST_MODE", "0").strip() == "1"
 
@@ -1289,9 +1550,9 @@ def main():
         if not pushed:
             _append_log(log_lines, "No push channel configured/succeeded in test mode.")
 
-        log_file = LOG_DIR / f"boll_auto_{datetime.now().strftime('%Y%m%d_%H%M%S')}.log"
-        log_file.write_text("\n".join(log_lines), encoding="utf-8")
-        _append_log(log_lines, f"Log saved: {log_file}")
+        if RUN_LOG_FILE is not None:
+            RUN_LOG_FILE.write_text("\n".join(log_lines), encoding="utf-8")
+            _append_log(log_lines, f"Log saved: {RUN_LOG_FILE}")
         return 0 if pushed else 1
 
     _append_log(log_lines, "[  0%] Pipeline started (7 steps): 1=boll, 2=cctv, 3=macro-news, 4=theme+relativity, 5=archive, 6=cleanup, 7=notify")
@@ -1358,11 +1619,11 @@ def main():
         except Exception:
             cctv_stats_days = 3
         _append_log(log_lines, f"{_stage_tag(2, 'cctv')} stats window={cctv_stats_days}d")
-        cctv_summary = _build_cctv_period_summary(window_days=cctv_stats_days, top_n=5)
+        cctv_summary = _build_cctv_period_summary(window_days=cctv_stats_days, top_n=0)
 
         if not cctv_summary:
             cctv_file = _find_latest_cctv_hot_file(datetime.now().strftime("%Y%m%d"))
-            cctv_summary = _read_cctv_top_summary(cctv_file, top_n=5)
+            cctv_summary = _read_cctv_top_summary(cctv_file, top_n=0)
     else:
         _append_log(log_lines, f"{_stage_tag(2, 'cctv')} skipped by ENABLE_CCTV_STRATEGY=0")
 
@@ -1378,7 +1639,11 @@ def main():
     theme_csv_path = None
     theme_rows = []
     theme_success = False
+    theme_raw_count = 0
+    theme_cctv_count = 0
+    theme_cctv_only = os.getenv("THEME_CCTV_ONLY", "1").strip() != "0"
     enable_theme = os.getenv("ENABLE_THEME_STRATEGY", "1").strip() != "0"
+    theme_cmd = []
     if enable_theme:
         default_theme_min_latest_turn = "0.8"
         default_theme_min_avg_turn5 = "0.6"
@@ -1387,6 +1652,7 @@ def main():
         default_theme_max_latest_price = max_price_text
         default_theme_max_stocks = "600" if fast_mode else "1200"
         default_theme_top_n = "20" if fast_mode else "30"
+        default_theme_workers = "4"
 
         theme_min_latest_turn = os.getenv("THEME_MIN_LATEST_TURN", default_theme_min_latest_turn).strip() or default_theme_min_latest_turn
         theme_min_avg_turn5 = os.getenv("THEME_MIN_AVG_TURN5", default_theme_min_avg_turn5).strip() or default_theme_min_avg_turn5
@@ -1395,73 +1661,84 @@ def main():
         theme_max_latest_price = os.getenv("THEME_MAX_LATEST_PRICE", default_theme_max_latest_price).strip() or default_theme_max_latest_price
         theme_max_stocks = os.getenv("THEME_MAX_STOCKS", default_theme_max_stocks).strip() or default_theme_max_stocks
         theme_top_n = os.getenv("THEME_TOP_N", default_theme_top_n).strip() or default_theme_top_n
+        theme_max_workers = os.getenv("THEME_MAX_WORKERS", default_theme_workers).strip() or default_theme_workers
+        bs_timeout_seconds = os.getenv("BS_REQUEST_TIMEOUT_SECONDS", "15").strip() or "15"
+        bs_request_interval_seconds = os.getenv("BS_REQUEST_INTERVAL_SECONDS", "0.05").strip() or "0.05"
+        bs_max_retries = os.getenv("BS_MAX_RETRIES", "2").strip() or "2"
 
         _append_log(
             log_lines,
-            f"{_stage_tag(4, 'theme', percent=43)} params: max_stocks={theme_max_stocks}, top_n={theme_top_n}, min_latest_turn={theme_min_latest_turn}, min_avg_turn5={theme_min_avg_turn5}, min_latest_amount={theme_min_latest_amount}, min_latest_price={theme_min_latest_price}, max_latest_price={theme_max_latest_price}",
+            f"{_stage_tag(4, 'theme', percent=43)} params: max_stocks={theme_max_stocks}, top_n={theme_top_n}, workers={theme_max_workers}, min_latest_turn={theme_min_latest_turn}, min_avg_turn5={theme_min_avg_turn5}, min_latest_amount={theme_min_latest_amount}, min_latest_price={theme_min_latest_price}, max_latest_price={theme_max_latest_price}, bs_timeout={bs_timeout_seconds}s, bs_interval={bs_request_interval_seconds}s, bs_retries={bs_max_retries}",
         )
-
-        theme_returncode, theme_tail = _run_command_with_live_output(
-            log_lines,
-            cmd=[
-                sys.executable,
-                str(THEME_SCRIPT_PATH),
-                "--top-n",
-                str(theme_top_n),
-                "--max-stocks",
-                str(theme_max_stocks),
-                "--min-latest-turn",
-                str(theme_min_latest_turn),
-                "--min-avg-turn5",
-                str(theme_min_avg_turn5),
-                "--min-latest-amount",
-                str(theme_min_latest_amount),
-                "--min-latest-price",
-                str(theme_min_latest_price),
-                "--max-latest-price",
-                str(theme_max_latest_price),
-            ],
-            cwd=ROOT_DIR,
-            step_index=4,
-            stage_name="theme",
-        )
-        if theme_returncode != 0 and theme_tail:
-            _append_log(log_lines, "--- Theme output tail ---")
-            for line in theme_tail.splitlines():
-                log_lines.append(line)
-        theme_success = theme_returncode == 0
-        theme_csv_path = _find_theme_result_csv(today_yyyymmdd)
-        if theme_csv_path and theme_csv_path.exists():
-            theme_rows = _read_theme_rows(theme_csv_path, limit=20)
-            _append_log(log_lines, f"Theme csv: {theme_csv_path} (rows={len(theme_rows)})")
-        else:
-            _append_log(log_lines, "Theme strategy result csv not found.")
+        theme_cmd = [
+            sys.executable,
+            str(THEME_SCRIPT_PATH),
+            "--top-n",
+            str(theme_top_n),
+            "--max-stocks",
+            str(theme_max_stocks),
+            "--max-workers",
+            str(theme_max_workers),
+            "--min-latest-turn",
+            str(theme_min_latest_turn),
+            "--min-avg-turn5",
+            str(theme_min_avg_turn5),
+            "--min-latest-amount",
+            str(theme_min_latest_amount),
+            "--min-latest-price",
+            str(theme_min_latest_price),
+            "--max-latest-price",
+            str(theme_max_latest_price),
+            "--bs-timeout-seconds",
+            str(bs_timeout_seconds),
+            "--bs-request-interval-seconds",
+            str(bs_request_interval_seconds),
+            "--bs-max-retries",
+            str(bs_max_retries),
+        ]
     else:
         _append_log(log_lines, f"{_stage_tag(4, 'theme')} skipped by ENABLE_THEME_STRATEGY=0")
 
     relativity_csv_path = None
     relativity_rows = []
     relativity_success = False
+    relativity_min_down_ratio_pct = os.getenv("RELATIVITY_MIN_DOWN_RATIO_PCT", "70").strip() or "70"
     enable_relativity = os.getenv("ENABLE_RELATIVITY_STRATEGY", "1").strip() != "0"
+    relativity_cmd = []
     if enable_relativity:
         relativity_cmd = [sys.executable, str(RELATIVITY_SCRIPT_PATH)]
-        relativity_max_workers = os.getenv("RELATIVITY_MAX_WORKERS", "1").strip() or "1"
-        relativity_resume = os.getenv("RELATIVITY_RESUME", "1").strip() == "1"
-        relativity_sleep_seconds = os.getenv("RELATIVITY_SLEEP_SECONDS", "2").strip() or "2"
+        default_relativity_workers = "4"
+        relativity_max_workers = os.getenv("RELATIVITY_MAX_WORKERS", default_relativity_workers).strip() or default_relativity_workers
+        relativity_holder_max_workers = os.getenv("RELATIVITY_HOLDER_MAX_WORKERS", relativity_max_workers).strip() or relativity_max_workers
+        relativity_resume = os.getenv("RELATIVITY_RESUME", "0").strip() == "1"
+        relativity_sleep_seconds = os.getenv("RELATIVITY_SLEEP_SECONDS", "0").strip() or "0"
         relativity_disable_rs = os.getenv("RELATIVITY_DISABLE_RS", "0").strip() == "1"
         relativity_use_seed = os.getenv("RELATIVITY_USE_SEED", "1").strip() != "0"
         relativity_min_price = os.getenv("RELATIVITY_MIN_PRICE", min_price_text).strip() or min_price_text
         relativity_max_price = os.getenv("RELATIVITY_MAX_PRICE", max_price_text).strip() or max_price_text
+        bs_timeout_seconds = os.getenv("BS_REQUEST_TIMEOUT_SECONDS", "15").strip() or "15"
+        bs_request_interval_seconds = os.getenv("BS_REQUEST_INTERVAL_SECONDS", "0.05").strip() or "0.05"
+        bs_max_retries = os.getenv("BS_MAX_RETRIES", "2").strip() or "2"
 
         relativity_cmd.extend([
             "--max-workers",
             str(relativity_max_workers),
+            "--holder-max-workers",
+            str(relativity_holder_max_workers),
             "--sleep-seconds",
             str(relativity_sleep_seconds),
             "--price-lower-limit",
             str(relativity_min_price),
             "--price-upper-limit",
             str(relativity_max_price),
+            "--min-down-ratio",
+            str(relativity_min_down_ratio_pct),
+            "--bs-timeout-seconds",
+            str(bs_timeout_seconds),
+            "--bs-request-interval-seconds",
+            str(bs_request_interval_seconds),
+            "--bs-max-retries",
+            str(bs_max_retries),
         ])
         if relativity_resume:
             relativity_cmd.append("--resume")
@@ -1481,29 +1758,89 @@ def main():
 
         _append_log(
             log_lines,
-            f"{_stage_tag(4, 'relativity', percent=47)} params: workers={relativity_max_workers}, resume={int(relativity_resume)}, sleep={relativity_sleep_seconds}, disable_rs={int(relativity_disable_rs)}, use_seed={int(relativity_use_seed)}, min_price={relativity_min_price}, max_price={relativity_max_price}",
+            f"{_stage_tag(4, 'relativity', percent=47)} params: workers={relativity_max_workers}, holder_workers={relativity_holder_max_workers}, resume={int(relativity_resume)}, sleep={relativity_sleep_seconds}, disable_rs={int(relativity_disable_rs)}, use_seed={int(relativity_use_seed)}, min_price={relativity_min_price}, max_price={relativity_max_price}, min_down_ratio_pct={relativity_min_down_ratio_pct}, bs_timeout={bs_timeout_seconds}s, bs_interval={bs_request_interval_seconds}s, bs_retries={bs_max_retries}",
         )
-
-        relativity_returncode, relativity_tail = _run_command_with_live_output(
-            log_lines,
-            cmd=relativity_cmd,
-            cwd=ROOT_DIR,
-            step_index=4,
-            stage_name="relativity",
-        )
-        if relativity_returncode != 0 and relativity_tail:
-            _append_log(log_lines, "--- Relativity output tail ---")
-            for line in relativity_tail.splitlines():
-                log_lines.append(line)
-        relativity_success = relativity_returncode == 0
-        relativity_csv_path = _find_relativity_result_csv(today_yyyymmdd)
-        if relativity_csv_path and relativity_csv_path.exists():
-            relativity_rows = _read_relativity_rows(relativity_csv_path, limit=20)
-            _append_log(log_lines, f"Relativity csv: {relativity_csv_path} (rows={len(relativity_rows)})")
-        else:
-            _append_log(log_lines, "Relativity strategy result csv not found.")
     else:
         _append_log(log_lines, f"{_stage_tag(4, 'relativity')} skipped by ENABLE_RELATIVITY_STRATEGY=0")
+
+    stage4_jobs = {}
+    if enable_theme and theme_cmd:
+        stage4_jobs["theme"] = theme_cmd
+    if enable_relativity and relativity_cmd:
+        stage4_jobs["relativity"] = relativity_cmd
+
+    if stage4_jobs:
+        stage4_heartbeat_seconds = max(3, int(float(os.getenv("STAGE4_HEARTBEAT_SECONDS", "5").strip() or "5")))
+        theme_idle_timeout_seconds = max(0, int(float(os.getenv("THEME_IDLE_TIMEOUT_SECONDS", "120").strip() or "120")))
+        relativity_idle_timeout_seconds = max(0, int(float(os.getenv("RELATIVITY_IDLE_TIMEOUT_SECONDS", "120").strip() or "120")))
+
+        _append_log(
+            log_lines,
+            f"{_stage_tag(4, 'theme+relativity', percent=42)} watchdog: heartbeat={stage4_heartbeat_seconds}s, theme_idle_timeout={theme_idle_timeout_seconds}s, relativity_idle_timeout={relativity_idle_timeout_seconds}s",
+        )
+        _append_log(log_lines, f"{_stage_tag(4, 'theme+relativity', percent=42)} running concurrently ({','.join(stage4_jobs.keys())})")
+        with ThreadPoolExecutor(max_workers=max(len(stage4_jobs), 1)) as ex:
+            futures = {
+                ex.submit(
+                    _run_command_with_live_output,
+                    log_lines,
+                    cmd=cmd,
+                    cwd=ROOT_DIR,
+                    step_index=4,
+                    stage_name=name,
+                    idle_timeout_seconds=(theme_idle_timeout_seconds if name == "theme" else relativity_idle_timeout_seconds),
+                ): name
+                for name, cmd in stage4_jobs.items()
+            }
+            pending = set(futures.keys())
+            while pending:
+                done, pending = wait(pending, timeout=stage4_heartbeat_seconds, return_when=FIRST_COMPLETED)
+                if not done:
+                    running_names = [futures[f] for f in pending]
+                    _append_log(
+                        log_lines,
+                        f"{_stage_tag(4, 'theme+relativity', percent=50)} still running ({','.join(sorted(running_names))})",
+                    )
+                    continue
+
+                for fut in done:
+                    name = futures[fut]
+                    returncode, _tail = fut.result()
+                    if name == "theme":
+                        theme_success = returncode == 0
+                    elif name == "relativity":
+                        relativity_success = returncode == 0
+
+    theme_csv_path = _find_theme_result_csv(today_yyyymmdd) if enable_theme else None
+    if theme_csv_path and theme_csv_path.exists():
+        theme_rows = _read_theme_rows(theme_csv_path)
+        theme_raw_count = len(theme_rows)
+        if theme_cctv_only:
+            filtered_theme_rows = _filter_theme_rows_with_cctv(theme_rows, date_yyyymmdd=today_yyyymmdd)
+            theme_cctv_count = len(filtered_theme_rows)
+            if theme_raw_count > 0 and theme_cctv_count == 0:
+                _append_log(log_lines, "Theme cctv-only 过滤后为空，回退到题材原始候选。")
+            else:
+                theme_rows = filtered_theme_rows
+        else:
+            theme_cctv_count = theme_raw_count
+        _append_log(
+            log_lines,
+            f"Theme csv: {theme_csv_path} (raw={theme_raw_count}, cctv_matched={theme_cctv_count}, shown={len(theme_rows)}, cctv_only={int(theme_cctv_only)})",
+        )
+    elif enable_theme:
+        _append_log(log_lines, "Theme strategy result csv not found.")
+
+    relativity_csv_path = _find_relativity_result_csv(today_yyyymmdd) if enable_relativity else None
+    if relativity_csv_path and relativity_csv_path.exists():
+        relativity_rows = _read_relativity_rows(
+            relativity_csv_path,
+            limit=20,
+            min_down_ratio_pct=float(relativity_min_down_ratio_pct),
+        )
+        _append_log(log_lines, f"Relativity csv: {relativity_csv_path} (rows={len(relativity_rows)}, min_down_ratio_pct={relativity_min_down_ratio_pct})")
+    elif enable_relativity:
+        _append_log(log_lines, "Relativity strategy result csv not found.")
 
     csv_path = None
     rows = []
@@ -1522,15 +1859,16 @@ def main():
         rows=rows,
         run_output_tail=output_tail,
     )
-    if macro_risk_summary:
-        msg = msg + "\n" + macro_risk_summary
     if success and rows:
-        msg = msg + _build_fundamental_summary(rows, top_n=20)
+        fundamental_text = _build_fundamental_summary(rows, top_n=20)
+        if fundamental_text:
+            msg = msg + "\n\n## 2.1) 基本面速览(前20)\n" + fundamental_text
     market_summary, regime = _build_market_and_strategy_summary(
         boll_rows_count=len(rows),
         theme_rows_count=len(theme_rows),
         macro_risk_summary=macro_risk_summary,
         cctv_summary=cctv_summary,
+        has_cctv_hot=bool(_load_cctv_codes_by_date(today_yyyymmdd)),
     )
     _append_log(
         log_lines,
@@ -1540,15 +1878,23 @@ def main():
             f" | boll_rows={len(rows)}"
             f" | theme_rows={len(theme_rows)}"
             f" | macro_risk={_macro_risk_level(macro_risk_summary)}"
-            f" | cctv_hot={'1' if (cctv_summary and 'Top5' in cctv_summary) else '0'}"
+            f" | cctv_hot={'1' if bool(_load_cctv_codes_by_date(today_yyyymmdd)) else '0'}"
         ),
     )
     if market_summary:
         msg = msg + "\n" + market_summary
-    msg = msg + "\n" + _build_theme_message(theme_csv_path=theme_csv_path, theme_rows=theme_rows)
+    msg = msg + "\n" + _build_theme_message(
+        theme_csv_path=theme_csv_path,
+        theme_rows=theme_rows,
+        raw_count=theme_raw_count,
+        cctv_only=theme_cctv_only,
+        cctv_count=theme_cctv_count,
+    )
     msg = msg + "\n" + _build_relativity_message(relativity_csv_path=relativity_csv_path, relativity_rows=relativity_rows)
+    if macro_risk_summary:
+        msg = msg + "\n\n## 7) 宏观与国际风险提示\n" + macro_risk_summary.lstrip()
     if cctv_summary:
-        msg = msg + "\n" + cctv_summary
+        msg = msg + "\n\n## 8) CCTV 热点概览\n" + cctv_summary.lstrip()
 
     if output_tail:
         _append_log(log_lines, "--- Last run output (tail) ---")
@@ -1610,12 +1956,22 @@ def main():
 
     _append_log(log_lines, "[100%] Pipeline finished")
 
-    log_file = LOG_DIR / f"boll_auto_{datetime.now().strftime('%Y%m%d_%H%M%S')}.log"
-    log_file.write_text("\n".join(log_lines), encoding="utf-8")
-    _append_log(log_lines, f"Log saved: {log_file}")
+    if RUN_LOG_FILE is not None:
+        RUN_LOG_FILE.write_text("\n".join(log_lines), encoding="utf-8")
+        _append_log(log_lines, f"Log saved: {RUN_LOG_FILE}")
 
     return 0 if success else 1
 
 
 if __name__ == "__main__":
-    raise SystemExit(main())
+    try:
+        raise SystemExit(main())
+    except Exception:
+        try:
+            LOG_DIR.mkdir(parents=True, exist_ok=True)
+            fatal_log = LOG_DIR / f"boll_auto_fatal_{datetime.now().strftime('%Y%m%d_%H%M%S')}.log"
+            fatal_log.write_text(traceback.format_exc(), encoding="utf-8")
+            print(f"[FATAL] unhandled exception captured: {fatal_log}")
+        except Exception:
+            pass
+        raise

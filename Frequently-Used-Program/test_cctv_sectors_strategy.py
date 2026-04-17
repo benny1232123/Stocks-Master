@@ -6,6 +6,8 @@ import pandas as pd
 
 MODULE_PATH = Path(__file__).resolve().parent / "Stock-Selection-CCTV-Sectors.py"
 spec = importlib.util.spec_from_file_location("cctv_strategy", MODULE_PATH)
+if spec is None or spec.loader is None:
+    raise RuntimeError(f"无法加载模块: {MODULE_PATH}")
 mod = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(mod)
 

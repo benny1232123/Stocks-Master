@@ -97,6 +97,12 @@ def _on_progress(stage: str, done: int, total: int, message: str) -> None:
     print(f"[{stage}] {done}/{safe_total} {message}")
 
 
+def _bool_col(result_df: pd.DataFrame, col_name: str) -> pd.Series:
+    if col_name in result_df.columns:
+        return result_df[col_name].astype(bool)
+    return pd.Series([False] * len(result_df), index=result_df.index)
+
+
 def _build_flow_stats_from_result(result_df: pd.DataFrame, input_count: int) -> dict[str, int | float]:
     if result_df.empty:
         return {
@@ -116,20 +122,20 @@ def _build_flow_stats_from_result(result_df: pd.DataFrame, input_count: int) -> 
 
     flow_text = result_df.get("资金流说明", pd.Series(["" for _ in range(len(result_df))])).astype(str)
     basic_pass = (
-        result_df.get("资产负债率通过", False).astype(bool)
-        & result_df.get("净利润通过", False).astype(bool)
-        & result_df.get("现金流通过", False).astype(bool)
-        & result_df.get("盈利预期通过", False).astype(bool)
+        _bool_col(result_df, "资产负债率通过")
+        & _bool_col(result_df, "净利润通过")
+        & _bool_col(result_df, "现金流通过")
+        & _bool_col(result_df, "盈利预期通过")
     )
 
     stats: dict[str, int | float] = {
         "输入代码数": int(input_count),
         "板块过滤后": int(len(result_df)),
-        "资金流通过": int(result_df.get("资金流通过", False).astype(bool).sum()),
+        "资金流通过": int(_bool_col(result_df, "资金流通过").sum()),
         "基本面通过": int(basic_pass.sum()),
-        "前置汇合通过": int(result_df.get("前置汇合通过", False).astype(bool).sum()),
-        "股东通过": int(result_df.get("重要股东通过", False).astype(bool).sum()),
-        "Boll命中": int(result_df.get("命中策略", False).astype(bool).sum()),
+        "前置汇合通过": int(_bool_col(result_df, "前置汇合通过").sum()),
+        "股东通过": int(_bool_col(result_df, "重要股东通过").sum()),
+        "Boll命中": int(_bool_col(result_df, "命中策略").sum()),
         "3日资金命中": int(flow_text.str.contains("3日排行", na=False).sum()),
         "5日资金命中": int(flow_text.str.contains("5日排行", na=False).sum()),
         "10日资金命中": int(flow_text.str.contains("10日排行", na=False).sum()),

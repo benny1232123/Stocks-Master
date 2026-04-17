@@ -23,15 +23,24 @@ DATE_RULES = [
     ArchiveRule(re.compile(r"^Stock-Selection-Boll-All-([0-9]{8})\.csv$"), "boll"),
     ArchiveRule(re.compile(r"^Stock-Selection-Boll-All-Hits-([0-9]{8})\.csv$"), "boll"),
     ArchiveRule(re.compile(r"^Stock-Selection-Ashare-Theme-Turnover-([0-9]{8})\.csv$"), "theme"),
+    ArchiveRule(re.compile(r"^Stock-Selection-Relativity-([0-9]{8})\.csv$"), "relativity"),
+    ArchiveRule(re.compile(r"^Stock-Selection-Shared-Seed-([0-9]{8})\.csv$"), "seed"),
     ArchiveRule(re.compile(r"^CCTV-Hot-Sectors-([0-9]{8})\.(csv|md)$"), "cctv"),
+    ArchiveRule(re.compile(r"^CCTV-Extra-News-([0-9]{8})\.csv$"), "cctv"),
     ArchiveRule(re.compile(r"^CCTV-Sector-News-Matched-([0-9]{8})\.csv$"), "cctv"),
     ArchiveRule(re.compile(r"^CCTV-Emerging-Keywords-([0-9]{8})\.csv$"), "cctv"),
     ArchiveRule(re.compile(r"^CCTV-Emerging-Keyword-Suggestions-([0-9]{8})\.csv$"), "cctv"),
     ArchiveRule(re.compile(r"^CCTV-Quality-Metrics-([0-9]{8})\.csv$"), "cctv"),
     ArchiveRule(re.compile(r"^CCTV-Sector-Stock-Pool-([0-9]{8})\.csv$"), "cctv"),
     ArchiveRule(re.compile(r"^CCTV-Backtest-([0-9]{8})\.csv$"), "cctv"),
+    ArchiveRule(re.compile(r"^Signal-Backtest-UI-([0-9]{8})-[0-9A-Za-z_-]+\.csv$"), "backtest"),
+    ArchiveRule(re.compile(r"^Trade-Backtest-UI-([0-9]{8})-[0-9A-Za-z_-]+\.csv$"), "backtest"),
     ArchiveRule(re.compile(r"^([0-9]{8})_news\.csv$"), "news"),
 ]
+
+UNMATCHED_ROOT_CSV_SKIP = {
+    "my_trades.template.csv",
+}
 
 
 def _parse_args():
@@ -71,6 +80,11 @@ def _parse_args():
         "--archive-all-root-dated",
         action="store_true",
         help="Archive all date-named files in stock_data root, including today.",
+    )
+    parser.add_argument(
+        "--archive-unmatched-root-csv",
+        action="store_true",
+        help="Also archive unmatched CSV files in stock_data root to archive/YYYYMM/misc.",
     )
     return parser.parse_args()
 
@@ -189,6 +203,55 @@ def _archive_all_root_dated_files(data_dir, dry_run, secondary_level):
     return moved_count, moved_bytes
 
 
+def _archive_unmatched_root_csv_files(data_dir, dry_run):
+    moved_count = 0
+    moved_bytes = 0
+    month_dir = ARCHIVE_ROOT_DIR / datetime.now().strftime("%Y%m") / "misc"
+
+    for file_path in data_dir.iterdir():
+        if not file_path.is_file():
+            continue
+        if file_path.suffix.lower() != ".csv":
+            continue
+
+        name = file_path.name
+        if name in UNMATCHED_ROOT_CSV_SKIP:
+            continue
+        if _extract_date_from_name(name) is not None:
+            continue
+
+        size = file_path.stat().st_size
+        target_path = month_dir / name
+        if dry_run:
+            print(f"[DRY-RUN] move unmatched csv: {file_path} -> {target_path}")
+            moved_count += 1
+            moved_bytes += size
+            continue
+
+        month_dir.mkdir(parents=True, exist_ok=True)
+        if target_path.exists():
+            src_size = file_path.stat().st_size
+            dst_size = target_path.stat().st_size
+            if src_size == dst_size:
+                file_path.unlink()
+                print(f"[SKIP-MOVED] same unmatched target exists, removed source: {file_path}")
+                moved_count += 1
+                moved_bytes += src_size
+                continue
+
+            stem = target_path.stem
+            suffix = target_path.suffix
+            ts = datetime.now().strftime("%H%M%S")
+            target_path = target_path.with_name(f"{stem}-{ts}{suffix}")
+
+        shutil.move(str(file_path), str(target_path))
+        print(f"[ARCHIVED-UNMATCHED] {file_path} -> {target_path}")
+        moved_count += 1
+        moved_bytes += size
+
+    return moved_count, moved_bytes
+
+
 def _organize_existing_archive(archive_root, dry_run, secondary_level):
     if not secondary_level:
         return 0, 0
@@ -299,7 +362,8 @@ def main():
         "[archive] policy => "
         f"keep-root:{keep_root_days}d, archive-keep:{archive_keep_days}d, "
         f"secondary-level:{'on' if args.secondary_level else 'off'}, "
-        f"archive-all-root-dated:{'on' if args.archive_all_root_dated else 'off'}"
+        f"archive-all-root-dated:{'on' if args.archive_all_root_dated else 'off'}, "
+        f"archive-unmatched-root-csv:{'on' if args.archive_unmatched_root_csv else 'off'}"
     )
 
     organized_count, organized_bytes = _organize_existing_archive(
@@ -324,6 +388,15 @@ def main():
         )
     print(f"[archive] root files archived: {moved_count}")
 
+    unmatched_count = 0
+    unmatched_bytes = 0
+    if args.archive_unmatched_root_csv:
+        unmatched_count, unmatched_bytes = _archive_unmatched_root_csv_files(
+            STOCK_DATA_DIR,
+            args.dry_run,
+        )
+    print(f"[archive] unmatched root csv archived: {unmatched_count}")
+
     deleted_count, deleted_bytes = _delete_archived_expired(
         ARCHIVE_ROOT_DIR,
         archive_keep_days,
@@ -335,6 +408,7 @@ def main():
         "[archive] done, "
         f"organized {organized_count} files ({_format_bytes(organized_bytes)}), "
         f"archived {moved_count} files ({_format_bytes(moved_bytes)}), "
+        f"archived-unmatched {unmatched_count} files ({_format_bytes(unmatched_bytes)}), "
         f"deleted {deleted_count} files ({_format_bytes(deleted_bytes)})"
     )
     return 0

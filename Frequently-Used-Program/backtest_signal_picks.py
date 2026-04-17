@@ -39,6 +39,8 @@ DEFAULT_STRATEGY_WEIGHTS = {
     "cash": 5.0,
 }
 STRATEGY_KEYS = ["boll", "theme", "relativity", "cctv", "cash"]
+DEFAULT_MIN_STOCK_PRICE = 5.0
+DEFAULT_MAX_STOCK_PRICE = 30.0
 
 
 def _to_ak_a_symbol(symbol: str) -> str:
@@ -200,6 +202,31 @@ def parse_args() -> argparse.Namespace:
         dest="theme_cctv_only",
         action="store_false",
         help="关闭题材策略 CCTV 过滤",
+    )
+    parser.add_argument(
+        "--min-stock-price",
+        type=float,
+        default=DEFAULT_MIN_STOCK_PRICE,
+        help="统一最低股价过滤（尽量与日报一致），默认 5",
+    )
+    parser.add_argument(
+        "--max-stock-price",
+        type=float,
+        default=DEFAULT_MAX_STOCK_PRICE,
+        help="统一最高股价过滤（尽量与日报一致），默认 30",
+    )
+    parser.add_argument(
+        "--exclude-cyb-kcb",
+        dest="exclude_cyb_kcb",
+        action="store_true",
+        default=True,
+        help="排除创业板(30*)和科创板(688*)，默认开启",
+    )
+    parser.add_argument(
+        "--allow-cyb-kcb",
+        dest="exclude_cyb_kcb",
+        action="store_false",
+        help="允许创业板和科创板",
     )
     parser.add_argument(
         "--allow-cache-fallback",
@@ -620,6 +647,51 @@ def _load_signal_file(path: Path, top_n: int) -> pd.DataFrame:
     return out.reset_index(drop=True)
 
 
+def _pick_price_col(df: pd.DataFrame) -> str:
+    lower_map = {str(c).strip().lower(): str(c) for c in df.columns}
+    for key in ["最新价", "最新价格", "收盘", "收盘价", "close", "latest_close", "price"]:
+        col = lower_map.get(key.lower(), "")
+        if col:
+            return col
+    return ""
+
+
+def _apply_common_signal_filters(
+    signal_df: pd.DataFrame,
+    *,
+    min_stock_price: float,
+    max_stock_price: float,
+    exclude_cyb_kcb: bool,
+    price_series: pd.Series | None = None,
+) -> pd.DataFrame:
+    if signal_df.empty:
+        return signal_df
+
+    out = signal_df.copy()
+    out = out[out["code"].astype(str).str.len() == 6]
+
+    if exclude_cyb_kcb:
+        out = out[
+            (~out["code"].astype(str).str.startswith("30"))
+            & (~out["code"].astype(str).str.startswith("688"))
+        ]
+
+    min_price = float(min_stock_price)
+    max_price = float(max_stock_price)
+    has_price_bound = (min_price > 0) or (max_price > 0)
+    if has_price_bound and price_series is not None:
+        px = pd.to_numeric(price_series, errors="coerce")
+        px = px.reindex(out.index)
+        if px.notna().any():
+            if min_price > 0:
+                out = out[px >= min_price]
+                px = px.reindex(out.index)
+            if max_price > 0:
+                out = out[px < max_price]
+
+    return out.drop_duplicates(subset=["code"], keep="first").reset_index(drop=True)
+
+
 @lru_cache(maxsize=512)
 def _load_cctv_codes_by_signal_date(signal_date_text: str) -> frozenset[str]:
     date_text = str(signal_date_text or "").strip()
@@ -675,7 +747,15 @@ def _filter_theme_signal_with_cctv(signal_df: pd.DataFrame, signal_date_text: st
     return out.reset_index(drop=True)
 
 
-def _load_theme_signal_file_with_cctv(path: Path, top_n: int, signal_date_text: str) -> pd.DataFrame:
+def _load_theme_signal_file_with_cctv(
+    path: Path,
+    top_n: int,
+    signal_date_text: str,
+    *,
+    min_stock_price: float,
+    max_stock_price: float,
+    exclude_cyb_kcb: bool,
+) -> pd.DataFrame:
     try:
         df = pd.read_csv(path, encoding="utf-8-sig")
     except EmptyDataError:
@@ -687,6 +767,8 @@ def _load_theme_signal_file_with_cctv(path: Path, top_n: int, signal_date_text: 
     work = pd.DataFrame()
     work["code"] = df[code_col].apply(_normalize_code)
     work["name"] = df[name_col].astype(str).fillna("") if name_col else ""
+    price_col = _pick_price_col(df)
+    price_series = pd.to_numeric(df[price_col], errors="coerce") if price_col else None
 
     if "题材命中数" in df.columns:
         work["_theme_hit"] = pd.to_numeric(df["题材命中数"], errors="coerce").fillna(0.0) > 0
@@ -695,7 +777,13 @@ def _load_theme_signal_file_with_cctv(path: Path, top_n: int, signal_date_text: 
     else:
         work["_theme_hit"] = False
 
-    work = work[work["code"].str.len() == 6].drop_duplicates(subset=["code"], keep="first").reset_index(drop=True)
+    work = _apply_common_signal_filters(
+        work,
+        min_stock_price=min_stock_price,
+        max_stock_price=max_stock_price,
+        exclude_cyb_kcb=exclude_cyb_kcb,
+        price_series=price_series,
+    )
     if work.empty:
         return pd.DataFrame(columns=["code", "name"])
 
@@ -724,7 +812,15 @@ def _to_percent_like(value: object) -> float | None:
     return val
 
 
-def _load_relativity_signal_file(path: Path, top_n: int, min_down_ratio_pct: float) -> pd.DataFrame:
+def _load_relativity_signal_file(
+    path: Path,
+    top_n: int,
+    min_down_ratio_pct: float,
+    *,
+    min_stock_price: float,
+    max_stock_price: float,
+    exclude_cyb_kcb: bool,
+) -> pd.DataFrame:
     try:
         df = pd.read_csv(path, encoding="utf-8-sig")
     except EmptyDataError:
@@ -736,6 +832,8 @@ def _load_relativity_signal_file(path: Path, top_n: int, min_down_ratio_pct: flo
     out = pd.DataFrame()
     out["code"] = df[code_col].apply(_normalize_code)
     out["name"] = df[name_col].astype(str).fillna("") if name_col else ""
+    price_col = _pick_price_col(df)
+    price_series = pd.to_numeric(df[price_col], errors="coerce") if price_col else None
 
     down_col = ""
     lower_map = {str(c).strip().lower(): str(c) for c in df.columns}
@@ -750,7 +848,13 @@ def _load_relativity_signal_file(path: Path, top_n: int, min_down_ratio_pct: flo
         down_pct = df[down_col].apply(_to_percent_like)
         out = out[down_pct >= threshold]
 
-    out = out[out["code"].str.len() == 6].drop_duplicates(subset=["code"], keep="first").reset_index(drop=True)
+    out = _apply_common_signal_filters(
+        out,
+        min_stock_price=min_stock_price,
+        max_stock_price=max_stock_price,
+        exclude_cyb_kcb=exclude_cyb_kcb,
+        price_series=price_series,
+    )
     if top_n > 0:
         out = out.head(top_n)
     return out
@@ -1165,15 +1269,33 @@ def main() -> int:
         for file_path, signal_date, strategy_key in selected_files:
             top_n = max(int(args.top_n), 1)
             if strategy_key == "theme" and bool(args.theme_cctv_only):
-                signal_df = _load_theme_signal_file_with_cctv(file_path, top_n=top_n, signal_date_text=signal_date)
+                signal_df = _load_theme_signal_file_with_cctv(
+                    file_path,
+                    top_n=top_n,
+                    signal_date_text=signal_date,
+                    min_stock_price=float(args.min_stock_price),
+                    max_stock_price=float(args.max_stock_price),
+                    exclude_cyb_kcb=bool(args.exclude_cyb_kcb),
+                )
             elif strategy_key == "relativity":
                 signal_df = _load_relativity_signal_file(
                     file_path,
                     top_n=top_n,
                     min_down_ratio_pct=float(args.relativity_min_down_ratio_pct),
+                    min_stock_price=float(args.min_stock_price),
+                    max_stock_price=float(args.max_stock_price),
+                    exclude_cyb_kcb=bool(args.exclude_cyb_kcb),
                 )
             else:
-                signal_df = _load_signal_file(file_path, top_n=top_n)
+                signal_df = _load_signal_file(file_path, top_n=0)
+                signal_df = _apply_common_signal_filters(
+                    signal_df,
+                    min_stock_price=float(args.min_stock_price),
+                    max_stock_price=float(args.max_stock_price),
+                    exclude_cyb_kcb=bool(args.exclude_cyb_kcb),
+                )
+                if top_n > 0:
+                    signal_df = signal_df.head(top_n).reset_index(drop=True)
             if signal_df.empty:
                 continue
 

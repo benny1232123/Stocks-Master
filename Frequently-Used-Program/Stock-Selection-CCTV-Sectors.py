@@ -237,11 +237,21 @@ def fetch_cctv_news(target_date="", fallback=True):
 
     for d in candidates:
         ds = d.strftime("%Y%m%d")
+        local_path = DATA_DIR / f"{ds}_news.csv"
+        if local_path.exists():
+            try:
+                df = pd.read_csv(local_path, encoding="utf-8-sig")
+                df, raw_count = _normalize_news_df(df)
+                if not df.empty:
+                    print(f"成功读取本地 CCTV 新闻：{ds}，原始{raw_count}条，去重后{len(df)}条")
+                    return ds, df, raw_count
+            except Exception as exc:
+                print(f"读取本地 CCTV 新闻失败: {local_path}，原因: {exc}")
         try:
             df = ak.news_cctv(date=ds)
             df, raw_count = _normalize_news_df(df)
             if not df.empty:
-                (DATA_DIR / f"{ds}_news.csv").write_text(df.to_csv(index=False, encoding="utf-8-sig"), encoding="utf-8-sig")
+                df.to_csv(local_path, index=False, encoding="utf-8-sig")
                 print(f"成功获取 CCTV 新闻：{ds}，原始{raw_count}条，去重后{len(df)}条")
                 return ds, df, raw_count
             print(f"{ds} 新闻为空，尝试前一日")
@@ -649,7 +659,7 @@ def build_sector_stock_pool(date_str, sector_df, stock_hints):
     tmp = base_df.copy()
     tmp["name"] = tmp["name"].astype(str)
     rows = []
-    for _, sec_row in sector_df.head(12).iterrows():
+    for _, sec_row in sector_df.iterrows():
         sector = sec_row["板块"]
         hints = stock_hints.get(sector, [])
         if not hints:
@@ -657,7 +667,7 @@ def build_sector_stock_pool(date_str, sector_df, stock_hints):
         mask = pd.Series(False, index=tmp.index)
         for h in hints:
             mask = mask | tmp["name"].str.contains(re.escape(h), case=False, na=False)
-        cand = tmp[mask].head(10)
+        cand = tmp[mask]
         tier = _confidence_tier(float(sec_row["热度分"]), int(sec_row["提及次数"]), float(sec_row["舆论分"]))
         for _, s in cand.iterrows():
             rows.append({
@@ -711,8 +721,7 @@ def run_backtest(backtest_days=5):
     if not rows:
         return pd.DataFrame()
     out = pd.DataFrame(rows)
-    summary = out.groupby("信号日期", as_index=False)["次日收益率"].mean()
-    summary = summary.rename(columns={"次日收益率": "组合次日平均收益率"})
+    summary = out.groupby("信号日期")["次日收益率"].mean().reset_index(name="组合次日平均收益率")
     return summary
 
 

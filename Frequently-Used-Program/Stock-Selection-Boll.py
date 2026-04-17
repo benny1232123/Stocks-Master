@@ -117,7 +117,7 @@ def convert_fund_flow(value):
 
 def fetch_data_with_fallback(api_func, file_path, *args, **kwargs):
     """
-    通用数据获取函数，优先从API获取并存入本地数据库，失败则从数据库读取。
+    通用数据获取函数，优先调用 API，失败或空数据时回退到本地数据库。
     数据库文件: stock_data/stocks_data.db
     
     :param api_func: akshare的数据获取函数。
@@ -145,34 +145,30 @@ def fetch_data_with_fallback(api_func, file_path, *args, **kwargs):
     table_name = sanitize_table_name(file_path)
     
     conn = sqlite3.connect(db_path)
-    
+
     try:
-        # 2. 尝试请求 API
-        # print(f"正在从 API 获取数据: {table_name} ...") 
-        df = api_func(*args, **kwargs)
-        
-        # 3. 成功后写入数据库 (if_exists='replace' 表示如果表存在则覆盖，保持数据最新)
-        # 这一步替代了原来的 to_csv
-        df.to_sql(table_name, conn, if_exists='replace', index=False)
-        print(f"API调用成功。数据已保存至数据库表: {table_name}")
-        
-        conn.close()
-        return df
-        
-    except Exception as e:
-        print(f"API调用失败或超时: {e}。正在尝试读取本地数据库缓存...")
         try:
-            # 4. API 失败时，尝试从数据库读取缓存
-            query = f'SELECT * FROM "{table_name}"'
-            df = pd.read_sql_query(query, conn)
-            
-            conn.close()
-            print(f"成功读取本地数据库表: {table_name}")
-            return df
-        except Exception as e2:
-            conn.close()
-            print(f"读取本地数据库失败 {table_name}: {e2}")
-            return pd.DataFrame()
+            df_api = api_func(*args, **kwargs)
+            if isinstance(df_api, pd.DataFrame) and not df_api.empty:
+                df_api.to_sql(table_name, conn, if_exists='replace', index=False)
+                print(f"API调用成功。数据已保存至数据库表: {table_name}")
+                return df_api
+            print(f"API返回空数据: {table_name}，尝试回退本地数据库")
+        except Exception as api_exc:
+            print(f"API调用失败: {table_name} | {api_exc}，尝试回退本地数据库")
+
+        try:
+            df_local = pd.read_sql_query(f'SELECT * FROM "{table_name}"', conn)
+            if not df_local.empty:
+                print(f"回退成功，读取本地数据库表: {table_name}")
+                return df_local
+            print(f"本地数据库表为空: {table_name}")
+        except Exception:
+            print(f"本地数据库缺少表: {table_name}")
+
+        return pd.DataFrame()
+    finally:
+        conn.close()
 
 '''1.技术面选股'''
 # 待补充
@@ -193,7 +189,7 @@ for period in ["3日排行", "5日排行", "10日排行"]:
         all_fund_flow_codes[f'format_{period_name}_days_positive_funds_codes'] = codes
     else:
         all_fund_flow_codes[f'format_{period_name}_days_positive_funds_codes'] = []
-    time.sleep(3)
+    time.sleep(0)
 
 format_three_days_positive_funds_codes = all_fund_flow_codes.get('format_3_days_positive_funds_codes', [])
 format_five_days_positive_funds_codes = all_fund_flow_codes.get('format_5_days_positive_funds_codes', [])
@@ -212,7 +208,7 @@ for date_str in ZCFZ_DATES:
     if not s_zcfz_df.empty:
         s_good_zcfz_df = s_zcfz_df[s_zcfz_df['资产负债率'] < DEBT_ASSET_RATIO_LIMIT]
         zcfz_codes_list.extend(s_good_zcfz_df['股票代码'].tolist())
-    time.sleep(3)
+    time.sleep(0)
 zcfz_codes = list(set(zcfz_codes_list))
 
 
@@ -227,7 +223,7 @@ if not profit_df.empty:
     #good_profit_df = profit_df[(profit_df['净利润'] > 0) & (profit_df['净利润同比'] > 0)]
     good_profit_df = profit_df[(profit_df['净利润'] > 0)]
     profit_codes = good_profit_df['股票代码'].tolist()
-time.sleep(3)
+time.sleep(0)
 
 '''3.3.现金流量表'''
 cashflow_df = fetch_data_with_fallback(
@@ -239,7 +235,7 @@ cashflow_codes = []
 if not cashflow_df.empty:
     good_cashflow_df = cashflow_df[cashflow_df['经营性现金流-现金流量净额'] > 0]
     cashflow_codes = good_cashflow_df['股票代码'].tolist()
-time.sleep(3)
+time.sleep(0)
 
 '''3.4.盈利预测'''
 profit_forecast_df = fetch_data_with_fallback(
@@ -259,7 +255,7 @@ if not profit_forecast_df.empty:
         print(f"'{forecast_col}' not found in profit forecast data. 跳过盈利预测条件")
 else:
     print("盈利预测数据为空，跳过盈利预测条件")
-time.sleep(3)
+time.sleep(0)
 
 
 '''4.数据处理'''
@@ -378,15 +374,6 @@ shared_seed_df = pd.DataFrame(
 shared_seed_df.to_csv(shared_seed_path, index=False, encoding="utf-8-sig")
 print(f"共享候选池已保存: {shared_seed_path}（供 Relativity 复用前置筛选结果）")
 
-def format_stock_code(code):
-    """将股票代码格式化为6位数"""
-    if isinstance(code, str):
-        code = ''.join(filter(str.isdigit, code))
-        return code.zfill(6)
-    elif isinstance(code, int):
-        return f"{code:06d}"
-    return code
-
 def add_market_prefix_dotted(code):
     """为股票代码添加小写市场前缀"""
     formatted_code = format_stock_code(code)
@@ -397,7 +384,6 @@ def safe_filename_component(s: str, max_len: int = 30) -> str:
     if s is None:
         return ""
     s = str(s).strip()
-    # Windows 不允许：\ / : * ? " < > |
     s = re.sub(r'[\\/:*?"<>|]', "_", s)
     s = re.sub(r"\s+", "", s)
     return s[:max_len]
@@ -428,20 +414,17 @@ def plot_bollinger(
 
     name_part = safe_filename_component(stock_name)
     display_name = stock_name.strip() if isinstance(stock_name, str) else ""
-    title_name = f"{fncode} {display_name}".strip()
+    title_name = f"{fncode} {display_name}" if display_name else fncode
 
-    plt.figure(figsize=(12, 6))
-    plt.plot(dfp["date"], dfp["close"], label="Close", linewidth=1.6)
-    plt.plot(dfp["date"], dfp["MA20"], label="MA20", linewidth=1.2)
-    plt.plot(dfp["date"], dfp["Upper"], label=f"Upper (k={k})", linewidth=1.0)
-    plt.plot(dfp["date"], dfp["Lower"], label=f"Lower (k={k})", linewidth=1.0)
-    plt.fill_between(dfp["date"], dfp["Lower"], dfp["Upper"], alpha=0.12)
-
-    plt.title(f"{title_name} Bollinger Bands (MA20, k={k})")
-    plt.xlabel("Date")
-    plt.ylabel("Price")
-    plt.grid(True, linestyle="--", alpha=0.3)
-    plt.legend()
+    plt.figure(figsize=(10, 5))
+    plt.plot(dfp["date"], dfp["close"], label="Close", linewidth=1.4)
+    plt.plot(dfp["date"], dfp["MA20"], label="MA20", linewidth=1.1)
+    plt.plot(dfp["date"], dfp["Upper"], label=f"Upper({k})", linestyle="--", linewidth=1.0)
+    plt.plot(dfp["date"], dfp["Lower"], label=f"Lower({k})", linestyle="--", linewidth=1.0)
+    plt.title(f"{title_name} Bollinger Bands")
+    plt.legend(loc="best")
+    plt.grid(alpha=0.25)
+    plt.xticks(rotation=30)
 
     if name_part:
         out_name = f"{fncode}_{name_part}_BOLL_{today}.png"
@@ -489,6 +472,9 @@ for fncode in final_candidate_codes:
             frequency="d",
             adjustflag="2"
         )
+        if rs is None:
+            print(f"{fncode} {stock_name} K线接口返回空对象，跳过")
+            continue
 
         print('query_history_k_data_plus respond error_code:'+rs.error_code)
         print('query_history_k_data_plus respond  error_msg:'+rs.error_msg)

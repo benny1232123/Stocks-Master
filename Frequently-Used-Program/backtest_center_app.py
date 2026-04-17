@@ -430,7 +430,7 @@ def _render_signal_tab() -> None:
         language="text",
     )
     st.caption("文件名需包含日期 YYYYMMDD，例如 Stock-Selection-Boll-20260412.csv。系统只会读取交易日文件，不会把周末/节假日当成信号日。")
-    st.caption("题材策略默认仅回测命中 CCTV 的股票（优先按 CCTV 股票池过滤，缺失时按题材命中标记回退）。")
+    st.caption("口径说明：默认股价区间 5<=price<30，默认排除创业板/科创板（30*、688*），题材策略默认不强制 CCTV-only。")
 
     st.markdown("参数设置")
     with st.expander("基础参数", expanded=True):
@@ -469,6 +469,14 @@ def _render_signal_tab() -> None:
         sell_fee_rate = float(
             col7.number_input("卖出佣金率", min_value=0.0, max_value=0.01, value=0.0003, step=0.0001, format="%.4f")
         )
+        c8, c9 = st.columns(2)
+        min_stock_price = float(c8.number_input("最低股价", min_value=0.0, max_value=200.0, value=5.0, step=1.0))
+        max_stock_price = float(c9.number_input("最高股价(开区间)", min_value=0.0, max_value=200.0, value=30.0, step=1.0))
+
+        c10, c11 = st.columns(2)
+        exclude_cyb_kcb = bool(c10.checkbox("排除创业板/科创板(30*/688*)", value=True))
+        theme_cctv_only = bool(c11.checkbox("题材策略仅回测 CCTV 命中标的", value=True))
+
         relativity_min_down_ratio_pct = float(
             st.number_input("Relativity 抗跌满足率下限(%)", min_value=0.0, max_value=100.0, value=70.0, step=1.0)
         )
@@ -594,6 +602,10 @@ def _render_signal_tab() -> None:
         str(sell_stamp_tax_rate),
         "--relativity-min-down-ratio-pct",
         str(relativity_min_down_ratio_pct),
+        "--min-stock-price",
+        str(min_stock_price),
+        "--max-stock-price",
+        str(max_stock_price),
         "--daily-strategy-ratios",
         ratio_text,
         "--initial-capital",
@@ -601,6 +613,14 @@ def _render_signal_tab() -> None:
         "--output-prefix",
         out_prefix,
     ]
+    if exclude_cyb_kcb:
+        args.append("--exclude-cyb-kcb")
+    else:
+        args.append("--allow-cyb-kcb")
+    if theme_cctv_only:
+        args.append("--theme-cctv-only")
+    else:
+        args.append("--disable-theme-cctv-only")
     if ratio_csv_rel:
         args.extend(["--daily-ratios-csv", ratio_csv_rel])
     if auto_market_ratios:
