@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import subprocess
 import sys
-from datetime import datetime
+from datetime import datetime, timedelta
 from pathlib import Path
 import re
 import shutil
@@ -73,6 +73,36 @@ def _find_signal_files(strategy_key: str, include_archive: bool, start_text: str
         if _in_date_range(ds, start_text, end_text):
             selected.append(f)
     return selected
+
+
+def _default_signal_date_range(include_archive: bool) -> tuple[datetime.date, datetime.date]:
+    files = _find_signal_files("all", include_archive, start_text="00000000", end_text="99999999")
+    if not files:
+        today = datetime.now().date()
+        return today.replace(day=1), today
+
+    dates = []
+    for path in files:
+        date_text = _extract_yyyymmdd_from_name(path)
+        if len(date_text) == 8 and date_text.isdigit():
+            try:
+                dates.append(datetime.strptime(date_text, "%Y%m%d").date())
+            except ValueError:
+                continue
+
+    if not dates:
+        today = datetime.now().date()
+        return today.replace(day=1), today
+
+    latest_date = max(dates)
+    safe_end = latest_date - timedelta(days=10)
+    if safe_end >= latest_date:
+        safe_end = latest_date
+    if safe_end.day == 1:
+        safe_start = safe_end
+    else:
+        safe_start = safe_end.replace(day=1)
+    return safe_start, safe_end
 
 
 def _run_python_script(script_path: Path, args: list[str]) -> tuple[int, str]:
@@ -447,9 +477,9 @@ def _render_signal_tab() -> None:
             index=3,
         )
         include_archive = col_sel_2.checkbox("包含 archive 历史", value=True)
-        end_date = datetime.now().date()
-        start_date = col_sel_3.date_input("起始日期", value=end_date.replace(day=1))
-        end_date_input = st.date_input("结束日期", value=end_date)
+        default_start_date, default_end_date = _default_signal_date_range(include_archive=True)
+        start_date = col_sel_3.date_input("起始日期", value=default_start_date)
+        end_date_input = st.date_input("结束日期", value=default_end_date)
 
         col1, col2 = st.columns(2)
         top_n = int(col1.number_input("每个信号日前 N 只", min_value=1, max_value=100, value=10, step=1))
@@ -544,6 +574,28 @@ def _render_signal_tab() -> None:
         return
 
     signal_files = _find_signal_files(strategy_key, include_archive, start_text=start_text, end_text=end_text)
+
+    if run_btn and signal_files:
+        latest_signal_date = None
+        for path in signal_files:
+            date_text = _extract_yyyymmdd_from_name(path)
+            if len(date_text) == 8 and date_text.isdigit():
+                try:
+                    date_value = datetime.strptime(date_text, "%Y%m%d").date()
+                except ValueError:
+                    continue
+                if latest_signal_date is None or date_value > latest_signal_date:
+                    latest_signal_date = date_value
+
+        if latest_signal_date is not None:
+            safe_gap_days = max(int(hold_days) * 3 + 5, 10)
+            safe_cutoff = datetime.now().date() - timedelta(days=safe_gap_days)
+            if latest_signal_date > safe_cutoff:
+                default_start_date, default_end_date = _default_signal_date_range(include_archive=True)
+                start_text = default_start_date.strftime("%Y%m%d")
+                end_text = default_end_date.strftime("%Y%m%d")
+                signal_files = _find_signal_files(strategy_key, include_archive, start_text=start_text, end_text=end_text)
+                st.info(f"已自动切换到更早的默认窗口：{start_text} ~ {end_text}")
 
     st.caption(f"自动匹配到 {len(signal_files)} 个信号文件")
     st.info(f"当前持有期 {hold_days} 个交易日，回测脚本会自动跳过持有期不足的文件。")

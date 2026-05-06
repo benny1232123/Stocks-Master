@@ -1,6 +1,5 @@
 import akshare as ak
 import pandas as pd
-import numpy as np
 import time
 import sqlite3
 import atexit

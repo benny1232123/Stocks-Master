@@ -49,6 +49,7 @@ def parse_args():
     parser.add_argument("--bs-timeout-seconds", type=float, default=DEFAULT_BS_TIMEOUT_SECONDS, help="baostock请求超时秒数")
     parser.add_argument("--bs-request-interval-seconds", type=float, default=DEFAULT_BS_REQUEST_INTERVAL_SECONDS, help="baostock请求最小间隔秒数")
     parser.add_argument("--bs-max-retries", type=int, default=DEFAULT_BS_MAX_RETRIES, help="baostock请求失败重试次数")
+    parser.add_argument("--include-gem", action="store_true", help="包含创业板(300开头)")
     return parser.parse_args()
 
 
@@ -104,7 +105,17 @@ def _normalize_code(code_text):
     return ""
 
 
-def _load_shared_seed_universe(max_stocks, trade_day_text):
+def _allow_market_code(norm_code, include_gem=False):
+    if not norm_code:
+        return False
+    if norm_code.startswith(("sh.60", "sz.00")):
+        return True
+    if include_gem and norm_code.startswith("sz.30"):
+        return True
+    return False
+
+
+def _load_shared_seed_universe(max_stocks, trade_day_text, include_gem=False):
     today_tag = datetime.datetime.now().strftime("%Y%m%d")
     trade_tag = trade_day_text.replace("-", "")
     preferred = [
@@ -138,7 +149,7 @@ def _load_shared_seed_universe(max_stocks, trade_day_text):
         name_col = "股票名称" if "股票名称" in df.columns else ("name" if "name" in df.columns else None)
         tmp = df.copy()
         tmp["code"] = tmp[code_col].map(_normalize_code)
-        tmp = tmp[tmp["code"].str.startswith(("sh.60", "sz.00", "sz.30"), na=False)]
+        tmp = tmp[tmp["code"].map(lambda v: _allow_market_code(v, include_gem))]
         if tmp.empty:
             continue
 
@@ -222,7 +233,7 @@ def _load_sector_stock_pool_map(hot_sectors):
     return out
 
 
-def _load_hot_sector_pool_universe(hot_sectors):
+def _load_hot_sector_pool_universe(hot_sectors, include_gem=False):
     if not hot_sectors:
         return []
 
@@ -273,8 +284,8 @@ def _load_hot_sector_pool_universe(hot_sectors):
         norm_code = _normalize_code(row.get(code_col, ""))
         if not norm_code:
             continue
-        # 题材策略只处理主板/中小创，过滤北交等其它市场编码。
-        if not norm_code.startswith(("sh.60", "sz.00", "sz.30")):
+        # 题材策略只处理主板/创业板，过滤北交等其它市场编码。
+        if not _allow_market_code(norm_code, include_gem):
             continue
         if norm_code in seen:
             continue
@@ -401,7 +412,7 @@ def _write_cache_df(table_name, df):
         conn.close()
 
 
-def _query_all_a_stocks(max_stocks, day_text, request_interval_seconds=0.0, max_retries=2):
+def _query_all_a_stocks(max_stocks, day_text, request_interval_seconds=0.0, max_retries=2, include_gem=False):
     cache_key = f"stock_data/baostock_all_stock_{day_text}.csv"
     table_name = _cache_table_name(cache_key)
     cached_df = _read_cache_df(table_name)
@@ -409,7 +420,7 @@ def _query_all_a_stocks(max_stocks, day_text, request_interval_seconds=0.0, max_
         cached_df = cached_df.copy()
         cached_df["code"] = cached_df["code"].astype(str)
         cached_df["name"] = cached_df["name"].astype(str)
-        cached_df = cached_df[cached_df["code"].str.startswith(("sh.60", "sz.00", "sz.30"))]
+        cached_df = cached_df[cached_df["code"].map(lambda v: _allow_market_code(v, include_gem))]
         if max_stocks > 0:
             cached_df = cached_df.head(max_stocks)
         return cached_df[["code", "name"]].to_dict("records")
@@ -438,7 +449,7 @@ def _query_all_a_stocks(max_stocks, day_text, request_interval_seconds=0.0, max_
 
             if trade_status not in ("1", ""):
                 continue
-            if not code.startswith(("sh.60", "sz.00", "sz.30")):
+            if not _allow_market_code(code, include_gem):
                 continue
             out_rows.append({"code": code, "name": name})
         return out_rows
@@ -641,7 +652,7 @@ def build_strategy_candidates(args, log_path=None):
         today_text,
         request_interval_seconds=args.bs_request_interval_seconds,
     )
-    universe, seed_path = _load_shared_seed_universe(args.max_stocks, trade_day_text)
+    universe, seed_path = _load_shared_seed_universe(args.max_stocks, trade_day_text, args.include_gem)
     if universe:
         _append_log(log_path, f"共享候选池命中: {seed_path} | 样本数: {len(universe)}")
     else:
@@ -650,9 +661,10 @@ def build_strategy_candidates(args, log_path=None):
             trade_day_text,
             request_interval_seconds=args.bs_request_interval_seconds,
             max_retries=args.bs_max_retries,
+            include_gem=args.include_gem,
         )
 
-    hot_pool_universe = _load_hot_sector_pool_universe(hot_sectors)
+    hot_pool_universe = _load_hot_sector_pool_universe(hot_sectors, args.include_gem)
     base_count = len(universe)
     universe = _merge_universe_with_hot_pool(universe, hot_pool_universe)
     added_hot_pool = max(len(universe) - base_count, 0)

@@ -1,3 +1,75 @@
+# --- 新增：宏观新闻多日趋势 ---
+def _build_macro_news_trend_summary(window_days=3, top_n=0):
+    """
+    汇总最近 window_days 天的宏观新闻风险事件趋势。
+    """
+    today = datetime.now()
+    news_files = []
+    for i in range(window_days):
+        d = today - timedelta(days=i)
+        f = _find_latest_news_file(d.strftime("%Y%m%d"))
+        if f and f.exists():
+            news_files.append((f, d.strftime("%Y%m%d")))
+    if not news_files:
+        return "\n- 宏观新闻趋势: 近几天无新闻文件"
+
+    all_events = []
+    for f, date_str in news_files:
+        try:
+            with f.open("r", encoding="utf-8-sig", newline="") as csvfile:
+                reader = csv.DictReader(csvfile)
+                for row in reader:
+                    title = (row.get("title") or row.get("标题") or "").strip()
+                    content = (row.get("content") or row.get("内容") or "").strip()
+                    text = f"{title} {content}".lower()
+                    if not text.strip():
+                        continue
+                    # 与单日一致的风险关键词
+                    risk_rules = {
+                        "地缘冲突": ["空袭", "冲突", "导弹", "军事", "战机", "袭击", "战争", "中东", "霍尔木兹"],
+                        "能源扰动": ["原油", "油价", "天然气", "重水", "核设施", "能源", "海峡"],
+                        "航运外需": ["航运", "港口", "外贸", "出口", "制裁", "关税", "供应链", "跨境"],
+                        "风险偏好": ["停摆", "大选", "不确定", "风险", "波动", "反击", "升级"],
+                    }
+                    easing_words = ["谈判", "缓和", "停火", "协议", "会谈"]
+                    matched_tags = []
+                    risk_score = 0
+                    for tag, words in risk_rules.items():
+                        hit = sum(1 for w in words if w.lower() in text)
+                        if hit > 0:
+                            matched_tags.append(tag)
+                            risk_score += hit
+                    if risk_score == 0:
+                        continue
+                    easing_hit = sum(1 for w in easing_words if w.lower() in text)
+                    risk_score = max(risk_score - easing_hit, 1)
+                    all_events.append({
+                        "date": date_str,
+                        "title": title or "(无标题)",
+                        "tags": matched_tags,
+                        "risk_score": risk_score,
+                    })
+        except Exception:
+            continue
+    if not all_events:
+        return "\n- 宏观新闻趋势: 近几天无高/中风险新闻"
+    # 按日期降序、风险分排序
+    all_events.sort(key=lambda x: (x["date"], -x["risk_score"]))
+    lines = ["\n## 宏观新闻风险趋势（近%d天）:" % window_days]
+    cur_date = None
+    count = 0
+    for item in all_events:
+        if cur_date != item["date"]:
+            lines.append(f"- {item['date']}:")
+            cur_date = item["date"]
+            count = 0
+        if top_n > 0 and count >= top_n:
+            continue
+        level = "高" if item["risk_score"] >= 4 else "中"
+        tags = "/".join(item["tags"]) if item["tags"] else "综合"
+        lines.append(f"    [{level}] {item['title']} | 影响链条: {tags}")
+        count += 1
+    return "\n".join(lines)
 import csv
 import argparse
 import json
@@ -1090,13 +1162,23 @@ def _iter_all_cctv_hot_files():
 def _collect_cctv_files_in_window(window_days=3):
     today = datetime.now().date()
     candidates = []
+    recent_candidates = []
+    max_lookback_days = max(int(window_days), 1) + 7
+    min_samples = max(3, min(int(window_days), 5))
     for p in _iter_all_cctv_hot_files():
         d = _extract_date_from_filename(p)
         if d is None:
             continue
         age = (today - d).days
         if 0 <= age < max(int(window_days), 1):
+            recent_candidates.append((p, d))
+        elif 0 <= age < max_lookback_days:
             candidates.append((p, d))
+
+    if len(recent_candidates) >= min_samples:
+        candidates = recent_candidates
+    else:
+        candidates = recent_candidates + candidates
 
     # 若窗口内无数据，回退到最近一期，避免日报缺失该模块。
     if not candidates:
@@ -1169,7 +1251,7 @@ def _build_cctv_period_summary(window_days=3, top_n=0):
     title_suffix = f"Top{top_n}" if isinstance(top_n, int) and top_n > 0 else "全覆盖"
 
     lines = [
-        f"\nCCTV 热门板块 {title_suffix}（近{max(int(window_days), 1)}日统计）:",
+        f"\nCCTV 热门板块 {title_suffix}（近{max(int(window_days), 1)}日优先，样本不足自动回补前几日）:",
         f"- 样本天数: {sample_days}",
         "- 口径: 按板块热度分做区间均值排序，并给出区间净变化",
     ]
@@ -1204,7 +1286,7 @@ def _find_latest_news_file(today_yyyymmdd):
     return files[0] if files else None
 
 
-def _build_macro_risk_summary(news_csv_path, top_n=3):
+def _build_macro_risk_summary(news_csv_path, top_n=0):
     if news_csv_path is None or not news_csv_path.exists():
         return "- 新闻源: 未找到可用新闻文件\n- 解读: 本次跳过宏观风险打分"
 
@@ -1258,7 +1340,9 @@ def _build_macro_risk_summary(news_csv_path, top_n=3):
             "- 解读: 当前宏观风险信号偏平稳"
         )
 
-    events = sorted(events, key=lambda x: x["risk_score"], reverse=True)[:top_n]
+    events = sorted(events, key=lambda x: x["risk_score"], reverse=True)
+    if isinstance(top_n, int) and top_n > 0:
+        events = events[:top_n]
 
     lines = [
         f"- 新闻源: {news_csv_path.name}",
@@ -1629,10 +1713,13 @@ def main():
 
     _append_log(log_lines, f"{_stage_tag(3, 'macro-news', percent=29)} collecting risk summary")
     news_file = _find_latest_news_file(datetime.now().strftime("%Y%m%d"))
-    macro_risk_summary = _build_macro_risk_summary(news_file, top_n=3)
+    macro_risk_summary = _build_macro_risk_summary(news_file, top_n=0)
     _append_log(log_lines, f"{_stage_tag(3, 'macro-news')} done")
 
     today_yyyymmdd = datetime.now().strftime("%Y%m%d")
+    # --- 新增：插入宏观新闻多日趋势 ---
+    macro_news_trend = _build_macro_news_trend_summary(window_days=3, top_n=0)
+    _append_log(log_lines, macro_news_trend)
     min_price_text = os.getenv("MIN_STOCK_PRICE", "5").strip() or "5"
     max_price_text = os.getenv("MAX_STOCK_PRICE", "30").strip() or "30"
 

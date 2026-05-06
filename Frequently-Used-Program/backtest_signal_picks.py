@@ -251,6 +251,39 @@ def _resolve_path(path_text: str) -> Path:
     return p
 
 
+def _collect_signal_files(pattern: str) -> list[Path]:
+    normalized_pattern = str(pattern or "").strip()
+    if not normalized_pattern:
+        return []
+
+    files = sorted([p for p in ROOT_DIR.glob(normalized_pattern)], key=lambda p: p.name)
+    if files:
+        return files
+
+    fallback_patterns: list[str] = []
+    pattern_text = normalized_pattern.replace("\\", "/")
+    if "Stock-Selection-Boll" in pattern_text:
+        fallback_patterns.append("stock_data/archive/*/boll/Stock-Selection-Boll-*.csv")
+    elif "Stock-Selection-Relativity" in pattern_text:
+        fallback_patterns.append("stock_data/archive/*/theme/Stock-Selection-Relativity-*.csv")
+    elif "Stock-Selection-Ashare-Theme-Turnover" in pattern_text:
+        fallback_patterns.append("stock_data/archive/*/theme/Stock-Selection-Ashare-Theme-Turnover-*.csv")
+    elif "Stock-Selection-CCTV-Sectors" in pattern_text:
+        fallback_patterns.append("stock_data/archive/*/cctv/Stock-Selection-CCTV-Sectors-*.csv")
+    elif "Stock-Selection-" in pattern_text:
+        fallback_patterns.extend(
+            [
+                "stock_data/archive/*/boll/Stock-Selection-*.csv",
+                "stock_data/archive/*/theme/Stock-Selection-*.csv",
+            ]
+        )
+
+    for fallback_pattern in fallback_patterns:
+        files.extend(ROOT_DIR.glob(fallback_pattern))
+
+    return sorted(set(files), key=lambda p: p.name)
+
+
 def _extract_signal_date_from_file(path: Path) -> str:
     # 兼容 UI 复制文件时添加前缀（如 0001_...），优先提取形如 20xxxxxx 的日期片段。
     candidates = re.findall(r"(\d{8})", path.stem)
@@ -1206,7 +1239,7 @@ def main() -> int:
         if not pattern:
             raise SystemExit("signals-glob 不能为空")
 
-        signal_files = sorted([p for p in ROOT_DIR.glob(pattern)], key=lambda p: p.name)
+        signal_files = _collect_signal_files(pattern)
         if not signal_files:
             raise SystemExit(f"未找到信号文件: {pattern}")
 
