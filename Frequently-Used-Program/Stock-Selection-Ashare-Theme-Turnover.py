@@ -10,6 +10,7 @@ import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 
+import akshare as ak
 import baostock as bs
 import pandas as pd
 
@@ -21,7 +22,6 @@ LOG_DIR = DATA_DIR / "auto_logs"
 LOG_DIR.mkdir(parents=True, exist_ok=True)
 DB_PATH = DATA_DIR / "stocks_data.db"
 
-SECTOR_HINTS_PATH = DATA_DIR / "cctv_sector_stock_map.json"
 HOT_SECTOR_PATTERN = "CCTV-Hot-Sectors-*.csv"
 SECTOR_STOCK_POOL_PATTERN = "CCTV-Sector-Stock-Pool-*.csv"
 SHARED_SEED_PATTERN = "Stock-Selection-Shared-Seed-*.csv"
@@ -169,20 +169,56 @@ def _load_shared_seed_universe(max_stocks, trade_day_text, include_gem=False):
 def _load_hot_sectors(top_n):
     f = _latest_hot_sector_file()
     if f is None:
-        return []
+        return _fallback_hot_sectors(top_n)
     try:
         df = pd.read_csv(f, encoding="utf-8-sig")
     except Exception:
-        return []
+        return _fallback_hot_sectors(top_n)
 
     if df.empty or "板块" not in df.columns:
-        return []
+        return _fallback_hot_sectors(top_n)
 
     sort_col = "热度分" if "热度分" in df.columns else "提及次数"
     tmp = df.copy()
     tmp[sort_col] = pd.to_numeric(tmp[sort_col], errors="coerce")
     tmp = tmp.sort_values(sort_col, ascending=False)
-    return [str(x).strip() for x in tmp["板块"].head(top_n).tolist() if str(x).strip()]
+    sectors = [str(x).strip() for x in tmp["板块"].head(top_n).tolist() if str(x).strip()]
+    return sectors or _fallback_hot_sectors(top_n)
+
+
+def _fallback_hot_sectors(top_n):
+    sectors = _load_sw_industry_names()
+    if isinstance(top_n, int) and top_n > 0:
+        return sectors[:top_n]
+    return sectors
+
+
+def _load_sw_industry_names():
+    frames = []
+    for fn in (getattr(ak, "sw_index_third_info", None), getattr(ak, "sw_index_second_info", None), getattr(ak, "sw_index_first_info", None)):
+        if fn is None:
+            continue
+        try:
+            df = fn()
+        except Exception:
+            continue
+        if df is None or df.empty or "行业名称" not in df.columns:
+            continue
+        frames.append(df[["行业名称"]].copy())
+
+    if not frames:
+        return []
+
+    out = pd.concat(frames, ignore_index=True)
+    names = [str(x).strip() for x in out["行业名称"].tolist() if str(x).strip()]
+    seen = set()
+    result = []
+    for name in names:
+        if name in seen:
+            continue
+        seen.add(name)
+        result.append(name)
+    return result
 
 
 def _load_sector_stock_pool_map(hot_sectors):
@@ -318,22 +354,13 @@ def _merge_universe_with_hot_pool(base_universe, hot_pool_universe):
     return merged
 
 
-def _load_sector_hints():
-    if not SECTOR_HINTS_PATH.exists():
-        return {}
-    try:
-        raw = json.loads(SECTOR_HINTS_PATH.read_text(encoding="utf-8"))
-    except Exception:
-        return {}
-
+def _load_sector_hints(hot_sectors):
     result = {}
-    if isinstance(raw, dict):
-        for sec, hints in raw.items():
-            if not isinstance(sec, str) or not isinstance(hints, list):
-                continue
-            cleaned = [str(x).strip() for x in hints if str(x).strip()]
-            if cleaned:
-                result[sec.strip()] = cleaned
+    for sec in hot_sectors or []:
+        name = str(sec or "").strip()
+        if not name:
+            continue
+        result[name] = [name]
     return result
 
 
@@ -644,7 +671,7 @@ def _evaluate_theme_candidate(item, hot_sectors, sector_hints, sector_code_map, 
 
 def build_strategy_candidates(args, log_path=None):
     hot_sectors = _load_hot_sectors(args.hot_sector_top_n)
-    sector_hints = _load_sector_hints()
+    sector_hints = _load_sector_hints(hot_sectors)
     sector_code_map = _load_sector_stock_pool_map(hot_sectors)
 
     today_text = datetime.datetime.now().strftime("%Y-%m-%d")

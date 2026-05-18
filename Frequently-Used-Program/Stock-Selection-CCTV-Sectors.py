@@ -1,6 +1,5 @@
 import argparse
 import datetime
-import json
 import re
 from pathlib import Path
 
@@ -12,51 +11,12 @@ TOP_N = 15
 MENTION_WEIGHT = 2
 PREVIEW_LEN = 120
 EMERGING_TOP_N = 40
-KEYWORD_CONFIG_PATH = "stock_data/cctv_sector_keywords.json"
-ACCEPTED_KEYWORD_PATH = "stock_data/cctv_keyword_accepts.json"
-STOCK_MAP_CONFIG_PATH = "stock_data/cctv_sector_stock_map.json"
 
 POSITIVE_WORDS = ["增长", "提升", "突破", "回暖", "提振", "改善", "加速", "扩产", "景气", "超预期", "利好"]
 NEGATIVE_WORDS = ["下滑", "下降", "承压", "收缩", "风险", "波动", "走弱", "放缓", "亏损", "违约", "不及预期"]
 NEUTRAL_WORDS = ["推进", "建设", "部署", "召开", "会议", "发布", "落实", "调研", "强调"]
 GENERIC_MACRO_WORDS = ["中国", "经济", "企业", "产业", "市场", "发展", "全国", "地方", "项目", "部门"]
 
-SECTOR_KEYWORDS = {
-    "人工智能": ["人工智能", "AI", "大模型", "多模态", "智能体", "AIGC", "端侧AI"],
-    "算力": ["算力", "智算", "液冷", "数据中心", "服务器", "GPU"],
-    "半导体": ["半导体", "芯片", "晶圆", "封测", "存储芯片", "光刻"],
-    "机器人": ["机器人", "人形机器人", "工业机器人", "服务机器人", "机器视觉", "灵巧手"],
-    "低空经济": ["低空经济", "无人机", "eVTOL", "飞行汽车", "通航", "低空物流"],
-    "新能源车": ["新能源车", "电动车", "锂电", "充电桩", "动力电池", "智能驾驶"],
-    "光伏": ["光伏", "组件", "硅料", "逆变器", "储能", "钙钛矿"],
-    "医药医疗": ["医药", "创新药", "医疗器械", "中药", "生物制药", "CXO"],
-    "军工": ["军工", "国防", "导弹", "舰船", "战机", "军贸"],
-    "数字经济": ["数字经济", "工业互联网", "信创", "数据要素", "云计算", "网络安全"],
-    "跨境出海": ["跨境电商", "出海", "海外订单", "海外市场", "一带一路"],
-    "国企改革": ["国企改革", "央企", "市值管理", "并购重组", "资产注入"],
-}
-
-DEFAULT_YEARLY_HOTSPOTS = {
-    "2026": {
-        "AI应用": ["AI手机", "AI PC", "AI眼镜", "智能终端", "端侧模型"],
-        "自主可控": ["国产替代", "自主可控", "国产算力", "国产软件", "信创"],
-    }
-}
-
-DEFAULT_SECTOR_STOCK_HINTS = {
-    "人工智能": ["智能", "软件", "科技", "信息"],
-    "算力": ["服务器", "数据", "通信", "光模块"],
-    "半导体": ["芯片", "半导体", "微电子", "集成电路"],
-    "机器人": ["机器人", "自动化", "机械", "传动"],
-    "低空经济": ["无人机", "航空", "航天", "飞行"],
-    "新能源车": ["汽车", "电池", "充电", "新能源"],
-    "光伏": ["光伏", "能源", "硅", "电力"],
-    "医药医疗": ["医药", "医疗", "生物", "制药"],
-    "军工": ["军工", "航天", "船舶", "电子"],
-    "数字经济": ["数字", "网络", "云", "数据"],
-    "跨境出海": ["跨境", "电商", "物流", "港口"],
-    "国企改革": ["国资", "集团", "央企", "控股"],
-}
 
 ROOT_DIR = Path(__file__).resolve().parents[1]
 DATA_DIR = ROOT_DIR / "stock_data"
@@ -68,20 +28,9 @@ def parse_args():
     parser.add_argument("--date", default="", help="指定日期，格式 YYYYMMDD")
     parser.add_argument("--top-n", type=int, default=TOP_N, help="控制台输出 Top N")
     parser.add_argument("--no-fallback", action="store_true", help="指定日期失败时不回退")
-    parser.add_argument("--keyword-config", default=KEYWORD_CONFIG_PATH)
-    parser.add_argument("--accepted-keywords", default=ACCEPTED_KEYWORD_PATH)
-    parser.add_argument("--stock-map-config", default=STOCK_MAP_CONFIG_PATH)
     parser.add_argument("--emerging-top-n", type=int, default=EMERGING_TOP_N)
     parser.add_argument("--backtest-days", type=int, default=0, help="回测最近N个交易信号日")
     parser.add_argument("--unit-days", type=int, default=1, help="按最近N天聚合输出榜单，默认1表示仅当日")
-    parser.add_argument("--auto-accept-keywords", action="store_true", help="自动将高置信候选词写入 accepted 关键词库")
-    parser.add_argument("--auto-accept-min-count", type=int, default=4, help="自动入库最低出现次数")
-    parser.add_argument(
-        "--auto-accept-min-confidence",
-        default="中",
-        choices=["低", "中", "高"],
-        help="自动入库最低置信度",
-    )
     parser.add_argument("--disable-extra-news", action="store_true", help="禁用补充资讯源抓取")
     parser.add_argument(
         "--extra-news-sources",
@@ -89,6 +38,7 @@ def parse_args():
         help="补充资讯源，逗号分隔，例如 cls,sina,em",
     )
     parser.add_argument("--extra-news-limit", type=int, default=120, help="每个补充源最多抓取条数")
+    parser.add_argument("--disable-sw-industry", action="store_true", help="禁用申万行业成分股映射")
     return parser.parse_args()
 
 
@@ -103,71 +53,85 @@ def _resolve_path(p):
     return path
 
 
-def _merge_keywords(base_map, overlay_map):
-    result = {k: list(v) for k, v in base_map.items()}
-    for sector, kws in overlay_map.items():
-        if not isinstance(sector, str) or not isinstance(kws, list):
+def _normalize_sw_code(code):
+    text = _safe_text(code)
+    if not text:
+        return ""
+    text = text.replace(".SI", "").replace(".si", "")
+    digits = "".join(ch for ch in text if ch.isdigit())
+    return digits
+
+
+def _load_sw_industry_index():
+    frames = []
+    for fn in (getattr(ak, "sw_index_third_info", None), getattr(ak, "sw_index_second_info", None), getattr(ak, "sw_index_first_info", None)):
+        if fn is None:
             continue
-        cleaned = [_safe_text(x) for x in kws if _safe_text(x)]
-        if not cleaned:
+        try:
+            df = fn()
+        except Exception as exc:
+            print(f"获取申万行业列表失败: {exc}")
             continue
-        existing = result.setdefault(_safe_text(sector), [])
-        seen = set(existing)
-        for kw in cleaned:
-            if kw not in seen:
-                existing.append(kw)
-                seen.add(kw)
-    return result
+        if df is None or df.empty:
+            continue
+        if not {"行业代码", "行业名称"}.issubset(df.columns):
+            continue
+        frames.append(df[["行业代码", "行业名称"]].copy())
+
+    if not frames:
+        return []
+
+    out = pd.concat(frames, ignore_index=True)
+    out["行业代码"] = out["行业代码"].astype(str).map(_normalize_sw_code)
+    out["行业名称"] = out["行业名称"].astype(str).map(_safe_text)
+    out = out[(out["行业代码"].str.len() == 6) & (out["行业名称"] != "")]
+    out = out.drop_duplicates(subset=["行业代码"], keep="first")
+    return out[["行业代码", "行业名称"]].to_dict("records")
 
 
-def _load_sector_keywords(config_path, accepted_path, year_str):
-    result = _merge_keywords(SECTOR_KEYWORDS, DEFAULT_YEARLY_HOTSPOTS.get(year_str, {}))
-
-    config_file = _resolve_path(config_path)
-    if config_file.exists():
-        try:
-            data = json.loads(config_file.read_text(encoding="utf-8"))
-            if isinstance(data, dict):
-                if "base" in data or "yearly" in data:
-                    result = _merge_keywords(result, data.get("base", {}))
-                    yearly = data.get("yearly", {})
-                    if isinstance(yearly, dict):
-                        result = _merge_keywords(result, yearly.get(year_str, {}))
-                else:
-                    result = _merge_keywords(result, data)
-            print(f"已加载关键词配置: {config_file} (year={year_str})")
-        except Exception as exc:
-            print(f"读取关键词配置失败: {exc}")
-
-    accepted_file = _resolve_path(accepted_path)
-    if accepted_file.exists():
-        try:
-            accepted = json.loads(accepted_file.read_text(encoding="utf-8"))
-            if isinstance(accepted, dict):
-                result = _merge_keywords(result, accepted.get("base", {}))
-                yearly = accepted.get("yearly", {})
-                if isinstance(yearly, dict):
-                    result = _merge_keywords(result, yearly.get(year_str, {}))
-                print(f"已应用人工确认关键词: {accepted_file} (year={year_str})")
-        except Exception as exc:
-            print(f"读取人工确认关键词失败: {exc}")
-
-    return result
+def _match_sw_industries(sector_name, keywords, sw_index):
+    if not sw_index:
+        return []
+    sector_text = _safe_text(sector_name)
+    kw_list = [k for k in (keywords or []) if _safe_text(k)]
+    matched = []
+    for item in sw_index:
+        name = _safe_text(item.get("行业名称"))
+        code = _safe_text(item.get("行业代码"))
+        if not name or not code:
+            continue
+        if sector_text and sector_text in name:
+            matched.append(code)
+            continue
+        for kw in kw_list:
+            if kw in name:
+                matched.append(code)
+                break
+    return matched
 
 
-def _load_sector_stock_hints(config_path):
-    result = {k: list(v) for k, v in DEFAULT_SECTOR_STOCK_HINTS.items()}
-    cfg = _resolve_path(config_path)
-    if not cfg.exists():
-        return result
+def _fetch_sw_industry_members(industry_code):
+    code = _normalize_sw_code(industry_code)
+    if not code:
+        return pd.DataFrame()
     try:
-        data = json.loads(cfg.read_text(encoding="utf-8"))
-        if isinstance(data, dict):
-            result = _merge_keywords(result, data)
-            print(f"已加载板块个股映射提示: {cfg}")
-    except Exception as exc:
-        print(f"读取板块个股映射提示失败: {exc}")
-    return result
+        df = ak.index_component_sw(code)
+    except Exception:
+        return pd.DataFrame()
+    if df is None or df.empty:
+        return pd.DataFrame()
+
+    code_col = "证券代码" if "证券代码" in df.columns else None
+    name_col = "证券名称" if "证券名称" in df.columns else None
+    if not code_col:
+        return pd.DataFrame()
+
+    out = pd.DataFrame({
+        "code": df[code_col].astype(str).str.strip(),
+        "name": df[name_col].astype(str).str.strip() if name_col else "",
+    })
+    out = out[out["code"].str.match(r"^\d{6}$", na=False)]
+    return out.reset_index(drop=True)
 
 
 def _extract_title(row):
@@ -428,7 +392,11 @@ def build_quality_metrics(date_str, raw_news_count, dedup_news_count, matched_df
 
 def extract_emerging_keywords(news_df, sector_keywords, top_n):
     known = {k.lower() for kws in sector_keywords.values() for k in kws}
-    stopwords = set(GENERIC_MACRO_WORDS + NEUTRAL_WORDS + ["新闻", "报道", "记者", "今天", "今年"])
+    stopwords = set(
+        GENERIC_MACRO_WORDS
+        + NEUTRAL_WORDS
+        + ["新闻", "报道", "记者", "今天", "今年", "昨日", "今日", "其中", "以及", "记者", "消息", "以来", "月份", "公司"]
+    )
     counter = {}
     for _, row in news_df.iterrows():
         txt = _get_news_text(row)
@@ -442,114 +410,17 @@ def extract_emerging_keywords(news_df, sector_keywords, top_n):
     return df.sort_values(["出现次数", "候选关键词"], ascending=[False, True]).head(top_n).reset_index(drop=True)
 
 
-def suggest_keyword_sector(emerging_df, sector_keywords):
-    if emerging_df.empty:
-        return pd.DataFrame()
-    suggestions = []
-    for _, row in emerging_df.iterrows():
-        kw = row["候选关键词"]
-        best_sector = ""
-        best_score = 0
-        for sec, kws in sector_keywords.items():
-            score = 0
-            for k in kws:
-                if kw in k or k in kw:
-                    score += 2
-                inter = len(set(kw) & set(k))
-                if inter >= 2:
-                    score += 1
-            if score > best_score:
-                best_sector = sec
-                best_score = score
-        suggestions.append({
-            "候选关键词": kw,
-            "出现次数": int(row["出现次数"]),
-            "建议板块": best_sector if best_score > 0 else "待人工判断",
-            "建议置信度": "高" if best_score >= 4 else ("中" if best_score >= 2 else "低"),
-        })
-    return pd.DataFrame(suggestions)
-
-
-def _load_or_init_accepted_config(path_obj):
-    if path_obj.exists():
-        try:
-            data = json.loads(path_obj.read_text(encoding="utf-8"))
-            if isinstance(data, dict):
-                data.setdefault("base", {})
-                data.setdefault("yearly", {})
-                if not isinstance(data["base"], dict):
-                    data["base"] = {}
-                if not isinstance(data["yearly"], dict):
-                    data["yearly"] = {}
-                return data
-        except Exception:
-            pass
-    return {"base": {}, "yearly": {}}
-
-
-def _auto_accept_keywords(suggestion_df, accepted_path, year_str, min_count=4, min_confidence="中"):
-    if suggestion_df is None or suggestion_df.empty:
-        return []
-
-    conf_rank = {"低": 1, "中": 2, "高": 3}
-    min_rank = conf_rank.get(min_confidence, 2)
-
-    accepted_file = _resolve_path(accepted_path)
-    accepted_file.parent.mkdir(parents=True, exist_ok=True)
-    cfg = _load_or_init_accepted_config(accepted_file)
-
-    yearly = cfg.setdefault("yearly", {})
-    year_map = yearly.setdefault(str(year_str), {})
-    if not isinstance(year_map, dict):
-        year_map = {}
-        yearly[str(year_str)] = year_map
-
-    existing_all = set()
-    for sec, kws in cfg.get("base", {}).items():
-        if isinstance(sec, str) and isinstance(kws, list):
-            for kw in kws:
-                if isinstance(kw, str) and kw.strip():
-                    existing_all.add(kw.strip().lower())
-    for ymap in cfg.get("yearly", {}).values():
-        if not isinstance(ymap, dict):
+def _build_auto_sector_keywords(news_df, top_n):
+    sector_keywords = {}
+    sw_index = _load_sw_industry_index()
+    for item in sw_index:
+        name = _safe_text(item.get("行业名称"))
+        if not name or name in sector_keywords:
             continue
-        for sec, kws in ymap.items():
-            if isinstance(sec, str) and isinstance(kws, list):
-                for kw in kws:
-                    if isinstance(kw, str) and kw.strip():
-                        existing_all.add(kw.strip().lower())
+        sector_keywords[name] = [name]
 
-    added = []
-    for _, row in suggestion_df.iterrows():
-        kw = _safe_text(row.get("候选关键词", ""))
-        sec = _safe_text(row.get("建议板块", ""))
-        try:
-            cnt = int(row.get("出现次数", 0))
-        except Exception:
-            cnt = 0
-        conf = _safe_text(row.get("建议置信度", "低")) or "低"
-
-        if not kw or not sec or sec == "待人工判断":
-            continue
-        if cnt < max(int(min_count), 1):
-            continue
-        if conf_rank.get(conf, 1) < min_rank:
-            continue
-        if kw.lower() in existing_all:
-            continue
-
-        sec_list = year_map.setdefault(sec, [])
-        if not isinstance(sec_list, list):
-            sec_list = []
-            year_map[sec] = sec_list
-        if kw not in sec_list:
-            sec_list.append(kw)
-            added.append((sec, kw, cnt, conf))
-            existing_all.add(kw.lower())
-
-    if added:
-        accepted_file.write_text(json.dumps(cfg, ensure_ascii=False, indent=2), encoding="utf-8")
-    return added
+    emerging_df = extract_emerging_keywords(news_df, sector_keywords, top_n)
+    return sector_keywords, emerging_df
 
 
 def enrich_with_prev_change(date_str, sector_df):
@@ -645,7 +516,7 @@ def _confidence_tier(heat_score, mention, sentiment):
     return "观察"
 
 
-def build_sector_stock_pool(date_str, sector_df, stock_hints):
+def build_sector_stock_pool(date_str, sector_df, stock_hints, sector_keywords, *, use_sw_industry=True):
     if sector_df.empty:
         return pd.DataFrame()
     try:
@@ -658,27 +529,73 @@ def build_sector_stock_pool(date_str, sector_df, stock_hints):
 
     tmp = base_df.copy()
     tmp["name"] = tmp["name"].astype(str)
+
+    sw_index = _load_sw_industry_index() if use_sw_industry else []
+    sw_member_cache = {}
+
     rows = []
     for _, sec_row in sector_df.iterrows():
         sector = sec_row["板块"]
         hints = stock_hints.get(sector, [])
-        if not hints:
+        keywords = sector_keywords.get(sector, [])
+        sw_matched = _match_sw_industries(sector, keywords, sw_index)
+
+        if not hints and not sw_matched:
+            hints = [k for k in keywords if _safe_text(k) and 1 < len(_safe_text(k)) <= 6]
+        if not hints and not sw_matched:
             continue
         mask = pd.Series(False, index=tmp.index)
         for h in hints:
             mask = mask | tmp["name"].str.contains(re.escape(h), case=False, na=False)
         cand = tmp[mask]
+
         tier = _confidence_tier(float(sec_row["热度分"]), int(sec_row["提及次数"]), float(sec_row["舆论分"]))
+
+        matched_rows = {}
         for _, s in cand.iterrows():
-            rows.append({
+            code = str(s["code"]).strip()
+            if not code:
+                continue
+            matched_rows[code] = {
                 "日期": date_str,
                 "板块": sector,
                 "热度分": sec_row["热度分"],
                 "置信度": tier,
-                "股票代码": s["code"],
+                "股票代码": code,
                 "股票名称": s["name"],
                 "匹配线索": "|".join(hints[:4]),
-            })
+            }
+
+        for ind_code in sw_matched:
+            if ind_code not in sw_member_cache:
+                sw_member_cache[ind_code] = _fetch_sw_industry_members(ind_code)
+            df = sw_member_cache[ind_code]
+            if df is None or df.empty:
+                continue
+            for _, s in df.iterrows():
+                code = str(s["code"]).strip()
+                if not code:
+                    continue
+                name = str(s.get("name", "") or "")
+                entry = matched_rows.get(code)
+                if entry is None:
+                    entry = {
+                        "日期": date_str,
+                        "板块": sector,
+                        "热度分": sec_row["热度分"],
+                        "置信度": tier,
+                        "股票代码": code,
+                        "股票名称": name,
+                        "匹配线索": "",
+                    }
+                    matched_rows[code] = entry
+                tags = [t for t in entry["匹配线索"].split("|") if t]
+                tag = f"SW:{ind_code}"
+                if tag not in tags:
+                    tags.append(tag)
+                entry["匹配线索"] = "|".join(tags)
+
+        rows.extend(matched_rows.values())
     return pd.DataFrame(rows)
 
 
@@ -725,7 +642,7 @@ def run_backtest(backtest_days=5):
     return summary
 
 
-def write_markdown_report(date_str, sector_df, quality_df, emerging_df, suggestion_df, top_n, unit_df=None, used_days=None):
+def write_markdown_report(date_str, sector_df, quality_df, emerging_df, top_n, unit_df=None, used_days=None):
     path = DATA_DIR / f"CCTV-Hot-Sectors-{date_str}.md"
     q = quality_df.iloc[0].to_dict() if not quality_df.empty else {}
     lines = [
@@ -760,10 +677,6 @@ def write_markdown_report(date_str, sector_df, quality_df, emerging_df, suggesti
         lines += ["", "## 新热点候选词", "", "| 词 | 次数 |", "|---|---:|"]
         for _, r in emerging_df.head(20).iterrows():
             lines.append(f"| {r['候选关键词']} | {int(r['出现次数'])} |")
-    if not suggestion_df.empty:
-        lines += ["", "## 候选词归类建议", "", "| 词 | 建议板块 | 置信度 |", "|---|---|---|"]
-        for _, r in suggestion_df.head(20).iterrows():
-            lines.append(f"| {r['候选关键词']} | {r['建议板块']} | {r['建议置信度']} |")
     path.write_text("\n".join(lines), encoding="utf-8")
     return path
 
@@ -773,10 +686,6 @@ def main():
     if args.unit_days <= 0:
         print("--unit-days 必须 >= 1")
         return
-    year = args.date[:4] if args.date else datetime.date.today().strftime("%Y")
-    sector_keywords = _load_sector_keywords(args.keyword_config, args.accepted_keywords, year)
-    stock_hints = _load_sector_stock_hints(args.stock_map_config)
-
     date_str, news_df, raw_news_count = fetch_cctv_news(args.date, fallback=(not args.no_fallback))
     if news_df.empty:
         print("未获取到可用 CCTV 新闻，退出")
@@ -795,41 +704,26 @@ def main():
             extra_news_df.to_csv(extra_path, index=False, encoding="utf-8-sig")
             print(f"已保存: {extra_path}")
 
-    sector_df, matched_df, _ = build_sector_heat(news_df, sector_keywords)
+    sector_keywords, emerging_df = _build_auto_sector_keywords(keyword_news_df, args.emerging_top_n)
+    sector_df, matched_df, _ = build_sector_heat(keyword_news_df, sector_keywords)
     if sector_df.empty:
         print("未匹配到板块关键词，可扩展词库")
         return
 
     sector_df = enrich_with_prev_change(date_str, sector_df)
-    emerging_df = extract_emerging_keywords(keyword_news_df, sector_keywords, args.emerging_top_n)
-    suggestion_df = suggest_keyword_sector(emerging_df, sector_keywords)
-
-    auto_added = []
-    if args.auto_accept_keywords:
-        auto_added = _auto_accept_keywords(
-            suggestion_df,
-            args.accepted_keywords,
-            year,
-            min_count=args.auto_accept_min_count,
-            min_confidence=args.auto_accept_min_confidence,
-        )
-        if auto_added:
-            print(
-                f"自动更新关键词完成: 新增{len(auto_added)}个（min_count={args.auto_accept_min_count}, min_conf={args.auto_accept_min_confidence}）"
-            )
-            preview = auto_added[:15]
-            for sec, kw, cnt, conf in preview:
-                print(f"  + {sec}: {kw} (次数={cnt}, 置信度={conf})")
-        else:
-            print("自动更新关键词: 本次无满足条件的新词")
 
     quality_df = build_quality_metrics(date_str, raw_news_count, len(news_df), matched_df, sector_df)
-    stock_pool_df = build_sector_stock_pool(date_str, sector_df, stock_hints)
+    stock_pool_df = build_sector_stock_pool(
+        date_str,
+        sector_df,
+        {},
+        sector_keywords,
+        use_sw_industry=(not args.disable_sw_industry),
+    )
 
     hot_path = DATA_DIR / f"CCTV-Hot-Sectors-{date_str}.csv"
     detail_path = DATA_DIR / f"CCTV-Sector-News-Matched-{date_str}.csv"
     emerging_path = DATA_DIR / f"CCTV-Emerging-Keywords-{date_str}.csv"
-    suggest_path = DATA_DIR / f"CCTV-Emerging-Keyword-Suggestions-{date_str}.csv"
     quality_path = DATA_DIR / f"CCTV-Quality-Metrics-{date_str}.csv"
     stock_pool_path = DATA_DIR / f"CCTV-Sector-Stock-Pool-{date_str}.csv"
 
@@ -838,8 +732,6 @@ def main():
     quality_df.to_csv(quality_path, index=False, encoding="utf-8-sig")
     if not emerging_df.empty:
         emerging_df.to_csv(emerging_path, index=False, encoding="utf-8-sig")
-    if not suggestion_df.empty:
-        suggestion_df.to_csv(suggest_path, index=False, encoding="utf-8-sig")
     if not stock_pool_df.empty:
         stock_pool_df.to_csv(stock_pool_path, index=False, encoding="utf-8-sig")
 
@@ -864,7 +756,6 @@ def main():
         sector_df,
         quality_df,
         emerging_df,
-        suggestion_df,
         args.top_n,
         unit_df=unit_df,
         used_days=used_days,
@@ -886,8 +777,6 @@ def main():
         print(f"已保存: {stock_pool_path}")
     if not emerging_df.empty:
         print(f"已保存: {emerging_path}")
-    if not suggestion_df.empty:
-        print(f"已保存: {suggest_path}")
     print(f"已保存: {report_path}")
     if unit_board_path is not None:
         print(f"已保存: {unit_board_path}")

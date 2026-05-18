@@ -14,6 +14,8 @@ import matplotlib.pyplot as plt
 PRICE_UPPER_LIMIT = 30  # 股价上限
 PRICE_LOWER_LIMIT = 5   # 股价下限
 DEBT_ASSET_RATIO_LIMIT = 70  # 资产负债率上限
+BOll_STD_MULTIPLIER = 2.0  # 布林带标准差倍数，调大后筛选更严格
+BOLL_NEAR_LOWER_MARGIN = 1.005  # “接近下轨”的容差，调小后筛选更严格
 CURRENT_YEAR = datetime.now().year
 LAST_YEAR = CURRENT_YEAR - 1
 
@@ -510,13 +512,13 @@ for fncode in final_candidate_codes:
         result_df['MA20'] = result_df['close'].rolling(window=20).mean()
         result_df['STD20'] = result_df['close'].rolling(window=20).std()
         
-        # 90%概率对应约1.645倍标准差
-        k = 1.645
+        # 95%概率对应约2倍标准差；比默认 1.645 更严格
+        k = BOll_STD_MULTIPLIER
         result_df['Upper'] = result_df['MA20'] + k * result_df['STD20']
         result_df['Lower'] = result_df['MA20'] - k * result_df['STD20']
         
         latest = result_df.iloc[-1]
-        selected_zone_mask = result_df['close'] <= result_df['Lower'] * 1.015
+        selected_zone_mask = result_df['close'] <= result_df['Lower'] * BOLL_NEAR_LOWER_MARGIN
         oversold_mask = result_df['close'] < result_df['Lower']
         oversold_streak = _count_trailing_true(oversold_mask)
         selected_zone_streak = _count_trailing_true(selected_zone_mask)
@@ -529,17 +531,17 @@ for fncode in final_candidate_codes:
                     "本日不重复触发".strip()
                 )
             else:
-                print(f"{fncode} {stock_name} 价格低于布林带下轨 (90%概率)，超卖".strip())
+                print(f"{fncode} {stock_name} 价格低于布林带下轨 (95%概率)，超卖".strip())
                 boll_selected_codes.append(fncode)
                 selected = True
-        elif latest['close'] <= latest['Lower'] * 1.015:
+        elif latest['close'] <= latest['Lower'] * BOLL_NEAR_LOWER_MARGIN:
             if selected_zone_streak > 1:
                 print(
                     f"{fncode} {stock_name} 连续{selected_zone_streak}日处于下轨附近，"
                     "本日不重复触发".strip()
                 )
             else:
-                print(f"{fncode} {stock_name} 价格接近布林带下轨 (90%概率)，关注".strip())
+                print(f"{fncode} {stock_name} 价格接近布林带下轨 (95%概率)，关注".strip())
                 boll_selected_codes.append(fncode)
                 selected = True
 

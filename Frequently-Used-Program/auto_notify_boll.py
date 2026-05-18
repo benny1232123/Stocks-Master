@@ -1,5 +1,5 @@
 # --- 新增：宏观新闻多日趋势 ---
-def _build_macro_news_trend_summary(window_days=3, top_n=0):
+def _build_macro_news_trend_summary(window_days=3, top_n=0, *, auto_fetch=True):
     """
     汇总最近 window_days 天的宏观新闻风险事件趋势。
     """
@@ -7,50 +7,29 @@ def _build_macro_news_trend_summary(window_days=3, top_n=0):
     news_files = []
     for i in range(window_days):
         d = today - timedelta(days=i)
-        f = _find_latest_news_file(d.strftime("%Y%m%d"))
+        date_str = d.strftime("%Y%m%d")
+        f = _ensure_news_file(date_str, auto_fetch=auto_fetch)
         if f and f.exists():
-            news_files.append((f, d.strftime("%Y%m%d")))
+            news_files.append((f, date_str))
     if not news_files:
         return "\n- 宏观新闻趋势: 近几天无新闻文件"
 
-    all_events = []
-    for f, date_str in news_files:
-        try:
-            with f.open("r", encoding="utf-8-sig", newline="") as csvfile:
-                reader = csv.DictReader(csvfile)
-                for row in reader:
-                    title = (row.get("title") or row.get("标题") or "").strip()
-                    content = (row.get("content") or row.get("内容") or "").strip()
-                    text = f"{title} {content}".lower()
-                    if not text.strip():
-                        continue
-                    # 与单日一致的风险关键词
-                    risk_rules = {
-                        "地缘冲突": ["空袭", "冲突", "导弹", "军事", "战机", "袭击", "战争", "中东", "霍尔木兹"],
-                        "能源扰动": ["原油", "油价", "天然气", "重水", "核设施", "能源", "海峡"],
-                        "航运外需": ["航运", "港口", "外贸", "出口", "制裁", "关税", "供应链", "跨境"],
-                        "风险偏好": ["停摆", "大选", "不确定", "风险", "波动", "反击", "升级"],
-                    }
-                    easing_words = ["谈判", "缓和", "停火", "协议", "会谈"]
-                    matched_tags = []
-                    risk_score = 0
-                    for tag, words in risk_rules.items():
-                        hit = sum(1 for w in words if w.lower() in text)
-                        if hit > 0:
-                            matched_tags.append(tag)
-                            risk_score += hit
-                    if risk_score == 0:
-                        continue
-                    easing_hit = sum(1 for w in easing_words if w.lower() in text)
-                    risk_score = max(risk_score - easing_hit, 1)
-                    all_events.append({
-                        "date": date_str,
-                        "title": title or "(无标题)",
-                        "tags": matched_tags,
-                        "risk_score": risk_score,
-                    })
-        except Exception:
-            continue
+    try:
+        burst_min = max(int(os.getenv("MACRO_RISK_BURST_MIN_COUNT", "3").strip() or "3"), 1)
+    except Exception:
+        burst_min = 3
+    try:
+        burst_top_n = max(int(os.getenv("MACRO_RISK_BURST_TOP_N", "10").strip() or "10"), 1)
+    except Exception:
+        burst_top_n = 10
+    burst_tokens = _extract_burst_tokens(news_files, min_count=burst_min, top_n=burst_top_n)
+    if not burst_tokens:
+        burst_tokens = set(MACRO_RISK_SIGNAL_FRAGMENTS)
+    all_events = _collect_macro_risk_events(
+        news_files,
+        burst_tokens,
+        auto_mode=True,
+    )
     if not all_events:
         return "\n- 宏观新闻趋势: 近几天无高/中风险新闻"
     # 按日期降序、风险分排序
@@ -70,6 +49,7 @@ def _build_macro_news_trend_summary(window_days=3, top_n=0):
         lines.append(f"    [{level}] {item['title']} | 影响链条: {tags}")
         count += 1
     return "\n".join(lines)
+
 import csv
 import argparse
 import json
@@ -102,12 +82,374 @@ CCTV_SCRIPT_PATH = ROOT_DIR / "Frequently-Used-Program" / "Stock-Selection-CCTV-
 RELATIVITY_SCRIPT_PATH = ROOT_DIR / "Frequently-Used-Program" / "Stock-Selection-Relativity.py"
 CLEANUP_SCRIPT_PATH = ROOT_DIR / "Frequently-Used-Program" / "cleanup_stock_data.py"
 ARCHIVE_SCRIPT_PATH = ROOT_DIR / "Frequently-Used-Program" / "archive_stock_data.py"
+COMPRESS_SCRIPT_PATH = ROOT_DIR / "Frequently-Used-Program" / "compress_stock_data.py"
 STOCK_DATA_DIR = ROOT_DIR / "stock_data"
 LOG_DIR = STOCK_DATA_DIR / "auto_logs"
-PIPELINE_TOTAL_STEPS = 7
+PIPELINE_TOTAL_STEPS = 8
 DB_PATH = STOCK_DATA_DIR / "stocks_data.db"
 RUN_LOG_FILE = None
 RUN_LOG_LOCK = threading.Lock()
+MACRO_STOPWORDS = {
+    "中国",
+    "经济",
+    "市场",
+    "企业",
+    "行业",
+    "部门",
+    "地方",
+    "今年",
+    "今日",
+    "昨天",
+    "消息",
+    "报道",
+    "记者",
+    "相关",
+    "持续",
+    "推进",
+    "表示",
+}
+
+MACRO_NOISE_TOKENS = {
+    "报道",
+    "日报道",
+    "日称",
+    "日表示",
+    "今日",
+    "今天",
+    "昨日",
+    "昨天",
+    "其中",
+    "此外",
+    "与此同时",
+    "截至",
+    "目前",
+    "近日",
+    "今年以来",
+    "今年前",
+    "今年一季度",
+    "一季度",
+    "月份",
+    "个月",
+    "亿元",
+    "万户",
+    "公里",
+    "百分点",
+    "同比增长",
+    "增长",
+    "发展",
+    "合作",
+    "能力",
+    "基础设施",
+    "农业",
+    "教育",
+    "集群",
+    "战略",
+    "推进",
+    "表示",
+    "以上",
+    "时期",
+    "会议指出",
+    "人工智能",
+    "十五五",
+    "粤港澳大湾区",
+    "个万亿级产业",
+    "开局之年",
+    "规划纲要提出",
+    "产业赋能和场",
+    "习近平指出",
+    "习近平在人民",
+    "习近平强调",
+    "第十届中俄博",
+    "义新欧",
+}
+
+MACRO_RISK_SIGNAL_FRAGMENTS = (
+    "爆发",
+    "袭击",
+    "空袭",
+    "制裁",
+    "升级",
+    "冲突",
+    "断供",
+    "中断",
+    "停摆",
+    "危机",
+    "紧张",
+    "动荡",
+    "禁运",
+    "关闭",
+    "撤离",
+    "波动",
+    "飙升",
+    "暴跌",
+    "谈判",
+    "缓和",
+    "停火",
+    "协议",
+    "会谈",
+    "战争",
+    "军事",
+    "战机",
+    "导弹",
+    "中东",
+    "霍尔木兹",
+    "原油",
+    "油价",
+    "天然气",
+    "能源",
+    "海峡",
+    "核设施",
+    "航运",
+    "港口",
+    "外贸",
+    "出口",
+    "供应链",
+    "跨境",
+    "关税",
+    "不确定",
+    "风险",
+    "大选",
+    "反击",
+)
+
+MACRO_RISK_STRONG_FRAGMENTS = frozenset({
+    "爆发",
+    "袭击",
+    "空袭",
+    "制裁",
+    "冲突",
+    "断供",
+    "中断",
+    "停摆",
+    "危机",
+    "紧张",
+    "动荡",
+    "禁运",
+    "关闭",
+    "撤离",
+    "飙升",
+    "暴跌",
+    "战争",
+    "军事",
+    "战机",
+    "导弹",
+    "反击",
+    "核设施",
+})
+
+MACRO_RISK_SOFT_FRAGMENTS = frozenset({
+    "升级",
+    "谈判",
+    "会谈",
+    "协议",
+    "能源",
+    "原油",
+    "油价",
+    "天然气",
+    "供应链",
+    "跨境",
+    "外贸",
+    "出口",
+    "关税",
+    "波动",
+})
+
+MACRO_RISK_POSITIVE_HINTS = (
+    "高质量发展",
+    "赋能",
+    "提质",
+    "提效",
+    "推进",
+    "促进",
+    "优化",
+    "改善",
+    "增长",
+    "回升",
+    "回暖",
+    "稳住",
+    "扩大",
+    "加强",
+    "提升",
+    "升级改造",
+    "建设",
+    "投产",
+    "开工",
+    "竣工",
+    "发布",
+    "出台",
+    "支持",
+    "发展",
+    "创新",
+    "合作",
+    "达成",
+    "签约",
+    "获批",
+    "实现",
+    "完成",
+    "落地",
+    "开幕",
+    "启动",
+    "深化",
+)
+
+
+def _is_macro_noise_token(token):
+    return str(token).strip() in MACRO_NOISE_TOKENS
+
+
+CCTV_NOISE_SECTORS = frozenset({
+    "月份",
+    "其中",
+    "今年以来",
+    "集团",
+    "十五五",
+    "今年",
+    "今日",
+    "昨日",
+})
+
+
+def _is_cctv_noise_sector(name):
+    text = str(name or "").strip()
+    if not text:
+        return True
+    if text.startswith("热词:") or "热词" in text:
+        return True
+    return text in CCTV_NOISE_SECTORS
+
+
+def _is_macro_risk_term_allowed(term):
+    text = str(term or "").strip()
+    if not text or len(text) > 12:
+        return False
+    if text in MACRO_STOPWORDS or _is_macro_noise_token(text):
+        return False
+    return any(fragment in text for fragment in MACRO_RISK_SIGNAL_FRAGMENTS)
+
+
+def _has_positive_macro_context(text):
+    return any(hint in text for hint in MACRO_RISK_POSITIVE_HINTS)
+
+
+# 联播快讯为多条简讯拼盘，标题固定，不参与宏观风险命中与 burst 统计
+MACRO_RISK_EXCLUDED_NEWS_TITLES = frozenset({"国际联播快讯", "国内联播快讯"})
+
+
+def _is_macro_risk_excluded_news_title(title):
+    return (title or "").strip() in MACRO_RISK_EXCLUDED_NEWS_TITLES
+
+
+def _clean_macro_terms(values):
+    cleaned = []
+    seen = set()
+    for value in values or []:
+        term = str(value).strip()
+        if not term or term in seen or not _is_macro_risk_term_allowed(term):
+            continue
+        cleaned.append(term)
+        seen.add(term)
+    return cleaned
+
+
+def _nlp_level_to_score(level):
+    if level == "high":
+        return 4
+    if level == "medium":
+        return 2
+    return 0
+
+
+@lru_cache(maxsize=1)
+def _get_nlp_classifier():
+    if os.getenv("MACRO_RISK_NLP_ENABLE", "0").strip() != "1":
+        return None
+    try:
+        from transformers import pipeline
+    except Exception:
+        return None
+
+    model_name = os.getenv("MACRO_RISK_NLP_MODEL", "MoritzLaurer/mDeBERTa-v3-base-mnli-xnli").strip()
+    if not model_name:
+        model_name = "MoritzLaurer/mDeBERTa-v3-base-mnli-xnli"
+    try:
+        device = int(os.getenv("MACRO_RISK_NLP_DEVICE", "-1").strip() or "-1")
+    except Exception:
+        device = -1
+    return pipeline("zero-shot-classification", model=model_name, device=device)
+
+
+def _nlp_risk_classify(text):
+    classifier = _get_nlp_classifier()
+    if classifier is None:
+        return None
+    labels = ["高风险", "中风险", "低风险"]
+    template = os.getenv("MACRO_RISK_NLP_TEMPLATE", "这条新闻的宏观风险属于{}。 ").strip()
+    if not template:
+        template = "这条新闻的宏观风险属于{}。"
+    try:
+        result = classifier(text, labels, hypothesis_template=template)
+    except Exception:
+        return None
+
+    ranked_labels = result.get("labels") or []
+    ranked_scores = result.get("scores") or []
+    if not ranked_labels or not ranked_scores:
+        return None
+
+    top_label = ranked_labels[0]
+    try:
+        top_score = float(ranked_scores[0])
+    except Exception:
+        top_score = 0.0
+    try:
+        high_threshold = float(os.getenv("MACRO_RISK_NLP_HIGH_THRESHOLD", "0.55").strip() or "0.55")
+    except Exception:
+        high_threshold = 0.55
+    try:
+        medium_threshold = float(os.getenv("MACRO_RISK_NLP_MEDIUM_THRESHOLD", "0.45").strip() or "0.45")
+    except Exception:
+        medium_threshold = 0.45
+
+    if os.getenv("MACRO_RISK_NLP_DEBUG", "0").strip() == "1":
+        try:
+            dbg_scores = ", ".join(f"{lab}:{score:.3f}" for lab, score in zip(ranked_labels, ranked_scores))
+        except Exception:
+            dbg_scores = ""
+        print(f"[NLP] {top_label}:{top_score:.3f} | {dbg_scores}")
+
+    if top_label == "高风险" and top_score >= high_threshold:
+        return "high", top_score
+    if top_label == "中风险" and top_score >= medium_threshold:
+        return "medium", top_score
+    if top_label == "低风险" and top_score >= medium_threshold:
+        return "low", top_score
+    return None
+
+
+def _extract_burst_tokens(news_files, *, min_count=3, top_n=10):
+    counts = {}
+    for f, _date_str in news_files:
+        try:
+            with f.open("r", encoding="utf-8-sig", newline="") as csvfile:
+                reader = csv.DictReader(csvfile)
+                for row in reader:
+                    title = (row.get("title") or row.get("标题") or "").strip()
+                    content = (row.get("content") or row.get("内容") or "").strip()
+                    if _is_macro_risk_excluded_news_title(title):
+                        continue
+                    text = f"{title} {content}"
+                    for token in _extract_macro_tokens(text):
+                        if not _is_macro_risk_term_allowed(token):
+                            continue
+                        counts[token] = counts.get(token, 0) + 1
+        except Exception:
+            continue
+
+    items = [(k, v) for k, v in counts.items() if v >= min_count]
+    items.sort(key=lambda x: (-x[1], x[0]))
+    if top_n > 0:
+        items = items[:top_n]
+    return {k for k, _v in items}
 
 
 def _append_log(log_lines, message):
@@ -130,6 +472,91 @@ def _stage_tag(step_index, stage_name, *, percent=None, total_steps=PIPELINE_TOT
     pct = int(percent) if percent is not None else int(round(safe_step * 100 / total_steps))
     pct = max(0, min(100, pct))
     return f"[{pct:>3d}%][{safe_step}/{total_steps} {stage_name}]"
+
+
+def _extract_macro_tokens(text):
+    return re.findall(r"[\u4e00-\u9fff]{2,6}", text)
+
+
+def _collect_macro_risk_events(
+    news_files,
+    burst_tokens,
+    *,
+    auto_mode=True,
+):
+    events = []
+    nlp_only = os.getenv("MACRO_RISK_NLP_ONLY", "0").strip() == "1"
+    nlp_enabled = os.getenv("MACRO_RISK_NLP_ENABLE", "0").strip() == "1" or nlp_only
+    nlp_mode = os.getenv("MACRO_RISK_NLP_MODE", "hit-only").strip().lower() or "hit-only"
+
+    for f, date_str in news_files:
+        try:
+            with f.open("r", encoding="utf-8-sig", newline="") as csvfile:
+                reader = csv.DictReader(csvfile)
+                for row in reader:
+                    title = (row.get("title") or row.get("标题") or "").strip()
+                    content = (row.get("content") or row.get("内容") or "").strip()
+                    if _is_macro_risk_excluded_news_title(title):
+                        continue
+                    text = f"{title} {content}".lower()
+                    if not text.strip():
+                        continue
+
+                    matched_tags = []
+                    risk_score = 0
+                    nlp_result = None
+                    if nlp_enabled and (nlp_only or nlp_mode == "all"):
+                        nlp_result = _nlp_risk_classify(text)
+
+                    burst_hit_tokens = []
+                    burst_hit_tokens = [tok for tok in burst_tokens if tok.lower() in text]
+                    if burst_hit_tokens:
+                        uniq_hits = list(dict.fromkeys(burst_hit_tokens))
+                        strong_hit = any(tok in MACRO_RISK_STRONG_FRAGMENTS for tok in uniq_hits)
+                        soft_hits = [tok for tok in uniq_hits if tok in MACRO_RISK_SOFT_FRAGMENTS]
+                        if (not strong_hit) and soft_hits:
+                            if _has_positive_macro_context(text):
+                                continue
+                            if len(soft_hits) < 2:
+                                continue
+                        risk_score = len(uniq_hits)
+                        matched_tags = uniq_hits[:3]
+
+                    if risk_score == 0 and not nlp_result:
+                        continue
+
+                    if nlp_result:
+                        nlp_level, _nlp_score = nlp_result
+                        nlp_score = _nlp_level_to_score(nlp_level)
+                        if nlp_score > 0:
+                            risk_score = max(risk_score, nlp_score)
+                            if "NLP" not in matched_tags:
+                                matched_tags.append("NLP")
+
+                    pre_easing_score = risk_score
+                    risk_score = max(risk_score, 1)
+
+                    if os.getenv("MACRO_RISK_DEBUG", "0").strip() == "1":
+                        try:
+                            print(
+                                f"[MACRO-DEBUG] date={date_str} title={title!r} pre_score={pre_easing_score} final_score={risk_score} tags={matched_tags} nlp={nlp_result}"
+                            )
+                        except Exception:
+                            pass
+
+                    events.append(
+                        {
+                            "date": date_str,
+                            "title": title or "(无标题)",
+                            "tags": matched_tags,
+                            "risk_score": risk_score,
+                        }
+                    )
+
+        except Exception:
+            continue
+
+    return events
 
 
 def _run_command_with_live_output(
@@ -630,9 +1057,28 @@ def _macro_risk_level(macro_risk_summary):
         return "low"
     high_hits = macro_risk_summary.count("[高]")
     medium_hits = macro_risk_summary.count("[中]")
-    if high_hits >= 2:
+    try:
+        high_threshold = max(int(os.getenv("MACRO_RISK_HIGH_HITS", "2").strip() or "2"), 1)
+    except Exception:
+        high_threshold = 2
+    try:
+        medium_threshold = max(int(os.getenv("MACRO_RISK_MEDIUM_HITS", "2").strip() or "2"), 1)
+    except Exception:
+        medium_threshold = 2
+    try:
+        medium_high_threshold = max(int(os.getenv("MACRO_RISK_MEDIUM_HIGH_HITS", "1").strip() or "1"), 1)
+    except Exception:
+        medium_high_threshold = 1
+
+    count_mode = os.getenv("MACRO_RISK_COUNT_MODE", "entry").strip().lower() or "entry"
+    if count_mode == "day":
+        count_mode = "entry"
+    if count_mode not in {"avg", "entry"}:
+        count_mode = "entry"
+
+    if high_hits >= high_threshold:
         return "high"
-    if high_hits >= 1 or medium_hits >= 2:
+    if high_hits >= medium_high_threshold or medium_hits >= medium_threshold:
         return "medium"
     return "low"
 
@@ -777,6 +1223,7 @@ def _build_strategy_allocation(regime, *, boll_rows_count, theme_rows_count, has
 
 
 def _build_market_and_strategy_summary(*, boll_rows_count, theme_rows_count, macro_risk_summary, cctv_summary, has_cctv_hot):
+    simple_report = os.getenv("REPORT_SIMPLE", "1").strip() != "0"
     end_date_text = datetime.now().strftime("%Y-%m-%d")
     start_date_text = (datetime.strptime(end_date_text, "%Y-%m-%d") - timedelta(days=100)).strftime("%Y-%m-%d")
 
@@ -821,6 +1268,7 @@ def _build_market_and_strategy_summary(*, boll_rows_count, theme_rows_count, mac
         "- 数据源: 回测同口径指数日线（akshare-Eastmoney主源 + Sina回退；上证 sh000001 + 沪深300 sh000300）",
         f"- 宏观风险: {macro_level}",
         f"- 市场判定: {regime}",
+        f"- {_suggest_holding_days(regime, macro_level)}",
         f"- 信号补充: Boll命中数={boll_rows_count} 题材候选数={theme_rows_count} CCTV热点={'有' if has_cctv_hot else '无'}",
     ]
 
@@ -838,23 +1286,25 @@ def _build_market_and_strategy_summary(*, boll_rows_count, theme_rows_count, mac
             f"20日{_fmt_pct(hs300_metrics.get('ret_20d'), signed=True)}"
         )
 
-    explain = [
-        "\n## 4) 每日策略如何得到（可复盘）",
-        "1. 输入数据:",
-        f"- 指数与波动: 上证5日={_fmt_pct(sh_ret_5, signed=True)} 上证20日={_fmt_pct(sh_ret_20, signed=True)} 波动20日={_fmt_pct(sh_vol_20)}",
-        f"- 风险与热度: 宏观风险={macro_level} CCTV热点={'有' if has_cctv_hot else '无'}",
-        f"- 候选可用性: Boll={boll_rows_count} Theme={theme_rows_count}",
-        "2. 市场判定规则:",
-        "- 规则A: 若宏观风险=high，则直接切到下行防御。",
-        "- 规则B: 否则若上证20日>=4% 且 上证5日>=0 且 波动<=1.8%，判定趋势上行。",
-        "- 规则C: 否则若上证20日<=-4% 或（上证5日<=-3% 且 波动>=1.8%），判定下行防御。",
-        "- 规则D: 其余情形判定为震荡轮动。",
-        f"- 今日命中结果: {regime}",
-        "3. 配比生成:",
-        f"- 先按市场模板生成基础权重: boll={alloc['base_weights'].get('boll', 0)} theme={alloc['base_weights'].get('theme', 0)} cctv={alloc['base_weights'].get('cctv', 0)} relativity={alloc['base_weights'].get('relativity', 0)} cash={alloc['base_weights'].get('cash', 0)}",
-        "- 再按信号可用性回流: Boll=0回流现金；Theme=0回流现金；无CCTV时CCTV权重优先回流Theme，否则回流现金。",
-        f"- 最终执行权重: boll={alloc['final_weights'].get('boll', 0)} theme={alloc['final_weights'].get('theme', 0)} cctv={alloc['final_weights'].get('cctv', 0)} relativity={alloc['final_weights'].get('relativity', 0)} cash={alloc['final_weights'].get('cash', 0)}",
-    ]
+    explain = []
+    if not simple_report:
+        explain = [
+            "\n## 4) 每日策略如何得到（可复盘）",
+            "1. 输入数据:",
+            f"- 指数与波动: 上证5日={_fmt_pct(sh_ret_5, signed=True)} 上证20日={_fmt_pct(sh_ret_20, signed=True)} 波动20日={_fmt_pct(sh_vol_20)}",
+            f"- 风险与热度: 宏观风险={macro_level} CCTV热点={'有' if has_cctv_hot else '无'}",
+            f"- 候选可用性: Boll={boll_rows_count} Theme={theme_rows_count}",
+            "2. 市场判定规则:",
+            "- 规则A: 若宏观风险=high，则直接切到下行防御。",
+            "- 规则B: 否则若上证20日>=4% 且 上证5日>=0 且 波动<=1.8%，判定趋势上行。",
+            "- 规则C: 否则若上证20日<=-4% 或（上证5日<=-3% 且 波动>=1.8%），判定下行防御。",
+            "- 规则D: 其余情形判定为震荡轮动。",
+            f"- 今日命中结果: {regime}",
+            "3. 配比生成:",
+            f"- 先按市场模板生成基础权重: boll={alloc['base_weights'].get('boll', 0)} theme={alloc['base_weights'].get('theme', 0)} cctv={alloc['base_weights'].get('cctv', 0)} relativity={alloc['base_weights'].get('relativity', 0)} cash={alloc['base_weights'].get('cash', 0)}",
+            "- 再按信号可用性回流: Boll=0回流现金；Theme=0回流现金；无CCTV时CCTV权重优先回流Theme，否则回流现金。",
+            f"- 最终执行权重: boll={alloc['final_weights'].get('boll', 0)} theme={alloc['final_weights'].get('theme', 0)} cctv={alloc['final_weights'].get('cctv', 0)} relativity={alloc['final_weights'].get('relativity', 0)} cash={alloc['final_weights'].get('cash', 0)}",
+        ]
 
     reco = ["\n## 策略建议"]
     if regime == "趋势上行":
@@ -890,6 +1340,7 @@ def _build_market_and_strategy_summary(*, boll_rows_count, theme_rows_count, mac
 
     reco.extend(
         [
+            _suggest_holding_days(regime, macro_level),
             alloc["ratio_line"],
             alloc["unit_line"],
             alloc["priority_line"],
@@ -897,13 +1348,15 @@ def _build_market_and_strategy_summary(*, boll_rows_count, theme_rows_count, mac
         ]
     )
 
-    risk_ctrl = [
-        "\n## 执行与风控清单",
-        "1. 单票仓位上限: 建议不超过总资金的10%-15%。",
-        "2. 止损纪律: 破位或回撤超过预设阈值时机械止损。",
-        "3. 止盈纪律: 分批止盈，避免盈利回吐。",
-        "4. 复盘重点: 记录命中来源（Boll/题材/CCTV）与次日延续性。",
-    ]
+    risk_ctrl = []
+    if not simple_report:
+        risk_ctrl = [
+            "\n## 执行与风控清单",
+            "1. 单票仓位上限: 建议不超过总资金的10%-15%。",
+            "2. 止损纪律: 破位或回撤超过预设阈值时机械止损。",
+            "3. 止盈纪律: 分批止盈，避免盈利回吐。",
+            "4. 复盘重点: 记录命中来源（Boll/题材/CCTV）与次日延续性。",
+        ]
 
     return "\n".join(lines + explain + reco + risk_ctrl), regime
 
@@ -1203,6 +1656,8 @@ def _build_cctv_period_summary(window_days=3, top_n=0):
                 reader = csv.DictReader(f)
                 for row in reader:
                     sec = (row.get("板块") or "").strip()
+                    if _is_cctv_noise_sector(sec):
+                        continue
                     heat = _to_float(row.get("热度分"))
                     if not sec or heat is None:
                         continue
@@ -1286,74 +1741,138 @@ def _find_latest_news_file(today_yyyymmdd):
     return files[0] if files else None
 
 
-def _build_macro_risk_summary(news_csv_path, top_n=0):
-    if news_csv_path is None or not news_csv_path.exists():
+def _ensure_news_file(date_str, *, auto_fetch=True):
+    preferred = STOCK_DATA_DIR / f"{date_str}_news.csv"
+    if preferred.exists():
+        return preferred
+    if not auto_fetch:
+        return None
+    try:
+        df = ak.news_cctv(date=date_str)
+    except Exception:
+        return None
+    if df is None or df.empty:
+        return None
+    try:
+        df.to_csv(preferred, index=False, encoding="utf-8-sig")
+    except Exception:
+        return None
+    return preferred
+
+
+def _build_macro_risk_summary(today_yyyymmdd, window_days=3, top_n=0, *, auto_fetch=True):
+    window_days = max(int(window_days or 0), 1)
+    news_files = []
+    for i in range(window_days):
+        date_str = (datetime.strptime(today_yyyymmdd, "%Y%m%d") - timedelta(days=i)).strftime("%Y%m%d")
+        f = _ensure_news_file(date_str, auto_fetch=auto_fetch)
+        if f and f.exists():
+            news_files.append((f, date_str))
+
+    if not news_files:
         return "- 新闻源: 未找到可用新闻文件\n- 解读: 本次跳过宏观风险打分"
 
-    # 关键词尽量贴近A股交易语境：地缘冲突、能源价格、航运与外需链条
-    risk_rules = {
-        "地缘冲突": ["空袭", "冲突", "导弹", "军事", "战机", "袭击", "战争", "中东", "霍尔木兹"],
-        "能源扰动": ["原油", "油价", "天然气", "重水", "核设施", "能源", "海峡"],
-        "航运外需": ["航运", "港口", "外贸", "出口", "制裁", "关税", "供应链", "跨境"],
-        "风险偏好": ["停摆", "大选", "不确定", "风险", "波动", "反击", "升级"],
-    }
-    easing_words = ["谈判", "缓和", "停火", "协议", "会谈"]
-
-    events = []
     try:
-        with news_csv_path.open("r", encoding="utf-8-sig", newline="") as f:
-            reader = csv.DictReader(f)
-            for row in reader:
-                title = (row.get("title") or row.get("标题") or "").strip()
-                content = (row.get("content") or row.get("内容") or "").strip()
-                text = f"{title} {content}".lower()
-                if not text.strip():
-                    continue
-
-                matched_tags = []
-                risk_score = 0
-                for tag, words in risk_rules.items():
-                    hit = sum(1 for w in words if w.lower() in text)
-                    if hit > 0:
-                        matched_tags.append(tag)
-                        risk_score += hit
-
-                if risk_score == 0:
-                    continue
-
-                easing_hit = sum(1 for w in easing_words if w.lower() in text)
-                risk_score = max(risk_score - easing_hit, 1)
-                events.append(
-                    {
-                        "title": title or "(无标题)",
-                        "tags": matched_tags,
-                        "risk_score": risk_score,
-                    }
-                )
+        burst_min = max(int(os.getenv("MACRO_RISK_BURST_MIN_COUNT", "3").strip() or "3"), 1)
     except Exception:
-        return "- 新闻源: 读取失败\n- 解读: 本次跳过宏观风险打分"
+        burst_min = 3
+    try:
+        burst_top_n = max(int(os.getenv("MACRO_RISK_BURST_TOP_N", "10").strip() or "10"), 1)
+    except Exception:
+        burst_top_n = 10
+    burst_tokens = _extract_burst_tokens(news_files, min_count=burst_min, top_n=burst_top_n)
+    if not burst_tokens:
+        burst_tokens = set(MACRO_RISK_SIGNAL_FRAGMENTS)
+
+    events = _collect_macro_risk_events(
+        news_files,
+        burst_tokens,
+        auto_mode=True,
+    )
 
     if not events:
         return (
-            f"- 新闻源: {news_csv_path.name}\n"
+            f"- 新闻源: 近{window_days}天({len(news_files)}个文件)\n"
             "- 风险事件: 未命中高/中风险关键词\n"
             "- 解读: 当前宏观风险信号偏平稳"
         )
 
-    events = sorted(events, key=lambda x: x["risk_score"], reverse=True)
+    dedup_events = []
+    seen_keys = set()
+    for item in events:
+        key = (item.get("date", ""), item.get("title", ""))
+        if key in seen_keys:
+            continue
+        seen_keys.add(key)
+        dedup_events.append(item)
+
+    count_mode = os.getenv("MACRO_RISK_COUNT_MODE", "entry").strip().lower() or "entry"
+    if count_mode == "day":
+        count_mode = "entry"
+    if count_mode not in {"avg", "entry"}:
+        count_mode = "entry"
+
+    if count_mode == "avg":
+        day_scores = {}
+        for item in dedup_events:
+            date_key = item.get("date", "")
+            score = item.get("risk_score", 0)
+            if not date_key:
+                continue
+            acc = day_scores.get(date_key)
+            if acc is None:
+                day_scores[date_key] = [score, 1]
+            else:
+                acc[0] += score
+                acc[1] += 1
+        day_avg = {k: (v[0] / max(v[1], 1)) for k, v in day_scores.items()}
+        high_hits = sum(1 for score in day_avg.values() if score >= 4)
+        medium_hits = sum(1 for score in day_avg.values() if 1 <= score < 4)
+    else:
+        high_hits = sum(1 for item in dedup_events if item.get("risk_score", 0) >= 4)
+        medium_hits = sum(1 for item in dedup_events if 1 <= item.get("risk_score", 0) < 4)
+    try:
+        high_threshold = max(int(os.getenv("MACRO_RISK_HIGH_HITS", "2").strip() or "2"), 1)
+    except Exception:
+        high_threshold = 2
+    try:
+        medium_threshold = max(int(os.getenv("MACRO_RISK_MEDIUM_HITS", "2").strip() or "2"), 1)
+    except Exception:
+        medium_threshold = 2
+    try:
+        medium_high_threshold = max(int(os.getenv("MACRO_RISK_MEDIUM_HIGH_HITS", "1").strip() or "1"), 1)
+    except Exception:
+        medium_high_threshold = 1
+
+    events = sorted(dedup_events, key=lambda x: (x.get("date", ""), x["risk_score"]), reverse=True)
     if isinstance(top_n, int) and top_n > 0:
         events = events[:top_n]
 
     lines = [
-        f"- 新闻源: {news_csv_path.name}",
+        f"- 新闻源: 近{window_days}天({len(news_files)}个文件)",
+        f"- 命中统计({count_mode}): 高={high_hits} 中={medium_hits} | 阈值: high>={high_threshold}, medium>={medium_threshold} 或 high>={medium_high_threshold}",
         "- 解读: 仅用于交易关注方向，不构成投资建议",
     ]
+    if count_mode == "avg" and day_avg:
+        day_items = sorted(day_avg.items())
+        day_line = ", ".join(f"{d}:{score:.1f}" for d, score in day_items)
+        lines.append(f"- 日均风险分: {day_line}")
     for idx, item in enumerate(events, start=1):
         level = "高" if item["risk_score"] >= 4 else "中"
         tags = "/".join(item["tags"]) if item["tags"] else "综合"
-        lines.append(f"{idx}. [{level}] {item['title']} | 影响链条: {tags}")
+        date_tag = item.get("date", "")
+        prefix = f"{date_tag} " if date_tag else ""
+        lines.append(f"{idx}. [{level}] {prefix}{item['title']} | 影响链条: {tags}")
 
     return "\n".join(lines)
+
+
+def _suggest_holding_days(regime, macro_level):
+    if regime == "下行防御" or macro_level == "high":
+        return "持有周期建议: 1-2个交易日，T+1快进快出，触发止损立即减仓。"
+    if regime == "趋势上行":
+        return "持有周期建议: 3-7个交易日，强势题材2-4日滚动，提高资金周转。"
+    return "持有周期建议: 2-4个交易日，冲高分批止盈，回撤及时落袋。"
 
 
 def _read_cctv_top_summary(csv_path, top_n=5):
@@ -1369,7 +1888,7 @@ def _read_cctv_top_summary(csv_path, top_n=5):
                 sec = (row.get("板块") or "").strip()
                 heat = (row.get("热度分") or "").strip()
                 change = (row.get("较上一期热度变化") or "N/A").strip()
-                if sec:
+                if sec and not _is_cctv_noise_sector(sec):
                     rows.append((sec, heat or "N/A", change or "N/A"))
         if not rows:
             return ""
@@ -1600,6 +2119,47 @@ def _run_data_archive(log_lines):
             log_lines.append(line)
 
 
+def _run_data_compress(log_lines):
+    if not COMPRESS_SCRIPT_PATH.exists():
+        _append_log(log_lines, f"Compress script not found: {COMPRESS_SCRIPT_PATH}")
+        return
+
+    auto_logs_keep_days = os.getenv("COMPRESS_AUTO_LOGS_KEEP_DAYS", "30").strip() or "30"
+    plots_keep_days = os.getenv("COMPRESS_PLOTS_KEEP_DAYS", "30").strip() or "30"
+    ui_uploads_keep_days = os.getenv("COMPRESS_UI_UPLOADS_KEEP_DAYS", "30").strip() or "30"
+    checkpoints_keep_days = os.getenv("COMPRESS_CHECKPOINTS_KEEP_DAYS", "180").strip() or "180"
+    dry_run = os.getenv("COMPRESS_DRY_RUN", "0").strip() == "1"
+
+    cmd = [
+        sys.executable,
+        str(COMPRESS_SCRIPT_PATH),
+        "--auto-logs-keep-days",
+        auto_logs_keep_days,
+        "--plots-keep-days",
+        plots_keep_days,
+        "--ui-uploads-keep-days",
+        ui_uploads_keep_days,
+        "--checkpoints-keep-days",
+        checkpoints_keep_days,
+    ]
+    if dry_run:
+        cmd.append("--dry-run")
+
+    _append_log(log_lines, f"{_stage_tag(8, 'compress', percent=74)} start")
+
+    returncode, tail = _run_command_with_live_output(
+        log_lines,
+        cmd=cmd,
+        cwd=ROOT_DIR,
+        step_index=8,
+        stage_name="compress",
+    )
+    if returncode != 0 and tail:
+        _append_log(log_lines, "--- Compress output tail ---")
+        for line in tail.splitlines():
+            log_lines.append(line)
+
+
 def main():
     global RUN_LOG_FILE
     args = parse_args()
@@ -1639,7 +2199,7 @@ def main():
             _append_log(log_lines, f"Log saved: {RUN_LOG_FILE}")
         return 0 if pushed else 1
 
-    _append_log(log_lines, "[  0%] Pipeline started (7 steps): 1=boll, 2=cctv, 3=macro-news, 4=theme+relativity, 5=archive, 6=cleanup, 7=notify")
+    _append_log(log_lines, "[  0%] Pipeline started (8 steps): 1=boll, 2=cctv, 3=macro-news, 4=theme+relativity, 5=archive, 6=cleanup, 7=notify, 8=compress")
     main_returncode, output_tail = _run_command_with_live_output(
         log_lines,
         cmd=[sys.executable, str(SCRIPT_PATH)],
@@ -1654,7 +2214,6 @@ def main():
     cctv_summary = ""
     if enable_cctv:
         cctv_cmd = [sys.executable, str(CCTV_SCRIPT_PATH), "--top-n", "5", "--emerging-top-n", "20"]
-        cctv_auto_accept = os.getenv("CCTV_AUTO_ACCEPT_KEYWORDS", "0").strip() == "1"
         cctv_disable_extra_news = os.getenv("CCTV_DISABLE_EXTRA_NEWS", "0").strip() == "1"
         cctv_extra_sources = os.getenv("CCTV_EXTRA_NEWS_SOURCES", "cls,sina").strip() or "cls,sina"
         cctv_extra_limit = os.getenv("CCTV_EXTRA_NEWS_LIMIT", "120").strip() or "120"
@@ -1666,23 +2225,6 @@ def main():
             _append_log(
                 log_lines,
                 f"{_stage_tag(2, 'cctv', percent=15)} extra-news enabled (sources={cctv_extra_sources}, limit={cctv_extra_limit})",
-            )
-
-        if cctv_auto_accept:
-            cctv_min_count = os.getenv("CCTV_AUTO_ACCEPT_MIN_COUNT", "4").strip() or "4"
-            cctv_min_conf = _normalize_confidence_label(os.getenv("CCTV_AUTO_ACCEPT_MIN_CONF", "medium"))
-            cctv_cmd.extend(
-                [
-                    "--auto-accept-keywords",
-                    "--auto-accept-min-count",
-                    str(cctv_min_count),
-                    "--auto-accept-min-confidence",
-                    str(cctv_min_conf),
-                ]
-            )
-            _append_log(
-                log_lines,
-                f"{_stage_tag(2, 'cctv', percent=16)} auto-accept enabled (min_count={cctv_min_count}, min_conf={cctv_min_conf})",
             )
 
         cctv_returncode, cctv_tail = _run_command_with_live_output(
@@ -1712,13 +2254,23 @@ def main():
         _append_log(log_lines, f"{_stage_tag(2, 'cctv')} skipped by ENABLE_CCTV_STRATEGY=0")
 
     _append_log(log_lines, f"{_stage_tag(3, 'macro-news', percent=29)} collecting risk summary")
-    news_file = _find_latest_news_file(datetime.now().strftime("%Y%m%d"))
-    macro_risk_summary = _build_macro_risk_summary(news_file, top_n=0)
+    macro_window_days_raw = os.getenv("MACRO_RISK_WINDOW_DAYS", "3").strip() or "3"
+    try:
+        macro_window_days = max(int(macro_window_days_raw), 1)
+    except Exception:
+        macro_window_days = 3
+    macro_auto_fetch = os.getenv("MACRO_RISK_AUTO_FETCH_NEWS", "1").strip() != "0"
+    today_yyyymmdd = datetime.now().strftime("%Y%m%d")
+    macro_risk_summary = _build_macro_risk_summary(
+        today_yyyymmdd,
+        window_days=macro_window_days,
+        top_n=0,
+        auto_fetch=macro_auto_fetch,
+    )
     _append_log(log_lines, f"{_stage_tag(3, 'macro-news')} done")
 
-    today_yyyymmdd = datetime.now().strftime("%Y%m%d")
     # --- 新增：插入宏观新闻多日趋势 ---
-    macro_news_trend = _build_macro_news_trend_summary(window_days=3, top_n=0)
+    macro_news_trend = _build_macro_news_trend_summary(window_days=macro_window_days, top_n=0, auto_fetch=macro_auto_fetch)
     _append_log(log_lines, macro_news_trend)
     min_price_text = os.getenv("MIN_STOCK_PRICE", "5").strip() or "5"
     max_price_text = os.getenv("MAX_STOCK_PRICE", "30").strip() or "30"
@@ -1980,6 +2532,8 @@ def main():
     msg = msg + "\n" + _build_relativity_message(relativity_csv_path=relativity_csv_path, relativity_rows=relativity_rows)
     if macro_risk_summary:
         msg = msg + "\n\n## 7) 宏观与国际风险提示\n" + macro_risk_summary.lstrip()
+    if macro_news_trend:
+        msg = msg + "\n" + macro_news_trend.lstrip()
     if cctv_summary:
         msg = msg + "\n\n## 8) CCTV 热点概览\n" + cctv_summary.lstrip()
 
@@ -2040,6 +2594,12 @@ def main():
         _append_log(log_lines, f"{_stage_tag(7, 'notify')} no push channel configured/succeeded. Finished local run only")
     else:
         _append_log(log_lines, f"{_stage_tag(7, 'notify')} notification finished")
+
+    enable_compress = os.getenv("ENABLE_AUTO_COMPRESS", "1").strip() != "0"
+    if enable_compress:
+        _run_data_compress(log_lines)
+    else:
+        _append_log(log_lines, f"{_stage_tag(8, 'compress')} skipped by ENABLE_AUTO_COMPRESS=0")
 
     _append_log(log_lines, "[100%] Pipeline finished")
 

@@ -320,6 +320,12 @@ set ENABLE_AUTO_CLEANUP=1
 - `ARCHIVE_KEEP_ROOT_DAYS=7` 根目录保留天数
 - `ARCHIVE_KEEP_DAYS=365` 归档区保留天数
 - `ARCHIVE_DRY_RUN=1` 仅预览，不移动删除
+- `ENABLE_AUTO_COMPRESS=1` 开关自动压缩（`0` 关闭）
+- `COMPRESS_AUTO_LOGS_KEEP_DAYS=30` auto_logs 压缩阈值
+- `COMPRESS_PLOTS_KEEP_DAYS=30` plots 压缩阈值
+- `COMPRESS_UI_UPLOADS_KEEP_DAYS=30` ui_uploads 压缩阈值
+- `COMPRESS_CHECKPOINTS_KEEP_DAYS=180` checkpoints 压缩阈值
+- `COMPRESS_DRY_RUN=1` 仅预览，不真正压缩
 
 ## stock_data 快速定位
 

@@ -23,6 +23,7 @@
 ## 4）维护与辅助工具
 
 - cleanup_stock_data.py：清理 stock_data 历史文件
+- compress_stock_data.py：把 auto_logs / plots / ui_uploads / checkpoints 打成 zip 并删除旧文件
 - test_cctv_sectors_strategy.py：CCTV 策略测试脚本
 - boll-visualizer/：可选 Streamlit 可视化界面
 - update：更新辅助脚本
