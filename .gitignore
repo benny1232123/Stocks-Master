@@ -25,6 +25,19 @@ Frequently-Used-Program/boll-visualizer/stock_data/cache/
 Frequently-Used-Program/boll-visualizer/stock_data/checkpoints/
 stock_data/checkpoints/
 
+# SQLite databases (runtime-generated)
+*.db
+*.db-journal
+*.db-wal
+*.db-shm
+
+# Large data directories (runtime-generated)
+stock_data/archive/
+stock_data/plots/
+stock_data/tasks/
+stock_data/ui_uploads/
+stock_data/*.csv
+
 # Misc
 *.log
 *.tmp
