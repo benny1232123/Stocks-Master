@@ -1,9 +1,10 @@
-"""交易记录管理器 — SQLite CRUD + CSV 兼容。"""
+"""交易记录管理器 — Supabase (云) / SQLite (本地回退) 双后端 + CSV 兼容。"""
 
 from __future__ import annotations
 
 import csv
 import io
+import os
 import sqlite3
 from contextlib import contextmanager
 from datetime import date, datetime
@@ -15,6 +16,31 @@ import pandas as pd
 from utils.config import STOCK_DATA_DIR, CSV_ENCODING
 
 _DB_PATH = STOCK_DATA_DIR / "trading.db"
+
+# ── Supabase 连接 ──────────────────────────────────────────────
+
+
+def _get_supabase_client():
+    """尝试创建 Supabase 客户端。返回 None 表示未配置。"""
+    try:
+        import streamlit as st
+        url = st.secrets.get("SUPABASE_URL", "")
+        key = st.secrets.get("SUPABASE_KEY", "")
+    except Exception:
+        url = os.environ.get("SUPABASE_URL", "")
+        key = os.environ.get("SUPABASE_KEY", "")
+
+    if not url or not key:
+        return None
+
+    try:
+        from supabase import create_client
+        return create_client(url, key)
+    except Exception:
+        return None
+
+
+# ── SQLite 建表（本地回退用） ────────────────────────────────────
 
 _CREATE_TABLE = """\
 CREATE TABLE IF NOT EXISTS trades (
@@ -33,16 +59,50 @@ CREATE INDEX IF NOT EXISTS idx_trades_code ON trades(code);
 CREATE INDEX IF NOT EXISTS idx_trades_date ON trades(trade_date);
 """
 
+# ── Supabase 建表 SQL（在 Supabase SQL Editor 中执行） ──────────
+
+SUPABASE_SCHEMA_SQL = """\
+-- 在 Supabase SQL Editor 中执行此 SQL 创建 trades 表
+CREATE TABLE IF NOT EXISTS trades (
+    id          BIGSERIAL PRIMARY KEY,
+    trade_date  TEXT NOT NULL,
+    code        TEXT NOT NULL,
+    name        TEXT DEFAULT '',
+    side        TEXT NOT NULL CHECK (side IN ('BUY','SELL')),
+    price       DOUBLE PRECISION NOT NULL,
+    quantity    DOUBLE PRECISION NOT NULL,
+    fee         DOUBLE PRECISION DEFAULT 0.0,
+    notes       TEXT DEFAULT '',
+    created_at  TIMESTAMPTZ DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS idx_trades_code ON trades(code);
+CREATE INDEX IF NOT EXISTS idx_trades_date ON trades(trade_date);
+
+-- 启用 RLS 并允许所有操作（个人项目简化配置）
+ALTER TABLE trades ENABLE ROW LEVEL SECURITY;
+CREATE POLICY "allow_all" ON trades FOR ALL USING (true) WITH CHECK (true);
+"""
+
 
 class TradeManager:
-    """轻量 SQLite 交易记录管理。"""
+    """交易记录管理，优先使用 Supabase 云端存储，自动回退到本地 SQLite。"""
 
     def __init__(self, db_path: Path | None = None) -> None:
-        self._db_path = db_path or _DB_PATH
-        self._db_path.parent.mkdir(parents=True, exist_ok=True)
-        self._init_db()
+        self._sb = _get_supabase_client()
+        self._using_supabase = self._sb is not None
 
-    # ── connection ──────────────────────────────────────────────
+        if not self._using_supabase:
+            self._db_path = db_path or _DB_PATH
+            self._db_path.parent.mkdir(parents=True, exist_ok=True)
+            self._init_sqlite()
+
+    @property
+    def backend(self) -> str:
+        return "supabase" if self._using_supabase else "sqlite"
+
+    # ══════════════════════════════════════════════════════════════
+    #  SQLite 回退
+    # ══════════════════════════════════════════════════════════════
 
     @contextmanager
     def _conn(self) -> Iterator[sqlite3.Connection]:
@@ -55,11 +115,13 @@ class TradeManager:
         finally:
             conn.close()
 
-    def _init_db(self) -> None:
+    def _init_sqlite(self) -> None:
         with self._conn() as conn:
             conn.executescript(_CREATE_TABLE)
 
-    # ── CRUD ────────────────────────────────────────────────────
+    # ══════════════════════════════════════════════════════════════
+    #  CRUD — 统一接口，内部按后端分派
+    # ══════════════════════════════════════════════════════════════
 
     def add_trade(
         self,
@@ -79,18 +141,37 @@ class TradeManager:
             raise ValueError(f"side 必须为 BUY 或 SELL，实际: {side}")
         if isinstance(trade_date, date):
             trade_date = trade_date.strftime("%Y-%m-%d")
-        with self._conn() as conn:
-            cur = conn.execute(
-                "INSERT INTO trades (trade_date, code, name, side, price, quantity, fee, notes) "
-                "VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
-                (trade_date, code, name, side, price, quantity, fee, notes),
-            )
-            return cur.lastrowid  # type: ignore[return-value]
+
+        if self._using_supabase:
+            row = {
+                "trade_date": trade_date,
+                "code": code,
+                "name": name,
+                "side": side,
+                "price": price,
+                "quantity": quantity,
+                "fee": fee,
+                "notes": notes,
+            }
+            resp = self._sb.table("trades").insert(row).execute()
+            return resp.data[0]["id"] if resp.data else 0
+        else:
+            with self._conn() as conn:
+                cur = conn.execute(
+                    "INSERT INTO trades (trade_date, code, name, side, price, quantity, fee, notes) "
+                    "VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+                    (trade_date, code, name, side, price, quantity, fee, notes),
+                )
+                return cur.lastrowid  # type: ignore[return-value]
 
     def delete_trade(self, trade_id: int) -> bool:
-        with self._conn() as conn:
-            cur = conn.execute("DELETE FROM trades WHERE id = ?", (trade_id,))
-            return cur.rowcount > 0
+        if self._using_supabase:
+            resp = self._sb.table("trades").delete().eq("id", trade_id).execute()
+            return len(resp.data) > 0 if resp.data else False
+        else:
+            with self._conn() as conn:
+                cur = conn.execute("DELETE FROM trades WHERE id = ?", (trade_id,))
+                return cur.rowcount > 0
 
     def get_trades(
         self,
@@ -100,6 +181,12 @@ class TradeManager:
         limit: int = 500,
     ) -> pd.DataFrame:
         """查询交易记录，返回与 backtest_tradebook 兼容的 DataFrame。"""
+        if self._using_supabase:
+            return self._sb_get_trades(code, start_date, end_date, limit)
+        else:
+            return self._sqlite_get_trades(code, start_date, end_date, limit)
+
+    def _sqlite_get_trades(self, code, start_date, end_date, limit) -> pd.DataFrame:
         clauses: list[str] = []
         params: list[object] = []
 
@@ -131,13 +218,49 @@ class TradeManager:
             df = df.rename(columns={"trade_date": "date", "name": "stock_name"})
         return df
 
+    def _sb_get_trades(self, code, start_date, end_date, limit) -> pd.DataFrame:
+        query = self._sb.table("trades").select(
+            "id, trade_date, code, name, side, price, quantity, fee, notes, created_at"
+        )
+        if code:
+            query = query.eq("code", _normalize_code(code))
+        if start_date:
+            if isinstance(start_date, date):
+                start_date = start_date.strftime("%Y-%m-%d")
+            query = query.gte("trade_date", start_date)
+        if end_date:
+            if isinstance(end_date, date):
+                end_date = end_date.strftime("%Y-%m-%d")
+            query = query.lte("trade_date", end_date)
+
+        query = query.order("trade_date").order("code").order("id").limit(limit)
+        resp = query.execute()
+
+        if not resp.data:
+            return pd.DataFrame()
+
+        df = pd.DataFrame(resp.data)
+        # 确保列类型正确
+        for col in ("price", "quantity", "fee"):
+            if col in df.columns:
+                df[col] = pd.to_numeric(df[col], errors="coerce").fillna(0.0)
+        df = df.rename(columns={"trade_date": "date", "name": "stock_name"})
+        return df
+
     def get_all_codes(self) -> list[str]:
         """返回所有出现过的股票代码。"""
-        with self._conn() as conn:
-            rows = conn.execute(
-                "SELECT DISTINCT code FROM trades ORDER BY code"
-            ).fetchall()
-        return [r["code"] for r in rows]
+        if self._using_supabase:
+            resp = self._sb.table("trades").select("code").execute()
+            if not resp.data:
+                return []
+            codes = sorted({row["code"] for row in resp.data})
+            return codes
+        else:
+            with self._conn() as conn:
+                rows = conn.execute(
+                    "SELECT DISTINCT code FROM trades ORDER BY code"
+                ).fetchall()
+            return [r["code"] for r in rows]
 
     def get_trades_for_fifo(self) -> pd.DataFrame:
         """返回 FIFO 匹配所需的标准化 DataFrame（与 backtest_tradebook 兼容）。"""

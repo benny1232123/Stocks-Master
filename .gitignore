@@ -39,6 +39,9 @@ stock_data/tasks/
 stock_data/ui_uploads/
 stock_data/*.csv
 
+# Secrets (Supabase keys etc.)
+.streamlit/secrets.toml
+
 # Misc
 *.log
 *.tmp

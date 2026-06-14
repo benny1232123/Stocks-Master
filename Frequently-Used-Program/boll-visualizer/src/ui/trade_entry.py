@@ -12,16 +12,16 @@ from core.trade_manager import TradeManager
 def render_trade_entry() -> None:
     st.title("📝 交易录入")
 
-    # Streamlit Cloud 数据持久化提示
-    import os
-    if os.environ.get("STREAMLIT_SHARING_MODE") or os.environ.get("STREAMLIT_CLOUD"):
+    # 数据后端状态
+    tm = TradeManager()
+    if tm.backend == "supabase":
+        st.success("☁️ 数据存储在 Supabase 云端，重新部署不会丢失。", icon="✅")
+    else:
         st.info(
-            "💡 当前运行在 Streamlit Cloud，交易数据在应用重新部署时会重置。"
-            "建议定期在「交易历史」页导出 CSV 备份。",
+            "💾 数据存储在本地 SQLite。"
+            "部署到 Streamlit Cloud 前请配置 Supabase（.streamlit/secrets.toml），否则重新部署会丢失数据。",
             icon="ℹ️",
         )
-
-    tm = TradeManager()
 
     # ── 手动录入表单 ──────────────────────────────────────────
 
