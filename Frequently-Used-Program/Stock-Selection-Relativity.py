@@ -196,8 +196,8 @@ def resolve_report_dates(now: datetime) -> tuple[str, str, list[str], int]:
     current_month = now.month
 
     if current_month < 5:
-        report_date_profit = f"{last_year}0930"
-        report_date_holder = f"{last_year}0930"
+        report_date_profit = f"{last_year}1231"
+        report_date_holder = f"{last_year}1231"
     elif current_month < 9:
         report_date_profit = f"{current_year}0331"
         report_date_holder = f"{current_year}0331"
@@ -209,7 +209,7 @@ def resolve_report_dates(now: datetime) -> tuple[str, str, list[str], int]:
         report_date_holder = f"{current_year}0930"
 
     if current_month < 5:
-        zcfz_dates = [f"{last_year}0930", f"{last_year}0630"]
+        zcfz_dates = [f"{last_year}1231", f"{last_year}0630"]
     elif current_month < 9:
         zcfz_dates = [f"{current_year}0331", f"{last_year}1231"]
     elif current_month < 11:
@@ -708,6 +708,8 @@ def _evaluate_single_code(
         }
 
     latest_close = float(stock_close_df["close"].iloc[-1])
+    ma10 = float(stock_close_df["close"].tail(10).mean()) if len(stock_close_df) >= 10 else latest_close
+    suggested_buy = round(min(latest_close, ma10), 2)
     if latest_close < price_lower_limit:
         return format_stock_code(code), False, {"reason": "below_min_price", "latest_close": latest_close}
     if latest_close > price_upper_limit:
@@ -724,7 +726,7 @@ def _evaluate_single_code(
         min_up_days=RS_MIN_UP_DAYS,
         min_down_days=RS_MIN_DOWN_DAYS,
     )
-    meta = {"code": format_stock_code(code), "name": stock_name, **stats}
+    meta = {"code": format_stock_code(code), "name": stock_name, "suggested_buy": suggested_buy, **stats}
     return format_stock_code(code), passed, meta
 
 
@@ -808,6 +810,7 @@ def run_relative_strength(
         return {
             "股票代码": meta["code"],
             "股票名称": meta.get("name", ""),
+            "建议买入价": meta.get("suggested_buy"),
             RS_CHECKPOINT_PASS_COL: 1,
             "上涨满足率": meta.get("up_ratio"),
             "抗跌满足率": meta.get("down_ratio"),
@@ -1020,6 +1023,7 @@ def main() -> None:
                     {
                         "股票代码": format_stock_code(code),
                         "股票名称": code_name_map.get(format_stock_code(code), ""),
+                        "建议买入价": None,
                         "上涨满足率": None,
                         "抗跌满足率": None,
                         "对齐交易日": None,

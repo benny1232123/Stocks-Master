@@ -19,6 +19,7 @@ htmlcov/
 # IDE settings
 .vscode/
 .idea/
+.claude/
 
 # Runtime-generated cache/result artifacts
 Frequently-Used-Program/boll-visualizer/stock_data/cache/

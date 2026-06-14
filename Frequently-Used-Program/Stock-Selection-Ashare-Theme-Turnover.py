@@ -28,6 +28,7 @@ SHARED_SEED_PATTERN = "Stock-Selection-Shared-Seed-*.csv"
 DEFAULT_BS_TIMEOUT_SECONDS = float(os.getenv("BS_REQUEST_TIMEOUT_SECONDS", "15"))
 DEFAULT_BS_REQUEST_INTERVAL_SECONDS = float(os.getenv("BS_REQUEST_INTERVAL_SECONDS", "0.05"))
 DEFAULT_BS_MAX_RETRIES = int(os.getenv("BS_MAX_RETRIES", "2"))
+THEME_MAX_BUY_GAP_PCT = float(os.getenv("THEME_MAX_BUY_GAP_PCT", "8"))
 
 
 _BS_RATE_LIMIT_LOCK = threading.Lock()
@@ -502,7 +503,8 @@ def _query_all_a_stocks(max_stocks, day_text, request_interval_seconds=0.0, max_
 
 
 def _fetch_recent_k(code, end_date_text, lookback_days=45, request_interval_seconds=0.0, max_retries=2):
-    cache_key = f"stock_data/baostock_k_{code}_{end_date_text}_{lookback_days}.csv"
+    adjustflag = "3"
+    cache_key = f"stock_data/baostock_k_{code}_{end_date_text}_{lookback_days}_adj{adjustflag}.csv"
     table_name = _cache_table_name(cache_key)
     cached_df = _read_cache_df(table_name)
     if not cached_df.empty:
@@ -528,7 +530,7 @@ def _fetch_recent_k(code, end_date_text, lookback_days=45, request_interval_seco
             start_date=start_date_text,
             end_date=end_date_text,
             frequency="d",
-            adjustflag="2",
+            adjustflag=adjustflag,
         )
         if rs is None or rs.error_code != "0":
             if attempt < retries:
@@ -633,6 +635,8 @@ def _evaluate_theme_candidate(item, hot_sectors, sector_hints, sector_code_map, 
 
     max20 = float(close_series.tail(20).max())
     near_high = latest_close / max20 if max20 > 0 else 0.0
+    ma20 = float(close_series.tail(20).mean())
+    suggested_buy = round(min(latest_close, ma20), 2)
 
     if latest_turn < args.min_latest_turn:
         return None, slow_msg
@@ -648,6 +652,10 @@ def _evaluate_theme_candidate(item, hot_sectors, sector_hints, sector_code_map, 
         return None, slow_msg
     if ret20 < 0 or ret20 > 60:
         return None, slow_msg
+    if latest_close > 0:
+        buy_gap_pct = abs(suggested_buy - latest_close) / latest_close * 100.0
+        if buy_gap_pct > max(0.0, THEME_MAX_BUY_GAP_PCT):
+            return None, slow_msg
 
     themes = _match_theme(code, name, hot_sectors, sector_hints, sector_code_map)
 
@@ -655,6 +663,7 @@ def _evaluate_theme_candidate(item, hot_sectors, sector_hints, sector_code_map, 
         "股票代码": code,
         "股票名称": name,
         "最新价": round(latest_close, 2),
+        "建议买入价": suggested_buy,
         "最新换手率%": round(latest_turn, 2),
         "近5日换手均值%": round(avg_turn5, 2),
         "最新成交额": round(latest_amount, 0),

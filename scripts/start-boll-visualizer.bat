@@ -69,6 +69,6 @@ if /I "%PUBLIC_TUNNEL%"=="y" (
 )
 
 start "" "%LOCAL_URL%"
-"%PYTHON_EXE%" -m streamlit run src\app.py --server.port %PORT% --server.address 0.0.0.0
+"%PYTHON_EXE%" -m streamlit run src\app.py --server.port %PORT% --server.address 0.0.0.0 --server.enableStaticServing true
 
 pause

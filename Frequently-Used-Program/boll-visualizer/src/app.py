@@ -38,6 +38,10 @@ from utils.presets import (
     upsert_parameter_preset,
 )
 
+from ui.trade_entry import render_trade_entry
+from ui.position_view import render_position_view
+from ui.trade_history import render_trade_history
+
 logger = get_logger()
 
 ANALYSIS_MODES = ["全流程（Selection Boll）", "仅Boll（跳过资金流/基本面/股东）"]
@@ -426,8 +430,7 @@ def _run_sync_analysis(
     return result_df, data_map, flow_stats
 
 
-def main() -> None:
-    st.set_page_config(page_title="Boll 可视化选股", layout="wide")
+def render_boll_page() -> None:
     st.title("📈 Boll 全流程选股")
     st.caption("流程：同花顺资金流 → baostock 基本面 → 新浪流通股东 → Boll 信号。")
 
@@ -844,6 +847,46 @@ def main() -> None:
             st.caption("说明：该回测为样本内历史统计，不代表未来收益。")
             if not details_df.empty:
                 st.dataframe(details_df.tail(30), use_container_width=True, hide_index=True)
+
+
+# ── 多页导航 ─────────────────────────────────────────────────────
+
+_INJECT_PWA = """
+<link rel="manifest" href="app/static/manifest.json" />
+<meta name="theme-color" content="#1f77b4" />
+<meta name="apple-mobile-web-app-capable" content="yes" />
+<meta name="apple-mobile-web-app-status-bar-style" content="default" />
+<meta name="apple-mobile-web-app-title" content="Stocks Master" />
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no" />
+<script>
+if ('serviceWorker' in navigator) {
+  navigator.serviceWorker.register('app/static/sw.js').catch(() => {});
+}
+</script>
+"""
+
+
+def _inject_meta() -> None:
+    """注入 PWA meta 标签，仅执行一次。"""
+    if not st.session_state.get("_pwa_injected"):
+        import streamlit.components.v1 as components
+        components.html(f"<script>{''}</script>{_INJECT_PWA}", height=0)
+        st.session_state["_pwa_injected"] = True
+
+
+def main() -> None:
+    st.set_page_config(page_title="Stocks Master", layout="wide", page_icon="📈")
+    nav = st.navigation(
+        [
+            st.Page(render_boll_page, title="Boll 选股", icon="📈"),
+            st.Page(render_trade_entry, title="交易录入", icon="📝"),
+            st.Page(render_position_view, title="持仓总览", icon="💼"),
+            st.Page(render_trade_history, title="交易历史", icon="📋"),
+        ],
+        position="sidebar",
+    )
+    _inject_meta()
+    nav.run()
 
 
 if __name__ == "__main__":

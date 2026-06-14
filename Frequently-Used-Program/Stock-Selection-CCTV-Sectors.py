@@ -1,6 +1,7 @@
 import argparse
 import datetime
 import re
+from concurrent.futures import ThreadPoolExecutor, TimeoutError
 from pathlib import Path
 
 import akshare as ak
@@ -16,6 +17,23 @@ POSITIVE_WORDS = ["增长", "提升", "突破", "回暖", "提振", "改善", "�
 NEGATIVE_WORDS = ["下滑", "下降", "承压", "收缩", "风险", "波动", "走弱", "放缓", "亏损", "违约", "不及预期"]
 NEUTRAL_WORDS = ["推进", "建设", "部署", "召开", "会议", "发布", "落实", "调研", "强调"]
 GENERIC_MACRO_WORDS = ["中国", "经济", "企业", "产业", "市场", "发展", "全国", "地方", "项目", "部门"]
+
+
+def _log_step(message):
+    print(message, flush=True)
+
+
+def _should_log_progress(index, total):
+    if total <= 20:
+        return True
+    if index == 1 or index == total:
+        return True
+    return index % max(total // 10, 1) == 0
+
+
+def _progress_label(prefix, index, total):
+    percent = int(index * 100 / total) if total else 100
+    return f"{prefix}: {index}/{total} ({percent}%)"
 
 
 ROOT_DIR = Path(__file__).resolve().parents[1]
@@ -38,6 +56,7 @@ def parse_args():
         help="补充资讯源，逗号分隔，例如 cls,sina,em",
     )
     parser.add_argument("--extra-news-limit", type=int, default=120, help="每个补充源最多抓取条数")
+    parser.add_argument("--extra-news-timeout", type=int, default=8, help="单个补充源超时时间(秒)")
     parser.add_argument("--disable-sw-industry", action="store_true", help="禁用申万行业成分股映射")
     return parser.parse_args()
 
@@ -277,23 +296,46 @@ def _normalize_generic_news_df(df, source_name):
     return out
 
 
-def _try_fetch_ak_news(function_names, source_name, limit=120):
-    for fn in function_names:
+def _call_with_timeout(func, timeout_seconds):
+    ex = ThreadPoolExecutor(max_workers=1)
+    future = ex.submit(func)
+    try:
+        return future.result(timeout=timeout_seconds)
+    except TimeoutError:
+        ex.shutdown(wait=False, cancel_futures=True)
+        raise
+    else:
+        ex.shutdown(wait=True)
+
+
+def _try_fetch_ak_news(function_names, source_name, limit=120, timeout_seconds=8):
+    total = len(function_names)
+    for idx, fn in enumerate(function_names, start=1):
+        if _should_log_progress(idx, total):
+            _log_step(_progress_label(f"补充资讯源-{source_name}", idx, total))
         try:
             func = getattr(ak, fn, None)
             if func is None:
+                _log_step(f"补充资讯源-{source_name}: {fn} 不可用")
                 continue
-            df = func()
+            _log_step(f"补充资讯源-{source_name}: 开始 {fn}")
+            df = _call_with_timeout(func, timeout_seconds)
             out = _normalize_generic_news_df(df, source_name)
             if out.empty:
+                _log_step(f"补充资讯源-{source_name}: {fn} 返回空结果")
                 continue
+            _log_step(f"补充资讯源-{source_name}: {fn} 成功, rows={len(out)}")
             return out.head(max(int(limit), 1)).reset_index(drop=True), fn
-        except Exception:
+        except TimeoutError:
+            print(f"补充源超时: {source_name} via {fn} ({timeout_seconds}s)")
+            continue
+        except Exception as exc:
+            _log_step(f"补充资讯源-{source_name}: {fn} 失败: {exc}")
             continue
     return pd.DataFrame(), ""
 
 
-def fetch_extra_news_bundle(sources_text="cls,sina", per_source_limit=120):
+def fetch_extra_news_bundle(sources_text="cls,sina", per_source_limit=120, timeout_seconds=8):
     source_map = {
         "cls": ["news_cls", "stock_info_global_cls"],
         "sina": ["news_sina", "stock_info_global_sina"],
@@ -306,17 +348,28 @@ def fetch_extra_news_bundle(sources_text="cls,sina", per_source_limit=120):
 
     frames = []
     logs = []
-    for tag in tags:
+    total = len(tags)
+    for idx, tag in enumerate(tags, start=1):
+        if _should_log_progress(idx, total):
+            _log_step(_progress_label("补充资讯源", idx, total))
         fn_list = source_map.get(tag, [])
         if not fn_list:
             logs.append(f"跳过未知补充源: {tag}")
             continue
-        df, fn = _try_fetch_ak_news(fn_list, source_name=tag, limit=per_source_limit)
+        _log_step(f"补充资讯源-{tag}: 开始抓取")
+        df, fn = _try_fetch_ak_news(
+            fn_list,
+            source_name=tag,
+            limit=per_source_limit,
+            timeout_seconds=timeout_seconds,
+        )
         if df.empty:
             logs.append(f"补充源抓取失败或为空: {tag}")
+            _log_step(f"补充资讯源-{tag}: 结束，未获取到有效数据")
             continue
         frames.append(df)
         logs.append(f"补充源抓取成功: {tag} via {fn}, rows={len(df)}")
+        _log_step(f"补充资讯源-{tag}: 结束，rows={len(df)}")
 
     if not frames:
         return pd.DataFrame(), logs
@@ -334,7 +387,10 @@ def build_sector_heat(news_df, sector_keywords):
     rows = []
     stats = {}
     matched_news_count = 0
-    for _, row in news_df.iterrows():
+    total = len(news_df)
+    for idx, (_, row) in enumerate(news_df.iterrows(), start=1):
+        if _should_log_progress(idx, total):
+            _log_step(_progress_label("CCTV新闻解析", idx, total))
         text = _get_news_text(row)
         if not text:
             continue
@@ -471,7 +527,10 @@ def build_n_day_sector_board(current_date_str, unit_days):
         return pd.DataFrame(), []
 
     frames = []
-    for ds in selected_days:
+    total = len(selected_days)
+    for idx, ds in enumerate(selected_days, start=1):
+        if _should_log_progress(idx, total):
+            _log_step(_progress_label("多日榜单聚合", idx, total))
         p = latest_by_day[ds]
         try:
             df = pd.read_csv(p, encoding="utf-8-sig")
@@ -509,9 +568,9 @@ def build_n_day_sector_board(current_date_str, unit_days):
 
 def _confidence_tier(heat_score, mention, sentiment):
     signal = heat_score + mention * 0.5 + max(sentiment, 0) * 0.3
-    if signal >= 20:
+    if signal >= 40:
         return "高"
-    if signal >= 10:
+    if signal >= 16:
         return "中"
     return "观察"
 
@@ -534,7 +593,10 @@ def build_sector_stock_pool(date_str, sector_df, stock_hints, sector_keywords, *
     sw_member_cache = {}
 
     rows = []
-    for _, sec_row in sector_df.iterrows():
+    total = len(sector_df)
+    for idx, (_, sec_row) in enumerate(sector_df.iterrows(), start=1):
+        if _should_log_progress(idx, total):
+            _log_step(_progress_label("CCTV个股池", idx, total))
         sector = sec_row["板块"]
         hints = stock_hints.get(sector, [])
         keywords = sector_keywords.get(sector, [])
@@ -686,6 +748,7 @@ def main():
     if args.unit_days <= 0:
         print("--unit-days 必须 >= 1")
         return
+    _log_step("开始抓取 CCTV 新闻")
     date_str, news_df, raw_news_count = fetch_cctv_news(args.date, fallback=(not args.no_fallback))
     if news_df.empty:
         print("未获取到可用 CCTV 新闻，退出")
@@ -694,7 +757,12 @@ def main():
     keyword_news_df = news_df
     extra_news_df = pd.DataFrame()
     if not args.disable_extra_news:
-        extra_news_df, extra_logs = fetch_extra_news_bundle(args.extra_news_sources, args.extra_news_limit)
+        _log_step("开始抓取补充资讯源")
+        extra_news_df, extra_logs = fetch_extra_news_bundle(
+            args.extra_news_sources,
+            args.extra_news_limit,
+            timeout_seconds=max(int(args.extra_news_timeout), 1),
+        )
         for line in extra_logs:
             print(line)
         if not extra_news_df.empty:
@@ -704,12 +772,14 @@ def main():
             extra_news_df.to_csv(extra_path, index=False, encoding="utf-8-sig")
             print(f"已保存: {extra_path}")
 
+    _log_step("开始构建关键词和板块热度")
     sector_keywords, emerging_df = _build_auto_sector_keywords(keyword_news_df, args.emerging_top_n)
     sector_df, matched_df, _ = build_sector_heat(keyword_news_df, sector_keywords)
     if sector_df.empty:
         print("未匹配到板块关键词，可扩展词库")
         return
 
+    _log_step("开始计算个股池")
     sector_df = enrich_with_prev_change(date_str, sector_df)
 
     quality_df = build_quality_metrics(date_str, raw_news_count, len(news_df), matched_df, sector_df)
@@ -739,6 +809,7 @@ def main():
     used_days = []
     unit_board_path = None
     if args.unit_days > 1:
+        _log_step("开始聚合多日榜单")
         unit_df, used_days = build_n_day_sector_board(date_str, args.unit_days)
         if not unit_df.empty and used_days:
             day_start = used_days[0]
@@ -762,6 +833,7 @@ def main():
     )
 
     if args.backtest_days > 0:
+        _log_step("开始回测 CCTV 板块信号")
         bt = run_backtest(args.backtest_days)
         if not bt.empty:
             bt_path = DATA_DIR / f"CCTV-Backtest-{date_str}.csv"

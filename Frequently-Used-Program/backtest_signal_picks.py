@@ -464,12 +464,19 @@ def _calc_index_metrics(index_df: pd.DataFrame) -> pd.DataFrame:
     return m[["date", "ret_5", "ret_20", "vol_20"]]
 
 
-def _classify_market_regime(ret_5: float | None, ret_20: float | None, vol_20: float | None, hs300_ret_20: float | None) -> str:
+def _classify_market_regime(
+    ret_5: float | None,
+    ret_20: float | None,
+    vol_20: float | None,
+    hs300_ret_20: float | None,
+    vol_threshold_up: float = 1.8,
+    vol_threshold_down: float = 1.8,
+) -> str:
     if ret_20 is None:
         return "side"
 
-    up_cond = ret_20 >= 4.0 and (ret_5 is not None and ret_5 >= 0.0) and (vol_20 is None or vol_20 <= 1.8)
-    down_cond = ret_20 <= -4.0 or ((ret_5 is not None and ret_5 <= -3.0) and (vol_20 is not None and vol_20 >= 1.8))
+    up_cond = ret_20 >= 4.0 and (ret_5 is not None and ret_5 >= 0.0) and (vol_20 is None or vol_20 <= vol_threshold_up)
+    down_cond = ret_20 <= -4.0 or ((ret_5 is not None and ret_5 <= -3.0) and (vol_20 is not None and vol_20 >= vol_threshold_down))
 
     if hs300_ret_20 is not None and hs300_ret_20 <= -5.0:
         down_cond = True
@@ -529,6 +536,12 @@ def _build_market_based_daily_weights(
     sh_m = _calc_index_metrics(sh_df)
     hs_m = _calc_index_metrics(hs300_df)
 
+    # 基于历史中位波动率自适应调整阈值，避免硬编码 1.8% 不适应不同周期
+    all_vol = pd.to_numeric(sh_m["vol_20"], errors="coerce").dropna()
+    vol_median = float(all_vol.median()) if not all_vol.empty else 1.8
+    vol_threshold_up = vol_median * 0.8
+    vol_threshold_down = vol_median * 1.2
+
     output: dict[str, dict[str, float]] = {}
     meta: dict[str, dict[str, str]] = {}
     for d in valid_dates:
@@ -551,7 +564,11 @@ def _build_market_based_daily_weights(
         if hs_last is not None and pd.notna(hs_last["ret_20"]):
             hs_ret_20 = float(hs_last["ret_20"])
 
-        regime = _classify_market_regime(ret_5=ret_5, ret_20=ret_20, vol_20=vol_20, hs300_ret_20=hs_ret_20)
+        regime = _classify_market_regime(
+            ret_5=ret_5, ret_20=ret_20, vol_20=vol_20, hs300_ret_20=hs_ret_20,
+            vol_threshold_up=vol_threshold_up,
+            vol_threshold_down=vol_threshold_down,
+        )
         output[d] = _weights_from_regime(regime, side_fallback=fallback_weights)
 
         r5_txt = "NA" if ret_5 is None else f"{ret_5:.2f}%"

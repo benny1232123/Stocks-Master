@@ -14,8 +14,8 @@ import matplotlib.pyplot as plt
 PRICE_UPPER_LIMIT = 30  # 股价上限
 PRICE_LOWER_LIMIT = 5   # 股价下限
 DEBT_ASSET_RATIO_LIMIT = 70  # 资产负债率上限
-BOll_STD_MULTIPLIER = 2.0  # 布林带标准差倍数，调大后筛选更严格
-BOLL_NEAR_LOWER_MARGIN = 1.005  # “接近下轨”的容差，调小后筛选更严格
+BOll_STD_MULTIPLIER = 1.645  # 布林带标准差倍数（90%概率区间），与 Boll-All/full_flow 一致
+BOLL_NEAR_LOWER_MARGIN = 1.015  # “接近下轨”的容差，与 Boll-All/full_flow 一致
 CURRENT_YEAR = datetime.now().year
 LAST_YEAR = CURRENT_YEAR - 1
 
@@ -32,8 +32,8 @@ PLOT_SHOW = False                  # Windows下可改 True 弹窗；默认 False
 # 5月前用去年年报，5-8月用一季报，9-10月用中报，11月后用三季报
 current_month = datetime.now().month
 if current_month < 5:
-    REPORT_DATE_PROFIT = f"{LAST_YEAR}0930" # 利润表/现金流量表使用去年年报
-    REPORT_DATE_HOLDER = f"{LAST_YEAR}0930" # 股东信息使用去年年报
+    REPORT_DATE_PROFIT = f"{LAST_YEAR}1231" # 利润表/现金流量表使用去年年报
+    REPORT_DATE_HOLDER = f"{LAST_YEAR}1231" # 股东信息使用去年年报
 elif current_month < 9:
     REPORT_DATE_PROFIT = f"{CURRENT_YEAR}0331"
     REPORT_DATE_HOLDER = f"{CURRENT_YEAR}0331"
@@ -45,7 +45,7 @@ else:
     REPORT_DATE_HOLDER = f"{CURRENT_YEAR}0930"
 
 if current_month < 5:
-    ZCFZ_DATE1 = f"{LAST_YEAR}0930" 
+    ZCFZ_DATE1 = f"{LAST_YEAR}1231" 
     ZCFZ_DATE2 = f"{LAST_YEAR}0630"
 elif current_month < 9:
     ZCFZ_DATE1 = f"{CURRENT_YEAR}0331" 
@@ -60,18 +60,7 @@ else:
 ZCFZ_DATES = [ZCFZ_DATE1, ZCFZ_DATE2] 
 
 
-UNFAMILIAR_INDUSTRY = [
-    "钢铁行业", "化学制品", "房地产开发", "纺织服装", "水泥建材", "燃气",
-    "航运港口", "化学原料", "美容护理", "农药兽药", "化纤行业", "采掘行业",
-    "化肥行业", "酿酒行业", "中药", "化学制药", "医药商业", "生物制品",
-    "工业金属", "钢铁", "港口航运", "造纸", "包装印刷", "食品加工制造", 
-    "环境治理", "服装家纺", "养殖业", "建筑材料", "农产品加工", "纺织制造",
-    "乳胶制品",  "机场航运", "公路铁路运输", "化学纤维", "电池", 
-    "生物制品", "光学光电子", "种植业与林业", "农化制品", "金属新材料", "饮料制造",
-    "小金属", "建筑装饰", "石油加工贸易", "橡胶制品", "油气开采及服务","医疗服务",
-    "电子化学品", "煤炭开采加工", "医疗器械", "贵金属"
 
-]
 IMPORTANT_SHAREHOLDERS = [
     "香港中央结算有限公司", "中央汇金资产管理有限公司", "中央汇金投资有限责任公司",
     "香港中央结算（代理人）有限公司", "中国证券金融股份有限公司"
@@ -190,8 +179,7 @@ for period in ["3日排行", "5日排行", "10日排行"]:
         all_fund_flow_codes[f'format_{period_name}_days_positive_funds_codes'] = codes
     else:
         all_fund_flow_codes[f'format_{period_name}_days_positive_funds_codes'] = []
-    time.sleep(0)
-
+    
 format_three_days_positive_funds_codes = all_fund_flow_codes.get('format_3_days_positive_funds_codes', [])
 format_five_days_positive_funds_codes = all_fund_flow_codes.get('format_5_days_positive_funds_codes', [])
 format_ten_days_positive_funds_codes = all_fund_flow_codes.get('format_10_days_positive_funds_codes', [])
@@ -209,8 +197,7 @@ for date_str in ZCFZ_DATES:
     if not s_zcfz_df.empty:
         s_good_zcfz_df = s_zcfz_df[s_zcfz_df['资产负债率'] < DEBT_ASSET_RATIO_LIMIT]
         zcfz_codes_list.extend(s_good_zcfz_df['股票代码'].tolist())
-    time.sleep(0)
-zcfz_codes = list(set(zcfz_codes_list))
+    zcfz_codes = list(set(zcfz_codes_list))
 
 
 '''3.2.利润表'''
@@ -224,7 +211,6 @@ if not profit_df.empty:
     #good_profit_df = profit_df[(profit_df['净利润'] > 0) & (profit_df['净利润同比'] > 0)]
     good_profit_df = profit_df[(profit_df['净利润'] > 0)]
     profit_codes = good_profit_df['股票代码'].tolist()
-time.sleep(0)
 
 '''3.3.现金流量表'''
 cashflow_df = fetch_data_with_fallback(
@@ -236,7 +222,6 @@ cashflow_codes = []
 if not cashflow_df.empty:
     good_cashflow_df = cashflow_df[cashflow_df['经营性现金流-现金流量净额'] > 0]
     cashflow_codes = good_cashflow_df['股票代码'].tolist()
-time.sleep(0)
 
 '''3.4.盈利预测'''
 profit_forecast_df = fetch_data_with_fallback(
@@ -256,7 +241,6 @@ if not profit_forecast_df.empty:
         print(f"'{forecast_col}' not found in profit forecast data. 跳过盈利预测条件")
 else:
     print("盈利预测数据为空，跳过盈利预测条件")
-time.sleep(0)
 
 
 '''4.数据处理'''
@@ -449,6 +433,7 @@ def plot_bollinger(
 days_back = 60
 start_date = (datetime.now() - timedelta(days=days_back)).strftime('%Y-%m-%d')
 boll_selected_codes = []
+boll_selected_buy = {}
 plot_saved_count = 0
 
 
@@ -471,7 +456,7 @@ for fncode in final_candidate_codes:
             start_date=start_date,
             end_date=f"{CURRENT_YEAR}-{current_month}-{current_day}",
             frequency="d",
-            adjustflag="2"
+            adjustflag="3"
         )
         if rs is None:
             print(f"{fncode} {stock_name} K线接口返回空对象，跳过")
@@ -512,7 +497,7 @@ for fncode in final_candidate_codes:
         result_df['MA20'] = result_df['close'].rolling(window=20).mean()
         result_df['STD20'] = result_df['close'].rolling(window=20).std()
         
-        # 95%概率对应约2倍标准差；比默认 1.645 更严格
+        # 90%概率对应 1.645 倍标准差；与 Boll-All/full_flow 一致
         k = BOll_STD_MULTIPLIER
         result_df['Upper'] = result_df['MA20'] + k * result_df['STD20']
         result_df['Lower'] = result_df['MA20'] - k * result_df['STD20']
@@ -520,8 +505,9 @@ for fncode in final_candidate_codes:
         latest = result_df.iloc[-1]
         selected_zone_mask = result_df['close'] <= result_df['Lower'] * BOLL_NEAR_LOWER_MARGIN
         oversold_mask = result_df['close'] < result_df['Lower']
+        near_lower_only_mask = selected_zone_mask & ~oversold_mask  # 接近但未低于下轨
         oversold_streak = _count_trailing_true(oversold_mask)
-        selected_zone_streak = _count_trailing_true(selected_zone_mask)
+        near_lower_streak = _count_trailing_true(near_lower_only_mask)
 
         selected = False
         if latest['close'] < latest['Lower']:
@@ -532,17 +518,21 @@ for fncode in final_candidate_codes:
                 )
             else:
                 print(f"{fncode} {stock_name} 价格低于布林带下轨 (95%概率)，超卖".strip())
+                suggested_buy = round(min(float(latest['close']), float(latest['Lower'])), 2)
                 boll_selected_codes.append(fncode)
+                boll_selected_buy[format_stock_code(fncode)] = suggested_buy
                 selected = True
         elif latest['close'] <= latest['Lower'] * BOLL_NEAR_LOWER_MARGIN:
-            if selected_zone_streak > 1:
+            if near_lower_streak > 1:
                 print(
-                    f"{fncode} {stock_name} 连续{selected_zone_streak}日处于下轨附近，"
+                    f"{fncode} {stock_name} 连续{near_lower_streak}日处于下轨附近，"
                     "本日不重复触发".strip()
                 )
             else:
                 print(f"{fncode} {stock_name} 价格接近布林带下轨 (95%概率)，关注".strip())
+                suggested_buy = round(min(float(latest['close']), float(latest['Lower'])), 2)
                 boll_selected_codes.append(fncode)
+                boll_selected_buy[format_stock_code(fncode)] = suggested_buy
                 selected = True
 
         if ENABLE_VISUALIZATION and plot_saved_count < PLOT_MAX_COUNT:
@@ -564,6 +554,7 @@ if boll_selected_codes:
     out_df = pd.DataFrame({
         "股票代码": [format_stock_code(c) for c in boll_selected_codes],
         "股票名称": [code_name_map.get(format_stock_code(c), "") for c in boll_selected_codes],
+        "建议买入价": [boll_selected_buy.get(format_stock_code(c), "") for c in boll_selected_codes],
     })
     out_df.to_csv(
         f"stock_data/Stock-Selection-Boll-{today}.csv",

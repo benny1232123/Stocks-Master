@@ -36,8 +36,8 @@ T = TypeVar("T")
 FULL_FLOW_CACHE_DIR = STOCK_DATA_DIR / "cache" / "full_flow"
 FINANCIAL_CACHE_DIR = FULL_FLOW_CACHE_DIR / "financial"
 SHAREHOLDER_CACHE_DIR = FULL_FLOW_CACHE_DIR / "shareholder"
-BOLL_STAGE_TIMEOUT_PER_CODE_SECONDS = 2.0
-BOLL_STAGE_TIMEOUT_MIN_SECONDS = 120.0
+BOLL_STAGE_TIMEOUT_PER_CODE_SECONDS = 0.5
+BOLL_STAGE_TIMEOUT_MIN_SECONDS = 60.0
 
 
 def _is_cache_fresh(cache_path: Path, max_cache_age_hours: float) -> bool:
@@ -305,7 +305,7 @@ def _calc_liability_ratio_percent(balance_df: pd.DataFrame) -> float | None:
     if ratio_raw is None:
         return None
     if ratio_raw <= 1:
-        return ratio_raw * 10000
+        return ratio_raw * 100
     return ratio_raw
 
 

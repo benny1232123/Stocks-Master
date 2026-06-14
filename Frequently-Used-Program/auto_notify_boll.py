@@ -44,7 +44,8 @@ def _build_macro_news_trend_summary(window_days=3, top_n=0, *, auto_fetch=True):
             count = 0
         if top_n > 0 and count >= top_n:
             continue
-        level = "高" if item["risk_score"] >= 4 else "中"
+        score = item["risk_score"]
+        level = "高" if score >= 4 else "中" if score >= 2 else "低"
         tags = "/".join(item["tags"]) if item["tags"] else "综合"
         lines.append(f"    [{level}] {item['title']} | 影响链条: {tags}")
         count += 1
@@ -73,6 +74,281 @@ from urllib import error, request
 import akshare as ak
 import baostock as bs
 import pandas as pd
+
+
+# --- 宏观外部数据：美股 / 汇率 / 期货 ---
+
+import math as _math
+
+
+def _safe_float(val, default=None):
+    """安全转 float，过滤 None / NaN / 非数值。"""
+    try:
+        v = float(val)
+        if _math.isnan(v) or _math.isinf(v):
+            return default
+        return v
+    except Exception:
+        return default
+
+
+def _fetch_us_market_data():
+    """获取美股三大指数最近行情，返回 dict with keys: sp500, nasdaq, dow."""
+    indices = {
+        "sp500": ".INX",
+        "nasdaq": ".IXIC",
+        "dow": ".DJI",
+    }
+    result = {}
+    for key, symbol in indices.items():
+        try:
+            df = ak.index_us_stock_sina(symbol=symbol)
+            if df is None or df.empty:
+                continue
+            df = df.tail(25)
+            last = df.iloc[-1]
+            prev = df.iloc[-2] if len(df) >= 2 else last
+            close = _safe_float(last.get("close"))
+            prev_close = _safe_float(prev.get("close"))
+            ret_1d = ((close - prev_close) / prev_close * 100) if (close and prev_close) else None
+            close_5d = _safe_float(df.iloc[-6].get("close")) if len(df) >= 6 else None
+            close_20d = _safe_float(df.iloc[-21].get("close")) if len(df) >= 21 else None
+            ret_5d = ((close - close_5d) / close_5d * 100) if (close and close_5d) else None
+            ret_20d = ((close - close_20d) / close_20d * 100) if (close and close_20d) else None
+            result[key] = {
+                "close": close,
+                "ret_1d": ret_1d,
+                "ret_5d": ret_5d,
+                "ret_20d": ret_20d,
+            }
+        except Exception:
+            continue
+    return result
+
+
+def _fetch_fx_data():
+    """获取关键汇率数据，返回 dict with keys: usdcny, eurusd etc."""
+    try:
+        df = ak.fx_spot_quote()
+        if df is None or df.empty:
+            return {}
+    except Exception:
+        return {}
+
+    result = {}
+    # fx_spot_quote 列名可能有编码问题，用列位置
+    cols = df.columns.tolist()
+    for _, row in df.iterrows():
+        pair = str(row.iloc[0]).strip() if len(cols) > 0 else ""
+        buy = _safe_float(row.iloc[1]) if len(cols) > 1 else None
+        sell = _safe_float(row.iloc[2]) if len(cols) > 2 else None
+        mid = None
+        if buy and sell:
+            mid = (buy + sell) / 2
+        elif buy:
+            mid = buy
+        elif sell:
+            mid = sell
+        if pair == "USD/CNY":
+            result["usdcny"] = mid
+        elif pair == "EUR/CNY":
+            result["eurcny"] = mid
+        elif pair == "100JPY/CNY":
+            result["jpycny"] = mid
+        elif pair == "GBP/CNY":
+            result["gbpcny"] = mid
+        elif pair == "CNY/KRW":
+            result["cnykrw"] = mid
+    return result
+
+
+def _fetch_futures_data():
+    """获取关键期货品种最近行情，返回 dict with keys: crude_oil, gold, copper."""
+    futures_map = {
+        "crude_oil": "CL",
+        "gold": "GC",
+        "copper": "HG",
+    }
+    result = {}
+    for key, symbol in futures_map.items():
+        try:
+            df = ak.futures_foreign_hist(symbol=symbol)
+            if df is None or df.empty:
+                continue
+            df = df.tail(25)
+            last = df.iloc[-1]
+            prev = df.iloc[-2] if len(df) >= 2 else last
+            close = _safe_float(last.get("close"))
+            prev_close = _safe_float(prev.get("close"))
+            ret_1d = ((close - prev_close) / prev_close * 100) if (close and prev_close) else None
+            close_5d = _safe_float(df.iloc[-6].get("close")) if len(df) >= 6 else None
+            close_20d = _safe_float(df.iloc[-21].get("close")) if len(df) >= 21 else None
+            ret_5d = ((close - close_5d) / close_5d * 100) if (close and close_5d) else None
+            ret_20d = ((close - close_20d) / close_20d * 100) if (close and close_20d) else None
+            result[key] = {
+                "close": close,
+                "ret_1d": ret_1d,
+                "ret_5d": ret_5d,
+                "ret_20d": ret_20d,
+            }
+        except Exception:
+            continue
+    return result
+
+
+def _assess_us_market_risk(us_data):
+    """根据美股表现评估风险等级，返回 (level, reason)。"""
+    if not us_data:
+        return "low", ""
+    risks = []
+    for name, info in us_data.items():
+        label = {"sp500": "标普500", "nasdaq": "纳斯达克", "dow": "道琼斯"}.get(name, name)
+        ret_1d = info.get("ret_1d")
+        ret_5d = info.get("ret_5d")
+        ret_20d = info.get("ret_20d")
+        if ret_1d is not None and ret_1d <= -3:
+            risks.append(f"{label}单日跌{ret_1d:.1f}%")
+        elif ret_5d is not None and ret_5d <= -5:
+            risks.append(f"{label}5日跌{ret_5d:.1f}%")
+        elif ret_20d is not None and ret_20d <= -10:
+            risks.append(f"{label}20日跌{ret_20d:.1f}%")
+    high_count = sum(1 for r in risks if "跌" in r and (("-5%" in r) or ("-10%" in r) or ("-3%" in r)))
+    if high_count >= 2:
+        return "high", "; ".join(risks)
+    if high_count == 1:
+        return "medium", "; ".join(risks)
+    return "low", ""
+
+
+def _assess_fx_risk(fx_data):
+    """根据汇率变动评估风险，返回 (level, reason)。"""
+    if not fx_data:
+        return "low", ""
+    usdcny = fx_data.get("usdcny")
+    if usdcny is None or (isinstance(usdcny, float) and _math.isnan(usdcny)):
+        return "low", ""
+    # 人民币大幅贬值为风险信号
+    if usdcny >= 7.3:
+        return "high", f"美元/人民币={usdcny:.4f}，人民币显著贬值"
+    if usdcny >= 7.1:
+        return "medium", f"美元/人民币={usdcny:.4f}，人民币偏弱"
+    return "low", ""
+
+
+def _assess_futures_risk(futures_data):
+    """根据期货表现评估风险，返回 (level, reason)。"""
+    if not futures_data:
+        return "low", ""
+    risks = []
+    crude = futures_data.get("crude_oil")
+    gold = futures_data.get("gold")
+    if crude and crude.get("ret_5d") is not None and crude["ret_5d"] <= -10:
+        risks.append(f"原油5日跌{crude['ret_5d']:.1f}%")
+    if gold and gold.get("ret_5d") is not None and gold["ret_5d"] >= 5:
+        risks.append(f"黄金5日涨{gold['ret_5d']:.1f}%（避险情绪升温）")
+    if crude and crude.get("ret_1d") is not None and crude["ret_1d"] <= -5:
+        risks.append(f"原油单日跌{crude['ret_1d']:.1f}%")
+    if gold and gold.get("ret_1d") is not None and gold["ret_1d"] >= 3:
+        risks.append(f"黄金单日涨{gold['ret_1d']:.1f}%")
+    high_count = len([r for r in risks if "跌" in r or "涨" in r])
+    if high_count >= 2:
+        return "high", "; ".join(risks)
+    if high_count == 1:
+        return "medium", "; ".join(risks)
+    return "low", ""
+
+
+def _build_macro_external_summary():
+    """汇总美股/汇率/期货的外部风险信号，返回文本和综合风险等级。"""
+    us_data = _fetch_us_market_data()
+    fx_data = _fetch_fx_data()
+    futures_data = _fetch_futures_data()
+
+    us_level, us_reason = _assess_us_market_risk(us_data)
+    fx_level, fx_reason = _assess_fx_risk(fx_data)
+    fut_level, fut_reason = _assess_futures_risk(futures_data)
+
+    level_map = {"high": 3, "medium": 2, "low": 1}
+    max_level = max(level_map.get(us_level, 1), level_map.get(fx_level, 1), level_map.get(fut_level, 1))
+    overall = {v: k for k, v in level_map.items()}[max_level]
+
+    lines = []
+    lines.append("\n## 7b) 宏观外部市场信号")
+    lines.append("- 数据来源: akshare (Sina/FX/期货历史)")
+
+    # 美股
+    if us_data:
+        parts = []
+        for name in ["sp500", "nasdaq", "dow"]:
+            info = us_data.get(name)
+            if not info:
+                continue
+            label = {"sp500": "标普500", "nasdaq": "纳指", "dow": "道指"}[name]
+            c = info.get("close")
+            r1 = info.get("ret_1d")
+            r5 = info.get("ret_5d")
+            r20 = info.get("ret_20d")
+            seg = f"{label}"
+            if c:
+                seg += f" {c:.0f}"
+            if r1 is not None:
+                seg += f" 1日{'+' if r1 >= 0 else ''}{r1:.1f}%"
+            if r5 is not None:
+                seg += f" 5日{'+' if r5 >= 0 else ''}{r5:.1f}%"
+            if r20 is not None:
+                seg += f" 20日{'+' if r20 >= 0 else ''}{r20:.1f}%"
+            parts.append(seg)
+        if parts:
+            lines.append(f"- 美股: {' | '.join(parts)} [{us_level}]")
+    else:
+        lines.append("- 美股: 数据获取失败")
+
+    # 汇率
+    if fx_data:
+        fx_parts = []
+        for key, label in [("usdcny", "USD/CNY"), ("eurcny", "EUR/CNY"), ("gbpcny", "GBP/CNY")]:
+            val = fx_data.get(key)
+            if val is not None and not (isinstance(val, float) and _math.isnan(val)):
+                fx_parts.append(f"{label}={val:.4f}")
+        if fx_parts:
+            lines.append(f"- 汇率: {' | '.join(fx_parts)} [{fx_level}]")
+    else:
+        lines.append("- 汇率: 数据获取失败")
+
+    # 期货
+    if futures_data:
+        fut_parts = []
+        for name in ["crude_oil", "gold", "copper"]:
+            info = futures_data.get(name)
+            if not info:
+                continue
+            label = {"crude_oil": "原油", "gold": "黄金", "copper": "铜"}[name]
+            c = info.get("close")
+            r1 = info.get("ret_1d")
+            r5 = info.get("ret_5d")
+            seg = f"{label}"
+            if c:
+                seg += f" {c:.1f}"
+            if r1 is not None:
+                seg += f" 1日{'+' if r1 >= 0 else ''}{r1:.1f}%"
+            if r5 is not None:
+                seg += f" 5日{'+' if r5 >= 0 else ''}{r5:.1f}%"
+            fut_parts.append(seg)
+        if fut_parts:
+            lines.append(f"- 期货: {' | '.join(fut_parts)} [{fut_level}]")
+    else:
+        lines.append("- 期货: 数据获取失败")
+
+    # 综合
+    reasons = [r for r in [us_reason, fx_reason, fut_reason] if r]
+    if overall == "high":
+        lines.append(f"- 综合风险: **高** - {'; '.join(reasons)}")
+    elif overall == "medium":
+        lines.append(f"- 综合风险: 中 - {'; '.join(reasons)}")
+    else:
+        lines.append("- 综合风险: 低 - 外部市场整体平稳")
+
+    return "\n".join(lines), overall
 
 
 ROOT_DIR = Path(__file__).resolve().parents[1]
@@ -332,11 +608,40 @@ def _has_positive_macro_context(text):
 
 
 # 联播快讯为多条简讯拼盘，标题固定，不参与宏观风险命中与 burst 统计
-MACRO_RISK_EXCLUDED_NEWS_TITLES = frozenset({"国际联播快讯", "国内联播快讯"})
+MACRO_RISK_EXCLUDED_NEWS_TITLES = frozenset({
+    "国际联播快讯", "国内联播快讯", "联播快讯",
+    "新闻联播", "朝闻天下", "晚间新闻",
+})
+
+# 宣传/历史纪录片类关键词，匹配到时降低风险等级
+MACRO_PROMO_TITLE_KEYWORDS = (
+    "伟大征程", "复兴之路", "辉煌中国", "厉害了", "奋斗",
+    "初心使命", "红色沃土", "时代华章", "新征程", "百年风华",
+    "星星之火", "燎原", "长征", "赶考", "答卷",
+)
 
 
 def _is_macro_risk_excluded_news_title(title):
-    return (title or "").strip() in MACRO_RISK_EXCLUDED_NEWS_TITLES
+    t = (title or "").strip()
+    if not t:
+        return True
+    if t in MACRO_RISK_EXCLUDED_NEWS_TITLES:
+        return True
+    # 联播快讯变体：只要包含"联播快讯"四个字就排除
+    if "联播快讯" in t:
+        return True
+    return False
+
+
+def _is_promo_or_historical_title(title):
+    """判断是否为宣传/历史纪录片类标题，这类标题的风险关键词不计入宏观风险。"""
+    t = (title or "").strip()
+    if not t:
+        return False
+    # 带【】的节目标题通常为宣传/专题类
+    if re.search(r"【[^】]{2,20}】", t):
+        return any(kw in t for kw in MACRO_PROMO_TITLE_KEYWORDS)
+    return any(kw in t for kw in MACRO_PROMO_TITLE_KEYWORDS)
 
 
 def _clean_macro_terms(values):
@@ -521,6 +826,16 @@ def _collect_macro_risk_events(
                                 continue
                         risk_score = len(uniq_hits)
                         matched_tags = uniq_hits[:3]
+
+                    # 宣传/历史纪录片类标题：风险关键词降级处理
+                    if _is_promo_or_historical_title(title):
+                        if risk_score > 0:
+                            risk_score = max(1, risk_score // 2)
+                        if matched_tags:
+                            matched_tags.append("宣传/历史")
+                        # 宣传类且无NLP结果时直接跳过
+                        if risk_score <= 1 and not nlp_result:
+                            continue
 
                     if risk_score == 0 and not nlp_result:
                         continue
@@ -941,8 +1256,81 @@ def _fmt_num(value, digits=2, na="N/A"):
     return f"{num:.{digits}f}"
 
 
+def _fetch_dividend_yield_ttm(code, end_date_text):
+    """返回股息率(TTM, %)，失败则返回 None。"""
+    norm = _normalize_code(code)
+    if not norm:
+        return None
+
+    cache_key = f"stock_data/dividend_yield_ttm_{norm}_{end_date_text}.csv"
+    table_name = _cache_table_name(cache_key)
+    cached_df = _read_cache_df(table_name)
+    if not cached_df.empty:
+        cached_value = _to_float(cached_df.iloc[-1].get("dv_ttm"))
+        if cached_value is not None:
+            return cached_value
+
+    try:
+        df = ak.stock_a_lg_indicator(symbol=norm)
+    except Exception:
+        return None
+    if df is None or df.empty:
+        return None
+
+    row = df.iloc[-1].to_dict()
+    raw_value = None
+    for key in ("dv_ttm", "dv_ratio", "dividend_yield", "股息率", "股息率(%)"):
+        if key in row:
+            raw_value = row.get(key)
+            break
+    if raw_value is None:
+        return None
+
+    pct_value = _to_percent_like(raw_value)
+    if pct_value is None:
+        return None
+    _write_cache_df(table_name, pd.DataFrame([{"dv_ttm": pct_value}]))
+    return pct_value
+
+
+def _filter_rows_by_dividend_yield(rows, *, min_yield_pct, log_lines=None, label=""):
+    if not rows:
+        return []
+    if min_yield_pct is None or min_yield_pct <= 0:
+        return rows
+
+    end_date_text = datetime.now().strftime("%Y-%m-%d")
+    kept = []
+    low_count = 0
+    missing_count = 0
+    for item in rows:
+        code = _normalize_code(item.get("code"))
+        if not code:
+            continue
+        dv_pct = _fetch_dividend_yield_ttm(code, end_date_text)
+        if dv_pct is None:
+            missing_count += 1
+            kept.append(item)
+            continue
+        if dv_pct < float(min_yield_pct):
+            low_count += 1
+            continue
+        kept.append(item)
+
+    if log_lines is not None:
+        label_text = f"{label} " if label else ""
+        _append_log(
+            log_lines,
+            (
+                f"股息率过滤: {label_text}min={min_yield_pct:.2f}% "
+                f"kept={len(kept)} filtered={low_count} missing={missing_count}"
+            ),
+        )
+    return kept
+
+
 def _fetch_bs_latest_row(bs_code, end_date_text, lookback_days=40):
-    cache_key = f"stock_data/bs_latest_row_{bs_code}_{end_date_text}.csv"
+    cache_key = f"stock_data/bs_latest_row_{bs_code}_{end_date_text}_adj3.csv"
     table_name = _cache_table_name(cache_key)
     cached_df = _read_cache_df(table_name)
     if not cached_df.empty:
@@ -957,7 +1345,7 @@ def _fetch_bs_latest_row(bs_code, end_date_text, lookback_days=40):
         start_date=start_date_text,
         end_date=end_date_text,
         frequency="d",
-        adjustflag="2",
+        adjustflag="3",
     )
     if rs.error_code != "0":
         return None
@@ -970,6 +1358,92 @@ def _fetch_bs_latest_row(bs_code, end_date_text, lookback_days=40):
     row = dict(zip(rs.fields, data_list[-1]))
     _write_cache_df(table_name, pd.DataFrame([row]))
     return row
+
+
+def _fetch_bs_close_series(bs_code, end_date_text, lookback_days=60):
+    cache_key = f"stock_data/bs_close_{bs_code}_{end_date_text}_{lookback_days}_adj3.csv"
+    table_name = _cache_table_name(cache_key)
+    cached_df = _read_cache_df(table_name)
+    if not cached_df.empty and "close" in cached_df.columns:
+        cached_df = cached_df.copy()
+        cached_df["close"] = pd.to_numeric(cached_df["close"], errors="coerce")
+        cached_df = cached_df.dropna(subset=["close"])
+        if not cached_df.empty:
+            return cached_df.reset_index(drop=True)
+
+    start_date_text = (datetime.strptime(end_date_text, "%Y-%m-%d") - timedelta(days=lookback_days)).strftime("%Y-%m-%d")
+    rs = bs.query_history_k_data_plus(
+        bs_code,
+        "date,close",
+        start_date=start_date_text,
+        end_date=end_date_text,
+        frequency="d",
+        adjustflag="3",
+    )
+    if rs.error_code != "0":
+        return pd.DataFrame()
+
+    data_list = []
+    while rs.next():
+        data_list.append(rs.get_row_data())
+    if not data_list or not rs.fields:
+        return pd.DataFrame()
+    df = pd.DataFrame(data_list, columns=rs.fields)
+    df["close"] = pd.to_numeric(df["close"], errors="coerce")
+    df = df.dropna(subset=["close"]).reset_index(drop=True)
+    if not df.empty:
+        _write_cache_df(table_name, df)
+    return df
+
+
+def _calc_boll_levels(close_series, *, k=1.645):
+    if close_series is None or len(close_series) < 20:
+        return {}
+    tail = close_series.tail(20)
+    ma20 = float(tail.mean())
+    std20 = float(tail.std())
+    upper = ma20 + k * std20
+    lower = ma20 - k * std20
+    return {"ma20": ma20, "upper": upper, "lower": lower}
+
+
+def _build_indicator_levels(rows, *, k=1.645, lookback_days=60):
+    if not rows:
+        return {}
+
+    login_res = bs.login()
+    if login_res.error_code != "0":
+        return {}
+
+    end_date_text = datetime.now().strftime("%Y-%m-%d")
+    levels = {}
+    try:
+        for item in rows:
+            code = (item.get("code") or "").strip()
+            key = _normalize_code(code)
+            if not key:
+                continue
+            bs_code = _to_bs_code(code)
+            if not bs_code:
+                continue
+            df = _fetch_bs_close_series(bs_code, end_date_text, lookback_days=lookback_days)
+            if df.empty:
+                continue
+            close_series = df["close"]
+            latest_close = float(close_series.iloc[-1])
+            ma10 = float(close_series.tail(10).mean()) if len(close_series) >= 10 else None
+            boll = _calc_boll_levels(close_series, k=k)
+            levels[key] = {
+                "close": latest_close,
+                "ma10": ma10,
+                "ma20": boll.get("ma20"),
+                "upper": boll.get("upper"),
+                "lower": boll.get("lower"),
+            }
+    finally:
+        bs.logout()
+
+    return levels
 
 
 def _to_ak_index_symbol(index_code):
@@ -1055,8 +1529,21 @@ def _calc_index_metrics(index_df):
 def _macro_risk_level(macro_risk_summary):
     if not macro_risk_summary:
         return "low"
-    high_hits = macro_risk_summary.count("[高]")
-    medium_hits = macro_risk_summary.count("[中]")
+    high_hits = 0
+    medium_hits = 0
+    headline_match = re.search(r"- 命中统计\((?:entry|avg)\): 高=(\d+) 中=(\d+)", macro_risk_summary)
+    if headline_match:
+        try:
+            high_hits = int(headline_match.group(1))
+        except Exception:
+            high_hits = 0
+        try:
+            medium_hits = int(headline_match.group(2))
+        except Exception:
+            medium_hits = 0
+    else:
+        high_hits = macro_risk_summary.count("[高]")
+        medium_hits = macro_risk_summary.count("[中]")
     try:
         high_threshold = max(int(os.getenv("MACRO_RISK_HIGH_HITS", "2").strip() or "2"), 1)
     except Exception:
@@ -1065,20 +1552,10 @@ def _macro_risk_level(macro_risk_summary):
         medium_threshold = max(int(os.getenv("MACRO_RISK_MEDIUM_HITS", "2").strip() or "2"), 1)
     except Exception:
         medium_threshold = 2
-    try:
-        medium_high_threshold = max(int(os.getenv("MACRO_RISK_MEDIUM_HIGH_HITS", "1").strip() or "1"), 1)
-    except Exception:
-        medium_high_threshold = 1
-
-    count_mode = os.getenv("MACRO_RISK_COUNT_MODE", "entry").strip().lower() or "entry"
-    if count_mode == "day":
-        count_mode = "entry"
-    if count_mode not in {"avg", "entry"}:
-        count_mode = "entry"
 
     if high_hits >= high_threshold:
         return "high"
-    if high_hits >= medium_high_threshold or medium_hits >= medium_threshold:
+    if medium_hits >= medium_threshold:
         return "medium"
     return "low"
 
@@ -1222,7 +1699,7 @@ def _build_strategy_allocation(regime, *, boll_rows_count, theme_rows_count, has
     }
 
 
-def _build_market_and_strategy_summary(*, boll_rows_count, theme_rows_count, macro_risk_summary, cctv_summary, has_cctv_hot):
+def _build_market_and_strategy_summary(*, boll_rows_count, theme_rows_count, macro_risk_summary, cctv_summary, has_cctv_hot, macro_external_level="low"):
     simple_report = os.getenv("REPORT_SIMPLE", "1").strip() != "0"
     end_date_text = datetime.now().strftime("%Y-%m-%d")
     start_date_text = (datetime.strptime(end_date_text, "%Y-%m-%d") - timedelta(days=100)).strftime("%Y-%m-%d")
@@ -1244,6 +1721,12 @@ def _build_market_and_strategy_summary(*, boll_rows_count, theme_rows_count, mac
     sh_vol_20 = _to_float(sh_metrics.get("vol_20d"))
 
     macro_level = _macro_risk_level(macro_risk_summary)
+    # 外部市场风险等级取最高
+    level_rank = {"high": 3, "medium": 2, "low": 1}
+    ext_rank = level_rank.get(macro_external_level, 1)
+    news_rank = level_rank.get(macro_level, 1)
+    if ext_rank > news_rank:
+        macro_level = macro_external_level
 
     regime = "震荡轮动"
     if sh_ret_20 is not None and sh_ret_5 is not None:
@@ -1440,12 +1923,20 @@ def _build_message(success, csv_path=None, rows=None, run_output_tail=""):
         )
 
     total = len(rows or [])
+    preview_items = (rows or [])[:20]
+    preview_levels = _build_indicator_levels(preview_items)
     preview_lines = []
-    for item in (rows or [])[:20]:
+    for item in preview_items:
+        level = preview_levels.get(_normalize_code(item.get("code", "")), {})
+        stop = level.get("lower") or level.get("ma20")
+        take = level.get("upper")
+        stop_text = _fmt_num(stop) if stop is not None else "N/A"
+        take_text = _fmt_num(take) if take is not None else "N/A"
+        risk_text = f" 止损:{stop_text} 止盈:{take_text}" if stop is not None or take is not None else ""
         if item["name"]:
-            preview_lines.append(f"- {item['code']} {item['name']}")
+            preview_lines.append(f"- {item['code']} {item['name']}{risk_text}")
         else:
-            preview_lines.append(f"- {item['code']}")
+            preview_lines.append(f"- {item['code']}{risk_text}")
 
     preview_block = "\n".join(preview_lines) if preview_lines else "- (empty)"
     return (
@@ -1481,13 +1972,22 @@ def _build_theme_message(
             "- 原理: 题材策略通过政策/舆情关键词 + 换手活跃度 + 动量筛选弹性方向。"
         )
 
+    levels = _build_indicator_levels(theme_rows or [])
     lines = []
     for item in (theme_rows or []):
         score = item.get("score") or "N/A"
         turn = item.get("turn") or "N/A"
         theme = (item.get("theme") or "").strip()
         theme_text = theme if theme else "无"
-        lines.append(f"- {item['code']} {item['name']} | 分数:{score} 换手:{turn}% | 匹配题材:{theme_text}")
+        level = levels.get(_normalize_code(item.get("code", "")), {})
+        stop = level.get("ma10") or level.get("ma20")
+        take = level.get("upper")
+        stop_text = _fmt_num(stop) if stop is not None else "N/A"
+        take_text = _fmt_num(take) if take is not None else "N/A"
+        risk_text = f" 止损:{stop_text} 止盈:{take_text}" if stop is not None or take is not None else ""
+        lines.append(
+            f"- {item['code']} {item['name']} | 分数:{score} 换手:{turn}%{risk_text} | 匹配题材:{theme_text}"
+        )
 
     title = "\n## 5) 题材策略（仅显示命中当天 CCTV 热点，全量）\n" if cctv_only else "\n## 5) 题材策略(全量)\n"
     count_lines = [f"- 原始候选数: {int(raw_count)}"]
@@ -1535,6 +2035,7 @@ def _build_relativity_message(relativity_csv_path=None, relativity_rows=None):
     if picks == 0:
         return f"\n## 6) 相对强弱策略\n- 结果文件: {relativity_csv_path}\n- 候选数: 0"
 
+    levels = _build_indicator_levels((relativity_rows or [])[:20])
     lines = []
     for item in (relativity_rows or [])[:20]:
         up_pct = _to_percent_like(item.get("up_ratio"))
@@ -1542,8 +2043,14 @@ def _build_relativity_message(relativity_csv_path=None, relativity_rows=None):
         up_text = f"{up_pct:.1f}%" if up_pct is not None else "N/A"
         down_text = f"{down_pct:.1f}%" if down_pct is not None else "N/A"
         overlap = item.get("overlap_days") or "N/A"
+        level = levels.get(_normalize_code(item.get("code", "")), {})
+        stop = level.get("ma20") or level.get("ma10")
+        take = level.get("upper")
+        stop_text = _fmt_num(stop) if stop is not None else "N/A"
+        take_text = _fmt_num(take) if take is not None else "N/A"
+        risk_text = f" 止损:{stop_text} 止盈:{take_text}" if stop is not None or take is not None else ""
         lines.append(
-            f"- {item.get('code', '')} {item.get('name', '')} | 上涨满足率:{up_text} 抗跌满足率:{down_text} 对齐交易日:{overlap}"
+            f"- {item.get('code', '')} {item.get('name', '')} | 上涨满足率:{up_text} 抗跌满足率:{down_text} 对齐交易日:{overlap}{risk_text}"
         )
 
     return (
@@ -1741,10 +2248,24 @@ def _find_latest_news_file(today_yyyymmdd):
     return files[0] if files else None
 
 
-def _ensure_news_file(date_str, *, auto_fetch=True):
+def _find_news_file_by_date(date_str):
     preferred = STOCK_DATA_DIR / f"{date_str}_news.csv"
     if preferred.exists():
         return preferred
+    archive_root = STOCK_DATA_DIR / "archive"
+    if archive_root.exists():
+        matches = list(archive_root.rglob(f"{date_str}_news.csv"))
+        if matches:
+            matches.sort(key=lambda p: p.stat().st_mtime, reverse=True)
+            return matches[0]
+    return None
+
+
+def _ensure_news_file(date_str, *, auto_fetch=True):
+    preferred = STOCK_DATA_DIR / f"{date_str}_news.csv"
+    existing = _find_news_file_by_date(date_str)
+    if existing is not None:
+        return existing
     if not auto_fetch:
         return None
     try:
@@ -1758,6 +2279,35 @@ def _ensure_news_file(date_str, *, auto_fetch=True):
     except Exception:
         return None
     return preferred
+
+
+def _backfill_news_files(today_yyyymmdd, window_days, *, auto_fetch=True, log_lines=None):
+    if not auto_fetch:
+        return
+    window_days = max(int(window_days or 0), 1)
+    for i in range(window_days):
+        date_str = (datetime.strptime(today_yyyymmdd, "%Y%m%d") - timedelta(days=i)).strftime("%Y%m%d")
+        if _find_news_file_by_date(date_str) is not None:
+            continue
+        try:
+            df = ak.news_cctv(date=date_str)
+        except Exception:
+            if log_lines is not None:
+                _append_log(log_lines, f"[macro-news] backfill failed: {date_str}")
+            continue
+        if df is None or df.empty:
+            if log_lines is not None:
+                _append_log(log_lines, f"[macro-news] backfill empty: {date_str}")
+            continue
+        preferred = STOCK_DATA_DIR / f"{date_str}_news.csv"
+        try:
+            df.to_csv(preferred, index=False, encoding="utf-8-sig")
+        except Exception:
+            if log_lines is not None:
+                _append_log(log_lines, f"[macro-news] backfill save failed: {date_str}")
+            continue
+        if log_lines is not None:
+            _append_log(log_lines, f"[macro-news] backfill saved: {date_str}")
 
 
 def _build_macro_risk_summary(today_yyyymmdd, window_days=3, top_n=0, *, auto_fetch=True):
@@ -1827,10 +2377,10 @@ def _build_macro_risk_summary(today_yyyymmdd, window_days=3, top_n=0, *, auto_fe
                 acc[1] += 1
         day_avg = {k: (v[0] / max(v[1], 1)) for k, v in day_scores.items()}
         high_hits = sum(1 for score in day_avg.values() if score >= 4)
-        medium_hits = sum(1 for score in day_avg.values() if 1 <= score < 4)
+        medium_hits = sum(1 for score in day_avg.values() if 2 <= score < 4)
     else:
         high_hits = sum(1 for item in dedup_events if item.get("risk_score", 0) >= 4)
-        medium_hits = sum(1 for item in dedup_events if 1 <= item.get("risk_score", 0) < 4)
+        medium_hits = sum(1 for item in dedup_events if 2 <= item.get("risk_score", 0) < 4)
     try:
         high_threshold = max(int(os.getenv("MACRO_RISK_HIGH_HITS", "2").strip() or "2"), 1)
     except Exception:
@@ -1839,10 +2389,6 @@ def _build_macro_risk_summary(today_yyyymmdd, window_days=3, top_n=0, *, auto_fe
         medium_threshold = max(int(os.getenv("MACRO_RISK_MEDIUM_HITS", "2").strip() or "2"), 1)
     except Exception:
         medium_threshold = 2
-    try:
-        medium_high_threshold = max(int(os.getenv("MACRO_RISK_MEDIUM_HIGH_HITS", "1").strip() or "1"), 1)
-    except Exception:
-        medium_high_threshold = 1
 
     events = sorted(dedup_events, key=lambda x: (x.get("date", ""), x["risk_score"]), reverse=True)
     if isinstance(top_n, int) and top_n > 0:
@@ -1850,7 +2396,7 @@ def _build_macro_risk_summary(today_yyyymmdd, window_days=3, top_n=0, *, auto_fe
 
     lines = [
         f"- 新闻源: 近{window_days}天({len(news_files)}个文件)",
-        f"- 命中统计({count_mode}): 高={high_hits} 中={medium_hits} | 阈值: high>={high_threshold}, medium>={medium_threshold} 或 high>={medium_high_threshold}",
+        f"- 命中统计({count_mode}): 高={high_hits} 中={medium_hits} | 判定阈值: 高>={high_threshold}，中>={medium_threshold}",
         "- 解读: 仅用于交易关注方向，不构成投资建议",
     ]
     if count_mode == "avg" and day_avg:
@@ -1858,7 +2404,8 @@ def _build_macro_risk_summary(today_yyyymmdd, window_days=3, top_n=0, *, auto_fe
         day_line = ", ".join(f"{d}:{score:.1f}" for d, score in day_items)
         lines.append(f"- 日均风险分: {day_line}")
     for idx, item in enumerate(events, start=1):
-        level = "高" if item["risk_score"] >= 4 else "中"
+        score = item["risk_score"]
+        level = "高" if score >= 4 else "中" if score >= 2 else "低"
         tags = "/".join(item["tags"]) if item["tags"] else "综合"
         date_tag = item.get("date", "")
         prefix = f"{date_tag} " if date_tag else ""
@@ -2217,14 +2764,25 @@ def main():
         cctv_disable_extra_news = os.getenv("CCTV_DISABLE_EXTRA_NEWS", "0").strip() == "1"
         cctv_extra_sources = os.getenv("CCTV_EXTRA_NEWS_SOURCES", "cls,sina").strip() or "cls,sina"
         cctv_extra_limit = os.getenv("CCTV_EXTRA_NEWS_LIMIT", "120").strip() or "120"
+        cctv_extra_timeout = os.getenv("CCTV_EXTRA_NEWS_TIMEOUT", "8").strip() or "8"
 
         if cctv_disable_extra_news:
             cctv_cmd.append("--disable-extra-news")
         else:
-            cctv_cmd.extend(["--extra-news-sources", cctv_extra_sources, "--extra-news-limit", cctv_extra_limit])
+            cctv_cmd.extend([
+                "--extra-news-sources",
+                cctv_extra_sources,
+                "--extra-news-limit",
+                cctv_extra_limit,
+                "--extra-news-timeout",
+                cctv_extra_timeout,
+            ])
             _append_log(
                 log_lines,
-                f"{_stage_tag(2, 'cctv', percent=15)} extra-news enabled (sources={cctv_extra_sources}, limit={cctv_extra_limit})",
+                (
+                    f"{_stage_tag(2, 'cctv', percent=15)} extra-news enabled "
+                    f"(sources={cctv_extra_sources}, limit={cctv_extra_limit}, timeout={cctv_extra_timeout}s)"
+                ),
             )
 
         cctv_returncode, cctv_tail = _run_command_with_live_output(
@@ -2261,6 +2819,7 @@ def main():
         macro_window_days = 3
     macro_auto_fetch = os.getenv("MACRO_RISK_AUTO_FETCH_NEWS", "1").strip() != "0"
     today_yyyymmdd = datetime.now().strftime("%Y%m%d")
+    _backfill_news_files(today_yyyymmdd, macro_window_days, auto_fetch=macro_auto_fetch, log_lines=log_lines)
     macro_risk_summary = _build_macro_risk_summary(
         today_yyyymmdd,
         window_days=macro_window_days,
@@ -2272,8 +2831,22 @@ def main():
     # --- 新增：插入宏观新闻多日趋势 ---
     macro_news_trend = _build_macro_news_trend_summary(window_days=macro_window_days, top_n=0, auto_fetch=macro_auto_fetch)
     _append_log(log_lines, macro_news_trend)
+
+    # --- 宏观外部数据：美股/汇率/期货 ---
+    macro_external_summary = ""
+    macro_external_level = "low"
+    try:
+        macro_external_summary, macro_external_level = _build_macro_external_summary()
+        _append_log(log_lines, f"{_stage_tag(3, 'macro-external')} done, level={macro_external_level}")
+    except Exception as exc:
+        _append_log(log_lines, f"{_stage_tag(3, 'macro-external')} failed: {exc}")
+
     min_price_text = os.getenv("MIN_STOCK_PRICE", "5").strip() or "5"
     max_price_text = os.getenv("MAX_STOCK_PRICE", "30").strip() or "30"
+    min_dividend_yield_pct = _to_float(os.getenv("MIN_DIVIDEND_YIELD_PCT", "2").strip() or "2")
+    if min_dividend_yield_pct is None:
+        min_dividend_yield_pct = 0.0
+    _append_log(log_lines, f"股息率下限: {min_dividend_yield_pct:.2f}% (MIN_DIVIDEND_YIELD_PCT)")
 
     theme_csv_path = None
     theme_rows = []
@@ -2463,6 +3036,12 @@ def main():
                 theme_rows = filtered_theme_rows
         else:
             theme_cctv_count = theme_raw_count
+        theme_rows = _filter_rows_by_dividend_yield(
+            theme_rows,
+            min_yield_pct=min_dividend_yield_pct,
+            log_lines=log_lines,
+            label="theme",
+        )
         _append_log(
             log_lines,
             f"Theme csv: {theme_csv_path} (raw={theme_raw_count}, cctv_matched={theme_cctv_count}, shown={len(theme_rows)}, cctv_only={int(theme_cctv_only)})",
@@ -2477,6 +3056,12 @@ def main():
             limit=20,
             min_down_ratio_pct=float(relativity_min_down_ratio_pct),
         )
+        relativity_rows = _filter_rows_by_dividend_yield(
+            relativity_rows,
+            min_yield_pct=min_dividend_yield_pct,
+            log_lines=log_lines,
+            label="relativity",
+        )
         _append_log(log_lines, f"Relativity csv: {relativity_csv_path} (rows={len(relativity_rows)}, min_down_ratio_pct={relativity_min_down_ratio_pct})")
     elif enable_relativity:
         _append_log(log_lines, "Relativity strategy result csv not found.")
@@ -2488,6 +3073,12 @@ def main():
         csv_path = _find_result_csv(today)
         if csv_path and csv_path.exists():
             rows, _ = _read_rows(csv_path)
+            rows = _filter_rows_by_dividend_yield(
+                rows,
+                min_yield_pct=min_dividend_yield_pct,
+                log_lines=log_lines,
+                label="boll",
+            )
             _append_log(log_lines, f"Result csv: {csv_path} (rows={len(rows)})")
         else:
             _append_log(log_lines, "No result csv found after run.")
@@ -2508,6 +3099,7 @@ def main():
         macro_risk_summary=macro_risk_summary,
         cctv_summary=cctv_summary,
         has_cctv_hot=bool(_load_cctv_codes_by_date(today_yyyymmdd)),
+        macro_external_level=macro_external_level,
     )
     _append_log(
         log_lines,
@@ -2534,6 +3126,8 @@ def main():
         msg = msg + "\n\n## 7) 宏观与国际风险提示\n" + macro_risk_summary.lstrip()
     if macro_news_trend:
         msg = msg + "\n" + macro_news_trend.lstrip()
+    if macro_external_summary:
+        msg = msg + "\n" + macro_external_summary
     if cctv_summary:
         msg = msg + "\n\n## 8) CCTV 热点概览\n" + cctv_summary.lstrip()
 

@@ -1,52 +1,106 @@
-# Stocks-Master Copilot 指南
+<!-- Use this file to provide workspace-specific custom instructions to Copilot. For more details, visit https://code.visualstudio.com/docs/copilot/copilot-customization#_use-a-githubcopilotinstructionsmd-file -->
+- [ ] Verify that the copilot-instructions.md file in the .github directory is created.
 
-欢迎来到 Stocks-Master 项目！该项目是一套用于股票数据分析和选择的 Python 脚本。以下是帮助您快速上手的关键信息。
+- [ ] Clarify Project Requirements
+  <!-- Ask for project type, language, and frameworks if not specified. Skip if already provided. -->
 
-## 项目概述
+- [ ] Scaffold the Project
+  <!--
+  Ensure that the previous step has been marked as completed.
+  Call project setup tool with projectType parameter.
+  Run scaffolding command to create project files and folders.
+  Use '.' as the working directory.
+  If no appropriate projectType is available, search documentation using available tools.
+  Otherwise, create the project structure manually using available file creation tools.
+  -->
 
-该代码库旨在通过利用各种财务指标和技术分析策略，实现对A股市场股票的筛选、分析和选择过程的自动化。它使用多个独立的 Python 脚本，每个脚本都专注于特定的分析任务。
+- [ ] Customize the Project
+  <!--
+  Verify that all previous steps have been completed successfully and you have marked the step as completed.
+  Develop a plan to modify codebase according to user requirements.
+  Apply modifications using appropriate tools and user-provided references.
+  Skip this step for "Hello World" projects.
+  -->
 
-## 核心组件
+- [ ] Install Required Extensions
+  <!-- ONLY install extensions provided mentioned in the get_project_setup_info. Skip this step otherwise and mark as completed. -->
 
-- **`Frequently-Used-Program/`**: 包含核心的、经常使用的股票筛选和分析脚本。
-  - `Stock-Selectiion-Trend.py`: 基于趋势、财务指标和筹码分布进行选股。
-  - `Stock-Selection-Boll.py`: 使用布林带策略进行选股。
-  - `Stock-Analysis.py`: 对单个或多个股票进行深入分析。
+- [ ] Compile the Project
+  <!--
+  Verify that all previous steps have been completed.
+  Install any missing dependencies.
+  Run diagnostics and resolve any issues.
+  Check for markdown files in project folder for relevant instructions on how to do this.
+  -->
 
-- **`stock_data/`**: 存储从 API 获取的原始数据和分析结果的 CSV 文件。这可以作为缓存，避免重复请求。
-  - 文件通常以日期或指标命名，例如 `Stock-Selection-20251103.csv` 或 `Industry-Funds-Flow-10日排行.csv`。
+- [ ] Create and Run Task
+  <!--
+  Verify that all previous steps have been completed.
+  Check https://code.visualstudio.com/docs/debugtest/tasks to determine if the project needs a task. If so, use the create_and_run_task to create and launch a task based on package.json, README.md, and project structure.
+  Skip this step otherwise.
+   -->
 
-- **根目录脚本**: 根目录中的脚本 (`Stock-Big-Deal.py`, `Stock-Buffet-index.py` 等) 是用于特定、一次性查询或作为更复杂脚本的早期原型。
+- [ ] Launch the Project
+  <!--
+  Verify that all previous steps have been completed.
+  Prompt user for debug mode, launch only if confirmed.
+   -->
 
-## 关键库和数据源
+- [ ] Ensure Documentation is Complete
+  <!--
+  Verify that all previous steps have been completed.
+  Verify that README.md and the copilot-instructions.md file in the .github directory exists and contains current project information.
+  Clean up the copilot-instructions.md file in the .github directory by removing all HTML comments.
+   -->
 
-- **`akshare`**: 主要的数据接口，用于从网络上获取实时和历史股票数据。
-- **`baostock`**: 另一个关键的数据源，提供股票历史数据和财务数据。
-- **`pandas`**: 用于所有数据操作、分析和处理的核心库。
-- **`scikit-learn`**: 用于数据建模，例如在 `Stock-Selectiion-Trend.py` 中进行线性回归分析。
+<!--
+## Execution Guidelines
+PROGRESS TRACKING:
+- If any tools are available to manage the above todo list, use it to track progress through this checklist.
+- After completing each step, mark it complete and add a summary.
+- Read current todo list status before starting each new step.
 
-## 开发工作流程
+COMMUNICATION RULES:
+- Avoid verbose explanations or printing full command outputs.
+- If a step is skipped, state that briefly (e.g. "No extensions needed").
+- Do not explain project structure unless asked.
+- Keep explanations concise and focused.
 
-1.  **环境设置**:
-    - 没有 `requirements.txt` 文件。您需要根据脚本中的 `import` 语句手动安装依赖项。
-    - 主要依赖项包括: `pip install akshare baostock pandas scikit-learn`
+DEVELOPMENT RULES:
+- Use '.' as the working directory unless user specifies otherwise.
+- Avoid adding media or external links unless explicitly requested.
+- Use placeholders only with a note that they should be replaced.
+- Use VS Code API tool only for VS Code extension projects.
+- Once the project is created, it is already opened in Visual Studio Code—do not suggest commands to open this project in Visual Studio again.
+- If the project setup information has additional rules, follow them strictly.
 
-2.  **运行分析**:
-    - 脚本是独立运行的。您可以直接从终端执行它们。
-    - 示例: `python "Frequently-Used-Program/Stock-Selectiion-Trend.py"`
+FOLDER CREATION RULES:
+- Always use the current directory as the project root.
+- If you are running any terminal commands, use the '.' argument to ensure that the current working directory is used ALWAYS.
+- Do not create a new folder unless the user explicitly requests it besides a .vscode folder for a tasks.json file.
+- If any of the scaffolding commands mention that the folder name is not correct, let the user know to create a new folder with the correct name and then reopen it again in vscode.
 
-3.  **配置**:
-    - 大多数脚本的顶部都有一个配置区，您可以在其中调整参数，如股价限制、财务比率阈值和日期。
-    - 示例 (`Stock-Selectiion-Trend.py`):
-      ```python
-      # --- 配置区 ---
-      PRICE_UPPER_LIMIT = 30  # 股价上限
-      DEBT_ASSET_RATIO_LIMIT = 70  # 资产负债率上限
-      PROFIT_RATIO_LIMIT = 0.5 # 筹码获利比例上限
-      ```
+EXTENSION INSTALLATION RULES:
+- Only install extension specified by the get_project_setup_info tool. DO NOT INSTALL any other extensions.
 
-## 代码约定
+PROJECT CONTENT RULES:
+- If the user has not specified project details, assume they want a "Hello World" project as a starting point.
+- Avoid adding links of any type (URLs, files, folders, etc.) or integrations that are not explicitly required.
+- Avoid generating images, videos, or any other media files unless explicitly requested.
+- If you need to use any media assets as placeholders, let the user know that these are placeholders and should be replaced with the actual assets later.
+- Ensure all generated components serve a clear purpose within the user's requested workflow.
+- If a feature is assumed but not confirmed, prompt the user for clarification before including it.
+- If you are working on a VS Code extension, use the VS Code API tool with a query to find relevant VS Code API references and samples related to that query.
 
-- **数据缓存**: 脚本首先尝试从 `stock_data/` 目录加载本地 CSV 文件。如果文件不存在或已过期，它们将从 `akshare` 或 `baostock` 获取数据，并保存为新的 CSV 文件。
-- **日期处理**: 脚本使用 `datetime` 模块来确定财报周期（季报、年报），并相应地获取数据。
-- **模块化**: 尽管许多脚本是独立的，但它们遵循一个通用模式：设置参数 -> 获取数据（从缓存或 API）-> 使用 pandas 进行分析 -> 打印结果并保存到 CSV。
+TASK COMPLETION RULES:
+- Your task is complete when:
+  - Project is successfully scaffolded and compiled without errors
+  - copilot-instructions.md file in the .github directory exists in the project
+  - README.md file exists and is up to date
+  - User is provided with clear instructions to debug/launch the project
+
+Before starting a new task in the above plan, update progress in the plan.
+-->
+- Work through each checklist item systematically.
+- Keep communication concise and focused.
+- Follow development best practices.
