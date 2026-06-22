@@ -6,6 +6,7 @@ import csv
 import io
 import os
 import sqlite3
+import traceback
 from contextlib import contextmanager
 from datetime import date, datetime
 from pathlib import Path
@@ -32,6 +33,12 @@ def _get_supabase_client():
 
     if not url or not key:
         return None
+
+    # 规范化 URL：去掉常见的尾部 /rest/v1/ 误配
+    url = url.rstrip("/")
+    for suffix in ("/rest/v1", "/rest/v1/", "/rest", "/auth/v1"):
+        if url.endswith(suffix):
+            url = url[: -len(suffix)].rstrip("/")
 
     try:
         from supabase import create_client
@@ -85,20 +92,24 @@ CREATE POLICY "allow_all" ON trades FOR ALL USING (true) WITH CHECK (true);
 
 
 class TradeManager:
-    """交易记录管理，优先使用 Supabase 云端存储，自动回退到本地 SQLite。"""
+    """交易记录管理，优先使用 Supabase 云端存储，出错自动回退到本地 SQLite。"""
 
     def __init__(self, db_path: Path | None = None) -> None:
+        self._db_path = db_path or _DB_PATH
+        self._db_path.parent.mkdir(parents=True, exist_ok=True)
+        self._init_sqlite()  # 始终初始化 SQLite 作为回退
+
         self._sb = _get_supabase_client()
         self._using_supabase = self._sb is not None
-
-        if not self._using_supabase:
-            self._db_path = db_path or _DB_PATH
-            self._db_path.parent.mkdir(parents=True, exist_ok=True)
-            self._init_sqlite()
+        self._last_error: str = ""
 
     @property
     def backend(self) -> str:
         return "supabase" if self._using_supabase else "sqlite"
+
+    @property
+    def last_error(self) -> str:
+        return self._last_error
 
     # ══════════════════════════════════════════════════════════════
     #  SQLite 回退
@@ -118,6 +129,11 @@ class TradeManager:
     def _init_sqlite(self) -> None:
         with self._conn() as conn:
             conn.executescript(_CREATE_TABLE)
+
+    def _fallback(self, reason: str) -> None:
+        """记录错误并切换到 SQLite 回退。"""
+        self._last_error = reason
+        self._using_supabase = False
 
     # ══════════════════════════════════════════════════════════════
     #  CRUD — 统一接口，内部按后端分派
@@ -143,35 +159,41 @@ class TradeManager:
             trade_date = trade_date.strftime("%Y-%m-%d")
 
         if self._using_supabase:
-            row = {
-                "trade_date": trade_date,
-                "code": code,
-                "name": name,
-                "side": side,
-                "price": price,
-                "quantity": quantity,
-                "fee": fee,
-                "notes": notes,
-            }
-            resp = self._sb.table("trades").insert(row).execute()
-            return resp.data[0]["id"] if resp.data else 0
-        else:
-            with self._conn() as conn:
-                cur = conn.execute(
-                    "INSERT INTO trades (trade_date, code, name, side, price, quantity, fee, notes) "
-                    "VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
-                    (trade_date, code, name, side, price, quantity, fee, notes),
-                )
-                return cur.lastrowid  # type: ignore[return-value]
+            try:
+                row = {
+                    "trade_date": trade_date,
+                    "code": code,
+                    "name": name,
+                    "side": side,
+                    "price": price,
+                    "quantity": quantity,
+                    "fee": fee,
+                    "notes": notes,
+                }
+                resp = self._sb.table("trades").insert(row).execute()
+                return resp.data[0]["id"] if resp.data else 0
+            except Exception as e:
+                self._fallback(f"Supabase 写入失败: {e}")
+
+        with self._conn() as conn:
+            cur = conn.execute(
+                "INSERT INTO trades (trade_date, code, name, side, price, quantity, fee, notes) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+                (trade_date, code, name, side, price, quantity, fee, notes),
+            )
+            return cur.lastrowid  # type: ignore[return-value]
 
     def delete_trade(self, trade_id: int) -> bool:
         if self._using_supabase:
-            resp = self._sb.table("trades").delete().eq("id", trade_id).execute()
-            return len(resp.data) > 0 if resp.data else False
-        else:
-            with self._conn() as conn:
-                cur = conn.execute("DELETE FROM trades WHERE id = ?", (trade_id,))
-                return cur.rowcount > 0
+            try:
+                resp = self._sb.table("trades").delete().eq("id", trade_id).execute()
+                return len(resp.data) > 0 if resp.data else False
+            except Exception as e:
+                self._fallback(f"Supabase 删除失败: {e}")
+
+        with self._conn() as conn:
+            cur = conn.execute("DELETE FROM trades WHERE id = ?", (trade_id,))
+            return cur.rowcount > 0
 
     def get_trades(
         self,
@@ -182,9 +204,12 @@ class TradeManager:
     ) -> pd.DataFrame:
         """查询交易记录，返回与 backtest_tradebook 兼容的 DataFrame。"""
         if self._using_supabase:
-            return self._sb_get_trades(code, start_date, end_date, limit)
-        else:
-            return self._sqlite_get_trades(code, start_date, end_date, limit)
+            try:
+                return self._sb_get_trades(code, start_date, end_date, limit)
+            except Exception as e:
+                self._fallback(f"Supabase 查询失败: {e}")
+
+        return self._sqlite_get_trades(code, start_date, end_date, limit)
 
     def _sqlite_get_trades(self, code, start_date, end_date, limit) -> pd.DataFrame:
         clauses: list[str] = []
@@ -219,9 +244,8 @@ class TradeManager:
         return df
 
     def _sb_get_trades(self, code, start_date, end_date, limit) -> pd.DataFrame:
-        query = self._sb.table("trades").select(
-            "id, trade_date, code, name, side, price, quantity, fee, notes, created_at"
-        )
+        query = self._sb.table("trades").select("*")
+
         if code:
             query = query.eq("code", _normalize_code(code))
         if start_date:
@@ -233,7 +257,7 @@ class TradeManager:
                 end_date = end_date.strftime("%Y-%m-%d")
             query = query.lte("trade_date", end_date)
 
-        query = query.order("trade_date").order("code").order("id").limit(limit)
+        query = query.order("trade_date,code,id").limit(limit)
         resp = query.execute()
 
         if not resp.data:
@@ -244,23 +268,29 @@ class TradeManager:
         for col in ("price", "quantity", "fee"):
             if col in df.columns:
                 df[col] = pd.to_numeric(df[col], errors="coerce").fillna(0.0)
+        # 确保 id 为整数
+        if "id" in df.columns:
+            df["id"] = pd.to_numeric(df["id"], errors="coerce")
         df = df.rename(columns={"trade_date": "date", "name": "stock_name"})
         return df
 
     def get_all_codes(self) -> list[str]:
         """返回所有出现过的股票代码。"""
         if self._using_supabase:
-            resp = self._sb.table("trades").select("code").execute()
-            if not resp.data:
-                return []
-            codes = sorted({row["code"] for row in resp.data})
-            return codes
-        else:
-            with self._conn() as conn:
-                rows = conn.execute(
-                    "SELECT DISTINCT code FROM trades ORDER BY code"
-                ).fetchall()
-            return [r["code"] for r in rows]
+            try:
+                resp = self._sb.table("trades").select("code").execute()
+                if not resp.data:
+                    return []
+                codes = sorted({row["code"] for row in resp.data})
+                return codes
+            except Exception as e:
+                self._fallback(f"Supabase 查询失败: {e}")
+
+        with self._conn() as conn:
+            rows = conn.execute(
+                "SELECT DISTINCT code FROM trades ORDER BY code"
+            ).fetchall()
+        return [r["code"] for r in rows]
 
     def get_trades_for_fifo(self) -> pd.DataFrame:
         """返回 FIFO 匹配所需的标准化 DataFrame（与 backtest_tradebook 兼容）。"""

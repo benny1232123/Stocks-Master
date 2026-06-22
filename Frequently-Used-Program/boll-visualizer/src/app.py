@@ -41,6 +41,9 @@ from utils.presets import (
 from ui.trade_entry import render_trade_entry
 from ui.position_view import render_position_view
 from ui.trade_history import render_trade_history
+from ui.relativity_strategy import render_relativity_tab
+from ui.cctv_strategy import render_cctv_tab
+from ui.theme_strategy import render_theme_tab
 
 logger = get_logger()
 
@@ -849,6 +852,25 @@ def render_boll_page() -> None:
                 st.dataframe(details_df.tail(30), use_container_width=True, hide_index=True)
 
 
+def render_strategy_page() -> None:
+    """多策略选股页面：使用 Tab 切换不同策略。"""
+    tab_boll, tab_relativity, tab_cctv, tab_theme = st.tabs(
+        ["Boll 布林", "相对强弱", "央视新闻", "短线题材"]
+    )
+
+    with tab_boll:
+        render_boll_page()
+
+    with tab_relativity:
+        render_relativity_tab()
+
+    with tab_cctv:
+        render_cctv_tab()
+
+    with tab_theme:
+        render_theme_tab()
+
+
 # ── 多页导航 ─────────────────────────────────────────────────────
 
 _INJECT_PWA = """
@@ -878,7 +900,7 @@ def main() -> None:
     st.set_page_config(page_title="Stocks Master", layout="wide", page_icon="📈")
     nav = st.navigation(
         [
-            st.Page(render_boll_page, title="Boll 选股", icon="📈"),
+            st.Page(render_strategy_page, title="策略选股", icon="🎯"),
             st.Page(render_trade_entry, title="交易录入", icon="📝"),
             st.Page(render_position_view, title="持仓总览", icon="💼"),
             st.Page(render_trade_history, title="交易历史", icon="📋"),

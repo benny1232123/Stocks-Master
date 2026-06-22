@@ -16,6 +16,11 @@ def render_trade_entry() -> None:
     tm = TradeManager()
     if tm.backend == "supabase":
         st.success("☁️ 数据存储在 Supabase 云端，重新部署不会丢失。", icon="✅")
+    elif tm.last_error:
+        st.warning(
+            f"⚠️ Supabase 连接失败，已回退到本地 SQLite：{tm.last_error}",
+            icon="⚠️",
+        )
     else:
         st.info(
             "💾 数据存储在本地 SQLite。"

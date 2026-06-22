@@ -136,18 +136,19 @@ def _fetch_fx_data():
         return {}
 
     result = {}
-    # fx_spot_quote 列名可能有编码问题，用列位置
-    cols = df.columns.tolist()
+    all_nan = True
     for _, row in df.iterrows():
-        pair = str(row.iloc[0]).strip() if len(cols) > 0 else ""
-        buy = _safe_float(row.iloc[1]) if len(cols) > 1 else None
-        sell = _safe_float(row.iloc[2]) if len(cols) > 2 else None
+        pair = str(row.iloc[0]).strip()
+        buy = _safe_float(row.iloc[1]) if len(row) > 1 else None
+        sell = _safe_float(row.iloc[2]) if len(row) > 2 else None
+        if buy is not None and not (isinstance(buy, float) and _math.isnan(buy)):
+            all_nan = False
         mid = None
-        if buy and sell:
+        if buy and sell and not (_math.isnan(buy) if isinstance(buy, float) else False) and not (_math.isnan(sell) if isinstance(sell, float) else False):
             mid = (buy + sell) / 2
-        elif buy:
+        elif buy and not (isinstance(buy, float) and _math.isnan(buy)):
             mid = buy
-        elif sell:
+        elif sell and not (isinstance(sell, float) and _math.isnan(sell)):
             mid = sell
         if pair == "USD/CNY":
             result["usdcny"] = mid
@@ -159,6 +160,8 @@ def _fetch_fx_data():
             result["gbpcny"] = mid
         elif pair == "CNY/KRW":
             result["cnykrw"] = mid
+    if all_nan:
+        return {}
     return result
 
 
@@ -349,6 +352,69 @@ def _build_macro_external_summary():
         lines.append("- 综合风险: 低 - 外部市场整体平稳")
 
     return "\n".join(lines), overall
+
+
+# --- 经济日历：news_economic_baidu 结构化数据 ---
+def _fetch_economic_calendar_risk(window_days=7):
+    """从百度经济日历获取近期重要事件，返回 (summary_text, risk_level)。"""
+    try:
+        df = ak.news_economic_baidu()
+        if df is None or df.empty:
+            return "", "low"
+    except Exception:
+        return "", "low"
+
+    try:
+        cols = df.columns.tolist()
+        date_col, country_col, event_col = cols[0], cols[2], cols[3]
+        actual_col, forecast_col, prev_col, imp_col = cols[4], cols[5], cols[6], cols[7]
+    except Exception:
+        return "", "low"
+
+    now = datetime.now()
+    cutoff = now - timedelta(days=window_days)
+    cutoff_str = cutoff.strftime("%Y-%m-%d")
+
+    risks = []
+    for _, row in df.iterrows():
+        try:
+            event_date = str(row.iloc[0]).strip()
+            country = str(row.iloc[2]).strip()
+            event = str(row.iloc[3]).strip()
+            importance = int(row.iloc[7]) if pd.notna(row.iloc[7]) else 0
+            actual = row.iloc[4]
+            forecast = row.iloc[5]
+        except Exception:
+            continue
+        if event_date < cutoff_str:
+            continue
+        if importance < 2:
+            continue
+        miss_detected = False
+        if pd.notna(actual) and pd.notna(forecast):
+            try:
+                av = float(actual)
+                fv = float(forecast)
+                if fv != 0:
+                    miss_pct = abs(av - fv) / abs(fv) * 100
+                    if miss_pct > 20:
+                        miss_detected = True
+            except (ValueError, TypeError):
+                pass
+        if miss_detected:
+            direction = "好于" if av > fv else "差于"
+            risks.append(f"{country} {event}: 实际{actual} vs 预期{forecast} ({direction}预期)")
+
+    if not risks:
+        return "", "low"
+
+    level = "high" if len(risks) >= 2 else "medium"
+    lines = [f"\n#### 经济日历风险（近{window_days}天）"]
+    for r in risks[:5]:
+        lines.append(f"- {r}")
+    if len(risks) > 5:
+        lines.append(f"- ... 共{len(risks)}条")
+    return "\n".join(lines), level
 
 
 ROOT_DIR = Path(__file__).resolve().parents[1]
@@ -666,13 +732,16 @@ def _nlp_level_to_score(level):
 
 @lru_cache(maxsize=1)
 def _get_nlp_classifier():
-    if os.getenv("MACRO_RISK_NLP_ENABLE", "0").strip() != "1":
+    try:
+        enable = os.getenv("MACRO_RISK_NLP_ENABLE", "").strip()
+    except Exception:
+        enable = ""
+    if enable != "1":
         return None
     try:
         from transformers import pipeline
     except Exception:
         return None
-
     model_name = os.getenv("MACRO_RISK_NLP_MODEL", "MoritzLaurer/mDeBERTa-v3-base-mnli-xnli").strip()
     if not model_name:
         model_name = "MoritzLaurer/mDeBERTa-v3-base-mnli-xnli"
@@ -1721,12 +1790,14 @@ def _build_market_and_strategy_summary(*, boll_rows_count, theme_rows_count, mac
     sh_vol_20 = _to_float(sh_metrics.get("vol_20d"))
 
     macro_level = _macro_risk_level(macro_risk_summary)
-    # 外部市场风险等级取最高
+    # 外部市场数据为主信号，CCTV新闻最多提升一级
     level_rank = {"high": 3, "medium": 2, "low": 1}
     ext_rank = level_rank.get(macro_external_level, 1)
     news_rank = level_rank.get(macro_level, 1)
-    if ext_rank > news_rank:
-        macro_level = macro_external_level
+    final_rank = ext_rank
+    if news_rank > ext_rank:
+        final_rank = min(ext_rank + 1, 3)  # 新闻最多将风险提升1级
+    macro_level = {v: k for k, v in level_rank.items()}[final_rank]
 
     regime = "震荡轮动"
     if sh_ret_20 is not None and sh_ret_5 is not None:
@@ -2841,6 +2912,21 @@ def main():
     except Exception as exc:
         _append_log(log_lines, f"{_stage_tag(3, 'macro-external')} failed: {exc}")
 
+    # --- 经济日历风险 ---
+    macro_economic_summary = ""
+    macro_economic_level = "low"
+    try:
+        macro_economic_summary, macro_economic_level = _fetch_economic_calendar_risk(window_days=macro_window_days)
+        if macro_economic_summary:
+            _append_log(log_lines, f"{_stage_tag(3, 'macro-economic')} done, level={macro_economic_level}")
+    except Exception as exc:
+        _append_log(log_lines, f"{_stage_tag(3, 'macro-economic')} failed: {exc}")
+
+    # 外部+经济风险取最高
+    level_rank = {"high": 3, "medium": 2, "low": 1}
+    combined_ext_rank = max(level_rank.get(macro_external_level, 1), level_rank.get(macro_economic_level, 1))
+    macro_external_level = {v: k for k, v in level_rank.items()}[combined_ext_rank]
+
     min_price_text = os.getenv("MIN_STOCK_PRICE", "5").strip() or "5"
     max_price_text = os.getenv("MAX_STOCK_PRICE", "30").strip() or "30"
     min_dividend_yield_pct = _to_float(os.getenv("MIN_DIVIDEND_YIELD_PCT", "2").strip() or "2")
@@ -3128,6 +3214,8 @@ def main():
         msg = msg + "\n" + macro_news_trend.lstrip()
     if macro_external_summary:
         msg = msg + "\n" + macro_external_summary
+    if macro_economic_summary:
+        msg = msg + "\n" + macro_economic_summary
     if cctv_summary:
         msg = msg + "\n\n## 8) CCTV 热点概览\n" + cctv_summary.lstrip()
 
