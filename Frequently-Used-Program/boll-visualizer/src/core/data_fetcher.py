@@ -775,3 +775,30 @@ def previous_report_period(year: int, quarter: int) -> tuple[int, int]:
     if quarter <= 1:
         return year - 1, 4
     return year, quarter - 1
+
+
+# ── 内核统一：K线获取与代码标准化改为 re-export smcore ──
+# 此前本文件自带第二套 K线/代码标准化实现，现统一到 smcore（前复权 + 单例会话）。
+from smcore.data.kline import fetch_daily_k as _smcore_fetch_daily_k
+from smcore.utils.code import format_stock_code as _smcore_format_stock_code
+
+
+def fetch_daily_k_data(code, start_date, end_date, adjust="qfq", use_cache=True, force_refresh=False, max_cache_age_hours=24.0):
+    """获取日K线 —— 委托 smcore（前复权 + baostock 单例会话 + 文件缓存）。"""
+    return _smcore_fetch_daily_k(
+        code, start_date, end_date,
+        adjust=adjust, use_cache=use_cache,
+        force_refresh=force_refresh, max_cache_age_hours=max_cache_age_hours,
+    )
+
+
+def fetch_daily_k_data_in_session(code, start_date, end_date, adjust="qfq", use_cache=True, force_refresh=False, max_cache_age_hours=24.0):
+    """同 fetch_daily_k_data（smcore 内部已用进程级单例会话，无需外层管理 login）。"""
+    return _smcore_fetch_daily_k(
+        code, start_date, end_date,
+        adjust=adjust, use_cache=use_cache,
+        force_refresh=force_refresh, max_cache_age_hours=max_cache_age_hours,
+    )
+
+
+format_stock_code = _smcore_format_stock_code

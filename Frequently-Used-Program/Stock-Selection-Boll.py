@@ -456,7 +456,7 @@ for fncode in final_candidate_codes:
             start_date=start_date,
             end_date=f"{CURRENT_YEAR}-{current_month}-{current_day}",
             frequency="d",
-            adjustflag="3"
+            adjustflag="2"  # 前复权（统一口径）。此前用 "3" 不复权，除权除息日布林带断裂、信号失真。
         )
         if rs is None:
             print(f"{fncode} {stock_name} K线接口返回空对象，跳过")

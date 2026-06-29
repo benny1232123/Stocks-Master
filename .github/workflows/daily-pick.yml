@@ -1,0 +1,94 @@
+name: 每日选股
+
+# 工作日 21:30 北京时间 = UTC 13:30
+# GitHub Actions cron 有 5-15 分钟延迟，属正常
+on:
+  schedule:
+    - cron: "30 13 * * 1-5"
+  workflow_dispatch:  # 支持手动触发（调试用）
+
+jobs:
+  daily-pick:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: 安装依赖
+        run: |
+          pip install --upgrade pip
+          pip install akshare pandas requests baostock
+          # baostock 在 GitHub Actions 可能连不上服务器，但安装本身能成功
+          # K 线走 akshare 后端（KLINE_BACKEND=akshare），不依赖 baostock 网络
+
+      - name: 运行选股主流程
+        env:
+          KLINE_BACKEND: akshare          # K 线走 akshare（东财 HTTP，全球可达）
+          PYTHONUNBUFFERED: "1"
+          PYTHONIOENCODING: utf-8
+          # 推送配置（在 GitHub Secrets 里设置）
+          WECOM_WEBHOOK_URL: ${{ secrets.WECOM_WEBHOOK_URL }}
+          SMTP_HOST: ${{ secrets.SMTP_HOST }}
+          SMTP_PORT: ${{ secrets.SMTP_PORT }}
+          SMTP_USER: ${{ secrets.SMTP_USER }}
+          SMTP_PASS: ${{ secrets.SMTP_PASS }}
+          SMTP_TO: ${{ secrets.SMTP_TO }}
+          # COS 配置（上传操作清单供 SCF 预警用）
+          COS_SECRET_ID: ${{ secrets.COS_SECRET_ID }}
+          COS_SECRET_KEY: ${{ secrets.COS_SECRET_KEY }}
+          COS_BUCKET: ${{ secrets.COS_BUCKET }}
+          COS_REGION: ${{ secrets.COS_REGION }}
+          # 策略开关
+          ENABLE_THEME_STRATEGY: "1"
+          ENABLE_RELATIVITY_STRATEGY: "0"  # 相对强弱较慢，云端可关
+          FAST_MODE: "1"
+        run: |
+          python Frequently-Used-Program/auto_notify_boll.py || true
+          # 巨石可能因 baostock 网络问题部分失败，但不阻塞后续
+          # 核心选股（Boll）走 akshare，应能正常出结果
+
+      - name: 生成操作清单 + 上传 COS
+        env:
+          KLINE_BACKEND: akshare
+          COS_SECRET_ID: ${{ secrets.COS_SECRET_ID }}
+          COS_SECRET_KEY: ${{ secrets.COS_SECRET_KEY }}
+          COS_BUCKET: ${{ secrets.COS_BUCKET }}
+          COS_REGION: ${{ secrets.COS_REGION }}
+        run: |
+          python -c "
+          import sys; sys.path.insert(0, '.')
+          from datetime import date
+          from smcore.strategy import fuse_signals, save_action_list
+          from smcore.storage import upload_file
+
+          today = date.today().strftime('%Y%m%d')
+          df, report = fuse_signals(today, total_capital=100000, max_picks=15, fetch_levels=True)
+          print(f'操作清单: {len(df)} 只候选')
+          if not df.empty:
+              path = save_action_list(df, today)
+              print(f'已保存: {path}')
+              # 上传 COS
+              remote = f'Daily-Action-List-{today}.csv'
+              if upload_file(path, remote):
+                  print(f'已上传 COS: {remote}')
+              else:
+                  print('COS 未配置或上传失败，操作清单仅存本地')
+              print('--- 日报段落 ---')
+              print(report)
+          else:
+              print('无候选，跳过上传')
+          "
+
+      - name: 上传结果产物（归档）
+        uses: actions/upload-artifact@v4
+        with:
+          name: stock-results-${{ github.run_number }}
+          path: |
+            stock_data/Stock-Selection-Boll-*.csv
+            stock_data/Daily-Action-List-*.csv
+            stock_data/auto_logs/
+          retention-days: 30

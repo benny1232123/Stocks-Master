@@ -80,185 +80,116 @@ import pandas as pd
 
 import math as _math
 
+# --- 共享内核（smcore）接入 ---
+# 此前本文件自带第三套 Boll/代码标准化/K线获取实现，且用 adjustflag="3"(不复权)，
+# 导致除权除息日布林带断裂、信号失真。现统一委托 smcore（前复权 + 单例会话 + 唯一 Boll 实现）。
+import sys as _sys
+from pathlib import Path as _Path
+
+_REPO_ROOT = _Path(__file__).resolve().parent.parent
+if str(_REPO_ROOT) not in _sys.path:
+    _sys.path.insert(0, str(_REPO_ROOT))
+
+from smcore.data import fetch_daily_k as _smcore_fetch_daily_k, session as _smcore_session
+from smcore.indicators import calc_bollinger as _smcore_calc_bollinger
+from smcore.utils.code import (
+    format_stock_code as _smcore_format_code,
+    to_baostock_code as _smcore_to_bs_code,
+    to_ak_index_symbol as _smcore_to_ak_index,
+)
+from smcore.cache import (
+    cache_table_name as _smcore_cache_table_name,
+    read_cache_df as _smcore_read_cache_df,
+    write_cache_df as _smcore_write_cache_df,
+)
+from smcore.utils.format import (
+    to_float as _smcore_to_float,
+    normalize_confidence_label as _smcore_normalize_confidence_label,
+    format_yi as _smcore_format_yi,
+    safe_pct as _smcore_safe_pct,
+    to_percent_like as _smcore_to_percent_like,
+    fmt_pct as _smcore_fmt_pct,
+    fmt_num as _smcore_fmt_num,
+)
+from smcore.strategy import (
+    env_int_percent as _smcore_env_int_percent,
+    normalize_weight_map as _smcore_normalize_weight_map,
+    rebalance_for_signal_availability as _smcore_rebalance_for_signal_availability,
+    format_position_units as _smcore_format_position_units,
+    build_strategy_allocation as _smcore_build_strategy_allocation,
+)
+from smcore.data.index import (
+    fetch_index_close_series as _smcore_fetch_index_close_series,
+    calc_index_metrics as _smcore_calc_index_metrics,
+)
+from smcore.risk import (
+    safe_float as _smcore_safe_float,
+    fetch_us_market_data as _smcore_fetch_us_market_data,
+    fetch_fx_data as _smcore_fetch_fx_data,
+    fetch_futures_data as _smcore_fetch_futures_data,
+    assess_us_market_risk as _smcore_assess_us_market_risk,
+    assess_fx_risk as _smcore_assess_fx_risk,
+    assess_futures_risk as _smcore_assess_futures_risk,
+    # 宏观词库与文本函数（3b-2 抽出）
+    MACRO_STOPWORDS as _SM_MACRO_STOPWORDS,
+    MACRO_NOISE_TOKENS as _SM_MACRO_NOISE_TOKENS,
+    MACRO_RISK_SIGNAL_FRAGMENTS as _SM_MACRO_RISK_SIGNAL_FRAGMENTS,
+    MACRO_RISK_STRONG_FRAGMENTS as _SM_MACRO_RISK_STRONG_FRAGMENTS,
+    MACRO_RISK_SOFT_FRAGMENTS as _SM_MACRO_RISK_SOFT_FRAGMENTS,
+    MACRO_RISK_POSITIVE_HINTS as _SM_MACRO_RISK_POSITIVE_HINTS,
+    CCTV_NOISE_SECTORS as _SM_CCTV_NOISE_SECTORS,
+    MACRO_RISK_EXCLUDED_NEWS_TITLES as _SM_MACRO_RISK_EXCLUDED_NEWS_TITLES,
+    MACRO_PROMO_TITLE_KEYWORDS as _SM_MACRO_PROMO_TITLE_KEYWORDS,
+    is_macro_noise_token as _smcore_is_macro_noise_token,
+    is_cctv_noise_sector as _smcore_is_cctv_noise_sector,
+    is_macro_risk_term_allowed as _smcore_is_macro_risk_term_allowed,
+    has_positive_macro_context as _smcore_has_positive_macro_context,
+    is_macro_risk_excluded_news_title as _smcore_is_macro_risk_excluded_news_title,
+    is_promo_or_historical_title as _smcore_is_promo_or_historical_title,
+    clean_macro_terms as _smcore_clean_macro_terms,
+    extract_macro_tokens as _smcore_extract_macro_tokens,
+    nlp_level_to_score as _smcore_nlp_level_to_score,
+    get_nlp_classifier as _smcore_get_nlp_classifier,
+    nlp_risk_classify as _smcore_nlp_risk_classify,
+    extract_burst_tokens as _smcore_extract_burst_tokens,
+    collect_macro_risk_events as _smcore_collect_macro_risk_events,
+    macro_risk_level as _smcore_macro_risk_level,
+)
+
 
 def _safe_float(val, default=None):
-    """安全转 float，过滤 None / NaN / 非数值。"""
-    try:
-        v = float(val)
-        if _math.isnan(v) or _math.isinf(v):
-            return default
-        return v
-    except Exception:
-        return default
+    # 委托 smcore.risk（全项目唯一实现）。
+    return _smcore_safe_float(val, default)
 
 
 def _fetch_us_market_data():
-    """获取美股三大指数最近行情，返回 dict with keys: sp500, nasdaq, dow."""
-    indices = {
-        "sp500": ".INX",
-        "nasdaq": ".IXIC",
-        "dow": ".DJI",
-    }
-    result = {}
-    for key, symbol in indices.items():
-        try:
-            df = ak.index_us_stock_sina(symbol=symbol)
-            if df is None or df.empty:
-                continue
-            df = df.tail(25)
-            last = df.iloc[-1]
-            prev = df.iloc[-2] if len(df) >= 2 else last
-            close = _safe_float(last.get("close"))
-            prev_close = _safe_float(prev.get("close"))
-            ret_1d = ((close - prev_close) / prev_close * 100) if (close and prev_close) else None
-            close_5d = _safe_float(df.iloc[-6].get("close")) if len(df) >= 6 else None
-            close_20d = _safe_float(df.iloc[-21].get("close")) if len(df) >= 21 else None
-            ret_5d = ((close - close_5d) / close_5d * 100) if (close and close_5d) else None
-            ret_20d = ((close - close_20d) / close_20d * 100) if (close and close_20d) else None
-            result[key] = {
-                "close": close,
-                "ret_1d": ret_1d,
-                "ret_5d": ret_5d,
-                "ret_20d": ret_20d,
-            }
-        except Exception:
-            continue
-    return result
+    # 委托 smcore.risk。
+    return _smcore_fetch_us_market_data()
 
 
 def _fetch_fx_data():
-    """获取关键汇率数据，返回 dict with keys: usdcny, eurusd etc."""
-    try:
-        df = ak.fx_spot_quote()
-        if df is None or df.empty:
-            return {}
-    except Exception:
-        return {}
-
-    result = {}
-    all_nan = True
-    for _, row in df.iterrows():
-        pair = str(row.iloc[0]).strip()
-        buy = _safe_float(row.iloc[1]) if len(row) > 1 else None
-        sell = _safe_float(row.iloc[2]) if len(row) > 2 else None
-        if buy is not None and not (isinstance(buy, float) and _math.isnan(buy)):
-            all_nan = False
-        mid = None
-        if buy and sell and not (_math.isnan(buy) if isinstance(buy, float) else False) and not (_math.isnan(sell) if isinstance(sell, float) else False):
-            mid = (buy + sell) / 2
-        elif buy and not (isinstance(buy, float) and _math.isnan(buy)):
-            mid = buy
-        elif sell and not (isinstance(sell, float) and _math.isnan(sell)):
-            mid = sell
-        if pair == "USD/CNY":
-            result["usdcny"] = mid
-        elif pair == "EUR/CNY":
-            result["eurcny"] = mid
-        elif pair == "100JPY/CNY":
-            result["jpycny"] = mid
-        elif pair == "GBP/CNY":
-            result["gbpcny"] = mid
-        elif pair == "CNY/KRW":
-            result["cnykrw"] = mid
-    if all_nan:
-        return {}
-    return result
+    # 委托 smcore.risk。
+    return _smcore_fetch_fx_data()
 
 
 def _fetch_futures_data():
-    """获取关键期货品种最近行情，返回 dict with keys: crude_oil, gold, copper."""
-    futures_map = {
-        "crude_oil": "CL",
-        "gold": "GC",
-        "copper": "HG",
-    }
-    result = {}
-    for key, symbol in futures_map.items():
-        try:
-            df = ak.futures_foreign_hist(symbol=symbol)
-            if df is None or df.empty:
-                continue
-            df = df.tail(25)
-            last = df.iloc[-1]
-            prev = df.iloc[-2] if len(df) >= 2 else last
-            close = _safe_float(last.get("close"))
-            prev_close = _safe_float(prev.get("close"))
-            ret_1d = ((close - prev_close) / prev_close * 100) if (close and prev_close) else None
-            close_5d = _safe_float(df.iloc[-6].get("close")) if len(df) >= 6 else None
-            close_20d = _safe_float(df.iloc[-21].get("close")) if len(df) >= 21 else None
-            ret_5d = ((close - close_5d) / close_5d * 100) if (close and close_5d) else None
-            ret_20d = ((close - close_20d) / close_20d * 100) if (close and close_20d) else None
-            result[key] = {
-                "close": close,
-                "ret_1d": ret_1d,
-                "ret_5d": ret_5d,
-                "ret_20d": ret_20d,
-            }
-        except Exception:
-            continue
-    return result
+    # 委托 smcore.risk。
+    return _smcore_fetch_futures_data()
 
 
 def _assess_us_market_risk(us_data):
-    """根据美股表现评估风险等级，返回 (level, reason)。"""
-    if not us_data:
-        return "low", ""
-    risks = []
-    for name, info in us_data.items():
-        label = {"sp500": "标普500", "nasdaq": "纳斯达克", "dow": "道琼斯"}.get(name, name)
-        ret_1d = info.get("ret_1d")
-        ret_5d = info.get("ret_5d")
-        ret_20d = info.get("ret_20d")
-        if ret_1d is not None and ret_1d <= -3:
-            risks.append(f"{label}单日跌{ret_1d:.1f}%")
-        elif ret_5d is not None and ret_5d <= -5:
-            risks.append(f"{label}5日跌{ret_5d:.1f}%")
-        elif ret_20d is not None and ret_20d <= -10:
-            risks.append(f"{label}20日跌{ret_20d:.1f}%")
-    high_count = sum(1 for r in risks if "跌" in r and (("-5%" in r) or ("-10%" in r) or ("-3%" in r)))
-    if high_count >= 2:
-        return "high", "; ".join(risks)
-    if high_count == 1:
-        return "medium", "; ".join(risks)
-    return "low", ""
+    # 委托 smcore.risk。
+    return _smcore_assess_us_market_risk(us_data)
 
 
 def _assess_fx_risk(fx_data):
-    """根据汇率变动评估风险，返回 (level, reason)。"""
-    if not fx_data:
-        return "low", ""
-    usdcny = fx_data.get("usdcny")
-    if usdcny is None or (isinstance(usdcny, float) and _math.isnan(usdcny)):
-        return "low", ""
-    # 人民币大幅贬值为风险信号
-    if usdcny >= 7.3:
-        return "high", f"美元/人民币={usdcny:.4f}，人民币显著贬值"
-    if usdcny >= 7.1:
-        return "medium", f"美元/人民币={usdcny:.4f}，人民币偏弱"
-    return "low", ""
+    # 委托 smcore.risk。
+    return _smcore_assess_fx_risk(fx_data)
 
 
 def _assess_futures_risk(futures_data):
-    """根据期货表现评估风险，返回 (level, reason)。"""
-    if not futures_data:
-        return "low", ""
-    risks = []
-    crude = futures_data.get("crude_oil")
-    gold = futures_data.get("gold")
-    if crude and crude.get("ret_5d") is not None and crude["ret_5d"] <= -10:
-        risks.append(f"原油5日跌{crude['ret_5d']:.1f}%")
-    if gold and gold.get("ret_5d") is not None and gold["ret_5d"] >= 5:
-        risks.append(f"黄金5日涨{gold['ret_5d']:.1f}%（避险情绪升温）")
-    if crude and crude.get("ret_1d") is not None and crude["ret_1d"] <= -5:
-        risks.append(f"原油单日跌{crude['ret_1d']:.1f}%")
-    if gold and gold.get("ret_1d") is not None and gold["ret_1d"] >= 3:
-        risks.append(f"黄金单日涨{gold['ret_1d']:.1f}%")
-    high_count = len([r for r in risks if "跌" in r or "涨" in r])
-    if high_count >= 2:
-        return "high", "; ".join(risks)
-    if high_count == 1:
-        return "medium", "; ".join(risks)
-    return "low", ""
+    # 委托 smcore.risk。
+    return _smcore_assess_futures_risk(futures_data)
 
 
 def _build_macro_external_summary():
@@ -431,400 +362,79 @@ PIPELINE_TOTAL_STEPS = 8
 DB_PATH = STOCK_DATA_DIR / "stocks_data.db"
 RUN_LOG_FILE = None
 RUN_LOG_LOCK = threading.Lock()
-MACRO_STOPWORDS = {
-    "中国",
-    "经济",
-    "市场",
-    "企业",
-    "行业",
-    "部门",
-    "地方",
-    "今年",
-    "今日",
-    "昨天",
-    "消息",
-    "报道",
-    "记者",
-    "相关",
-    "持续",
-    "推进",
-    "表示",
-}
+MACRO_STOPWORDS = _SM_MACRO_STOPWORDS
+MACRO_NOISE_TOKENS = _SM_MACRO_NOISE_TOKENS
+MACRO_RISK_SIGNAL_FRAGMENTS = _SM_MACRO_RISK_SIGNAL_FRAGMENTS
+MACRO_RISK_STRONG_FRAGMENTS = _SM_MACRO_RISK_STRONG_FRAGMENTS
+MACRO_RISK_SOFT_FRAGMENTS = _SM_MACRO_RISK_SOFT_FRAGMENTS
+MACRO_RISK_POSITIVE_HINTS = _SM_MACRO_RISK_POSITIVE_HINTS
 
-MACRO_NOISE_TOKENS = {
-    "报道",
-    "日报道",
-    "日称",
-    "日表示",
-    "今日",
-    "今天",
-    "昨日",
-    "昨天",
-    "其中",
-    "此外",
-    "与此同时",
-    "截至",
-    "目前",
-    "近日",
-    "今年以来",
-    "今年前",
-    "今年一季度",
-    "一季度",
-    "月份",
-    "个月",
-    "亿元",
-    "万户",
-    "公里",
-    "百分点",
-    "同比增长",
-    "增长",
-    "发展",
-    "合作",
-    "能力",
-    "基础设施",
-    "农业",
-    "教育",
-    "集群",
-    "战略",
-    "推进",
-    "表示",
-    "以上",
-    "时期",
-    "会议指出",
-    "人工智能",
-    "十五五",
-    "粤港澳大湾区",
-    "个万亿级产业",
-    "开局之年",
-    "规划纲要提出",
-    "产业赋能和场",
-    "习近平指出",
-    "习近平在人民",
-    "习近平强调",
-    "第十届中俄博",
-    "义新欧",
-}
-
-MACRO_RISK_SIGNAL_FRAGMENTS = (
-    "爆发",
-    "袭击",
-    "空袭",
-    "制裁",
-    "升级",
-    "冲突",
-    "断供",
-    "中断",
-    "停摆",
-    "危机",
-    "紧张",
-    "动荡",
-    "禁运",
-    "关闭",
-    "撤离",
-    "波动",
-    "飙升",
-    "暴跌",
-    "谈判",
-    "缓和",
-    "停火",
-    "协议",
-    "会谈",
-    "战争",
-    "军事",
-    "战机",
-    "导弹",
-    "中东",
-    "霍尔木兹",
-    "原油",
-    "油价",
-    "天然气",
-    "能源",
-    "海峡",
-    "核设施",
-    "航运",
-    "港口",
-    "外贸",
-    "出口",
-    "供应链",
-    "跨境",
-    "关税",
-    "不确定",
-    "风险",
-    "大选",
-    "反击",
-)
-
-MACRO_RISK_STRONG_FRAGMENTS = frozenset({
-    "爆发",
-    "袭击",
-    "空袭",
-    "制裁",
-    "冲突",
-    "断供",
-    "中断",
-    "停摆",
-    "危机",
-    "紧张",
-    "动荡",
-    "禁运",
-    "关闭",
-    "撤离",
-    "飙升",
-    "暴跌",
-    "战争",
-    "军事",
-    "战机",
-    "导弹",
-    "反击",
-    "核设施",
-})
-
-MACRO_RISK_SOFT_FRAGMENTS = frozenset({
-    "升级",
-    "谈判",
-    "会谈",
-    "协议",
-    "能源",
-    "原油",
-    "油价",
-    "天然气",
-    "供应链",
-    "跨境",
-    "外贸",
-    "出口",
-    "关税",
-    "波动",
-})
-
-MACRO_RISK_POSITIVE_HINTS = (
-    "高质量发展",
-    "赋能",
-    "提质",
-    "提效",
-    "推进",
-    "促进",
-    "优化",
-    "改善",
-    "增长",
-    "回升",
-    "回暖",
-    "稳住",
-    "扩大",
-    "加强",
-    "提升",
-    "升级改造",
-    "建设",
-    "投产",
-    "开工",
-    "竣工",
-    "发布",
-    "出台",
-    "支持",
-    "发展",
-    "创新",
-    "合作",
-    "达成",
-    "签约",
-    "获批",
-    "实现",
-    "完成",
-    "落地",
-    "开幕",
-    "启动",
-    "深化",
-)
 
 
 def _is_macro_noise_token(token):
     return str(token).strip() in MACRO_NOISE_TOKENS
 
 
-CCTV_NOISE_SECTORS = frozenset({
-    "月份",
-    "其中",
-    "今年以来",
-    "集团",
-    "十五五",
-    "今年",
-    "今日",
-    "昨日",
-})
+# ── 以下宏观词库/文本/NLP/事件函数已委托 smcore.risk.macro（3b-2 抽出） ──
+CCTV_NOISE_SECTORS = _SM_CCTV_NOISE_SECTORS
+MACRO_RISK_EXCLUDED_NEWS_TITLES = _SM_MACRO_RISK_EXCLUDED_NEWS_TITLES
+MACRO_PROMO_TITLE_KEYWORDS = _SM_MACRO_PROMO_TITLE_KEYWORDS
+
+
+def _is_macro_noise_token(token):
+    return _smcore_is_macro_noise_token(token)
 
 
 def _is_cctv_noise_sector(name):
-    text = str(name or "").strip()
-    if not text:
-        return True
-    if text.startswith("热词:") or "热词" in text:
-        return True
-    return text in CCTV_NOISE_SECTORS
+    return _smcore_is_cctv_noise_sector(name)
 
 
 def _is_macro_risk_term_allowed(term):
-    text = str(term or "").strip()
-    if not text or len(text) > 12:
-        return False
-    if text in MACRO_STOPWORDS or _is_macro_noise_token(text):
-        return False
-    return any(fragment in text for fragment in MACRO_RISK_SIGNAL_FRAGMENTS)
+    return _smcore_is_macro_risk_term_allowed(term)
 
 
 def _has_positive_macro_context(text):
-    return any(hint in text for hint in MACRO_RISK_POSITIVE_HINTS)
-
-
-# 联播快讯为多条简讯拼盘，标题固定，不参与宏观风险命中与 burst 统计
-MACRO_RISK_EXCLUDED_NEWS_TITLES = frozenset({
-    "国际联播快讯", "国内联播快讯", "联播快讯",
-    "新闻联播", "朝闻天下", "晚间新闻",
-})
-
-# 宣传/历史纪录片类关键词，匹配到时降低风险等级
-MACRO_PROMO_TITLE_KEYWORDS = (
-    "伟大征程", "复兴之路", "辉煌中国", "厉害了", "奋斗",
-    "初心使命", "红色沃土", "时代华章", "新征程", "百年风华",
-    "星星之火", "燎原", "长征", "赶考", "答卷",
-)
+    return _smcore_has_positive_macro_context(text)
 
 
 def _is_macro_risk_excluded_news_title(title):
-    t = (title or "").strip()
-    if not t:
-        return True
-    if t in MACRO_RISK_EXCLUDED_NEWS_TITLES:
-        return True
-    # 联播快讯变体：只要包含"联播快讯"四个字就排除
-    if "联播快讯" in t:
-        return True
-    return False
+    return _smcore_is_macro_risk_excluded_news_title(title)
 
 
 def _is_promo_or_historical_title(title):
-    """判断是否为宣传/历史纪录片类标题，这类标题的风险关键词不计入宏观风险。"""
-    t = (title or "").strip()
-    if not t:
-        return False
-    # 带【】的节目标题通常为宣传/专题类
-    if re.search(r"【[^】]{2,20}】", t):
-        return any(kw in t for kw in MACRO_PROMO_TITLE_KEYWORDS)
-    return any(kw in t for kw in MACRO_PROMO_TITLE_KEYWORDS)
+    return _smcore_is_promo_or_historical_title(title)
 
 
 def _clean_macro_terms(values):
-    cleaned = []
-    seen = set()
-    for value in values or []:
-        term = str(value).strip()
-        if not term or term in seen or not _is_macro_risk_term_allowed(term):
-            continue
-        cleaned.append(term)
-        seen.add(term)
-    return cleaned
+    return _smcore_clean_macro_terms(values)
 
 
 def _nlp_level_to_score(level):
-    if level == "high":
-        return 4
-    if level == "medium":
-        return 2
-    return 0
+    return _smcore_nlp_level_to_score(level)
 
 
-@lru_cache(maxsize=1)
 def _get_nlp_classifier():
-    try:
-        enable = os.getenv("MACRO_RISK_NLP_ENABLE", "").strip()
-    except Exception:
-        enable = ""
-    if enable != "1":
-        return None
-    try:
-        from transformers import pipeline
-    except Exception:
-        return None
-    model_name = os.getenv("MACRO_RISK_NLP_MODEL", "MoritzLaurer/mDeBERTa-v3-base-mnli-xnli").strip()
-    if not model_name:
-        model_name = "MoritzLaurer/mDeBERTa-v3-base-mnli-xnli"
-    try:
-        device = int(os.getenv("MACRO_RISK_NLP_DEVICE", "-1").strip() or "-1")
-    except Exception:
-        device = -1
-    return pipeline("zero-shot-classification", model=model_name, device=device)
+    return _smcore_get_nlp_classifier()
 
 
 def _nlp_risk_classify(text):
-    classifier = _get_nlp_classifier()
-    if classifier is None:
-        return None
-    labels = ["高风险", "中风险", "低风险"]
-    template = os.getenv("MACRO_RISK_NLP_TEMPLATE", "这条新闻的宏观风险属于{}。 ").strip()
-    if not template:
-        template = "这条新闻的宏观风险属于{}。"
-    try:
-        result = classifier(text, labels, hypothesis_template=template)
-    except Exception:
-        return None
+    return _smcore_nlp_risk_classify(text)
 
-    ranked_labels = result.get("labels") or []
-    ranked_scores = result.get("scores") or []
-    if not ranked_labels or not ranked_scores:
-        return None
 
-    top_label = ranked_labels[0]
-    try:
-        top_score = float(ranked_scores[0])
-    except Exception:
-        top_score = 0.0
-    try:
-        high_threshold = float(os.getenv("MACRO_RISK_NLP_HIGH_THRESHOLD", "0.55").strip() or "0.55")
-    except Exception:
-        high_threshold = 0.55
-    try:
-        medium_threshold = float(os.getenv("MACRO_RISK_NLP_MEDIUM_THRESHOLD", "0.45").strip() or "0.45")
-    except Exception:
-        medium_threshold = 0.45
-
-    if os.getenv("MACRO_RISK_NLP_DEBUG", "0").strip() == "1":
-        try:
-            dbg_scores = ", ".join(f"{lab}:{score:.3f}" for lab, score in zip(ranked_labels, ranked_scores))
-        except Exception:
-            dbg_scores = ""
-        print(f"[NLP] {top_label}:{top_score:.3f} | {dbg_scores}")
-
-    if top_label == "高风险" and top_score >= high_threshold:
-        return "high", top_score
-    if top_label == "中风险" and top_score >= medium_threshold:
-        return "medium", top_score
-    if top_label == "低风险" and top_score >= medium_threshold:
-        return "low", top_score
-    return None
+def _extract_macro_tokens(text):
+    return _smcore_extract_macro_tokens(text)
 
 
 def _extract_burst_tokens(news_files, *, min_count=3, top_n=10):
-    counts = {}
-    for f, _date_str in news_files:
-        try:
-            with f.open("r", encoding="utf-8-sig", newline="") as csvfile:
-                reader = csv.DictReader(csvfile)
-                for row in reader:
-                    title = (row.get("title") or row.get("标题") or "").strip()
-                    content = (row.get("content") or row.get("内容") or "").strip()
-                    if _is_macro_risk_excluded_news_title(title):
-                        continue
-                    text = f"{title} {content}"
-                    for token in _extract_macro_tokens(text):
-                        if not _is_macro_risk_term_allowed(token):
-                            continue
-                        counts[token] = counts.get(token, 0) + 1
-        except Exception:
-            continue
+    return _smcore_extract_burst_tokens(news_files, min_count=min_count, top_n=top_n)
 
-    items = [(k, v) for k, v in counts.items() if v >= min_count]
-    items.sort(key=lambda x: (-x[1], x[0]))
-    if top_n > 0:
-        items = items[:top_n]
-    return {k for k, _v in items}
 
+def _collect_macro_risk_events(news_files, burst_tokens, *, auto_mode=True):
+    return _smcore_collect_macro_risk_events(news_files, burst_tokens, auto_mode=auto_mode)
+
+
+def _macro_risk_level(macro_risk_summary):
+    return _smcore_macro_risk_level(macro_risk_summary)
 
 def _append_log(log_lines, message):
     ts = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
@@ -848,99 +458,6 @@ def _stage_tag(step_index, stage_name, *, percent=None, total_steps=PIPELINE_TOT
     return f"[{pct:>3d}%][{safe_step}/{total_steps} {stage_name}]"
 
 
-def _extract_macro_tokens(text):
-    return re.findall(r"[\u4e00-\u9fff]{2,6}", text)
-
-
-def _collect_macro_risk_events(
-    news_files,
-    burst_tokens,
-    *,
-    auto_mode=True,
-):
-    events = []
-    nlp_only = os.getenv("MACRO_RISK_NLP_ONLY", "0").strip() == "1"
-    nlp_enabled = os.getenv("MACRO_RISK_NLP_ENABLE", "0").strip() == "1" or nlp_only
-    nlp_mode = os.getenv("MACRO_RISK_NLP_MODE", "hit-only").strip().lower() or "hit-only"
-
-    for f, date_str in news_files:
-        try:
-            with f.open("r", encoding="utf-8-sig", newline="") as csvfile:
-                reader = csv.DictReader(csvfile)
-                for row in reader:
-                    title = (row.get("title") or row.get("标题") or "").strip()
-                    content = (row.get("content") or row.get("内容") or "").strip()
-                    if _is_macro_risk_excluded_news_title(title):
-                        continue
-                    text = f"{title} {content}".lower()
-                    if not text.strip():
-                        continue
-
-                    matched_tags = []
-                    risk_score = 0
-                    nlp_result = None
-                    if nlp_enabled and (nlp_only or nlp_mode == "all"):
-                        nlp_result = _nlp_risk_classify(text)
-
-                    burst_hit_tokens = []
-                    burst_hit_tokens = [tok for tok in burst_tokens if tok.lower() in text]
-                    if burst_hit_tokens:
-                        uniq_hits = list(dict.fromkeys(burst_hit_tokens))
-                        strong_hit = any(tok in MACRO_RISK_STRONG_FRAGMENTS for tok in uniq_hits)
-                        soft_hits = [tok for tok in uniq_hits if tok in MACRO_RISK_SOFT_FRAGMENTS]
-                        if (not strong_hit) and soft_hits:
-                            if _has_positive_macro_context(text):
-                                continue
-                            if len(soft_hits) < 2:
-                                continue
-                        risk_score = len(uniq_hits)
-                        matched_tags = uniq_hits[:3]
-
-                    # 宣传/历史纪录片类标题：风险关键词降级处理
-                    if _is_promo_or_historical_title(title):
-                        if risk_score > 0:
-                            risk_score = max(1, risk_score // 2)
-                        if matched_tags:
-                            matched_tags.append("宣传/历史")
-                        # 宣传类且无NLP结果时直接跳过
-                        if risk_score <= 1 and not nlp_result:
-                            continue
-
-                    if risk_score == 0 and not nlp_result:
-                        continue
-
-                    if nlp_result:
-                        nlp_level, _nlp_score = nlp_result
-                        nlp_score = _nlp_level_to_score(nlp_level)
-                        if nlp_score > 0:
-                            risk_score = max(risk_score, nlp_score)
-                            if "NLP" not in matched_tags:
-                                matched_tags.append("NLP")
-
-                    pre_easing_score = risk_score
-                    risk_score = max(risk_score, 1)
-
-                    if os.getenv("MACRO_RISK_DEBUG", "0").strip() == "1":
-                        try:
-                            print(
-                                f"[MACRO-DEBUG] date={date_str} title={title!r} pre_score={pre_easing_score} final_score={risk_score} tags={matched_tags} nlp={nlp_result}"
-                            )
-                        except Exception:
-                            pass
-
-                    events.append(
-                        {
-                            "date": date_str,
-                            "title": title or "(无标题)",
-                            "tags": matched_tags,
-                            "risk_score": risk_score,
-                        }
-                    )
-
-        except Exception:
-            continue
-
-    return events
 
 
 def _run_command_with_live_output(
@@ -1154,39 +671,18 @@ def _read_rows(csv_path, limit=20):
 
 
 def _cache_table_name(cache_key):
-    key = cache_key.replace("stock_data/", "").replace(".csv", "")
-    key = re.sub(r"[^0-9a-zA-Z_]+", "_", key)
-    key = re.sub(r"_+", "_", key).strip("_")
-    if not key:
-        key = "table"
-    if key[0].isdigit():
-        key = f"t_{key}"
-    return key
+    # 委托 smcore.cache（全项目统一缓存层）。
+    return _smcore_cache_table_name(cache_key)
 
 
 def _read_cache_df(table_name):
-    if not DB_PATH.exists():
-        return pd.DataFrame()
-    conn = sqlite3.connect(DB_PATH)
-    try:
-        return pd.read_sql(f'SELECT * FROM "{table_name}"', conn)
-    except Exception:
-        return pd.DataFrame()
-    finally:
-        conn.close()
+    # 委托 smcore.cache。
+    return _smcore_read_cache_df(table_name)
 
 
 def _write_cache_df(table_name, df):
-    if df is None or df.empty:
-        return
-    DB_PATH.parent.mkdir(parents=True, exist_ok=True)
-    conn = sqlite3.connect(DB_PATH)
-    try:
-        df.to_sql(table_name, conn, if_exists="replace", index=False)
-    except Exception:
-        pass
-    finally:
-        conn.close()
+    # 委托 smcore.cache。
+    _smcore_write_cache_df(table_name, df)
 
 
 def _read_theme_rows(csv_path, limit=None):
@@ -1259,70 +755,48 @@ def _filter_theme_rows_with_cctv(theme_rows, *, date_yyyymmdd):
 
 
 def _normalize_code(code):
-    digits = "".join(ch for ch in str(code or "") if ch.isdigit())
-    return digits.zfill(6) if digits else ""
+    # 委托 smcore（全项目唯一实现），保持本文件内调用签名不变。
+    return _smcore_format_code(code)
 
 
 def _to_float(value):
-    try:
-        return float(value)
-    except Exception:
-        return None
+    # 委托 smcore.utils.format。
+    return _smcore_to_float(value)
 
 
 def _normalize_confidence_label(raw_value):
-    text = str(raw_value or "").strip().lower()
-    if text in {"高", "high", "h"}:
-        return "高"
-    if text in {"中", "medium", "mid", "m"}:
-        return "中"
-    if text in {"低", "low", "l"}:
-        return "低"
-    return "中"
+    # 委托 smcore.utils.format。
+    return _smcore_normalize_confidence_label(raw_value)
 
 
 def _format_yi(value):
-    num = _to_float(value)
-    if num is None:
-        return "N/A"
-    return f"{num / 1e8:.1f}亿"
+    # 委托 smcore.utils.format。
+    return _smcore_format_yi(value)
 
 
 def _to_bs_code(code):
-    norm = _normalize_code(code)
-    if not norm:
-        return ""
-    return f"sh.{norm}" if norm.startswith("6") else f"sz.{norm}"
+    # 委托 smcore（全项目唯一实现）。
+    return _smcore_to_bs_code(code)
 
 
 def _safe_pct(numerator, denominator):
-    if denominator in (None, 0):
-        return None
-    return (numerator / denominator - 1.0) * 100.0
+    # 委托 smcore.utils.format。
+    return _smcore_safe_pct(numerator, denominator)
 
 
 def _to_percent_like(value):
-    num = _to_float(value)
-    if num is None:
-        return None
-    if num <= 1.5:
-        return num * 100.0
-    return num
+    # 委托 smcore.utils.format。
+    return _smcore_to_percent_like(value)
 
 
 def _fmt_pct(value, digits=2, signed=False, na="N/A"):
-    num = _to_float(value)
-    if num is None:
-        return na
-    sign = "+" if signed else ""
-    return f"{num:{sign}.{digits}f}%"
+    # 委托 smcore.utils.format。
+    return _smcore_fmt_pct(value, digits=digits, signed=signed, na=na)
 
 
 def _fmt_num(value, digits=2, na="N/A"):
-    num = _to_float(value)
-    if num is None:
-        return na
-    return f"{num:.{digits}f}"
+    # 委托 smcore.utils.format。
+    return _smcore_fmt_num(value, digits=digits, na=na)
 
 
 def _fetch_dividend_yield_ttm(code, end_date_text):
@@ -1414,7 +888,7 @@ def _fetch_bs_latest_row(bs_code, end_date_text, lookback_days=40):
         start_date=start_date_text,
         end_date=end_date_text,
         frequency="d",
-        adjustflag="3",
+        adjustflag="2",  # 前复权（统一口径）。此前用 "3" 不复权，close 与 Boll 口径不一致。
     )
     if rs.error_code != "0":
         return None
@@ -1447,7 +921,7 @@ def _fetch_bs_close_series(bs_code, end_date_text, lookback_days=60):
         start_date=start_date_text,
         end_date=end_date_text,
         frequency="d",
-        adjustflag="3",
+        adjustflag="2",  # 前复权（统一口径）。此前用 "3" 不复权，close 与 Boll 口径不一致。
     )
     if rs.error_code != "0":
         return pd.DataFrame()
@@ -1477,295 +951,73 @@ def _calc_boll_levels(close_series, *, k=1.645):
 
 
 def _build_indicator_levels(rows, *, k=1.645, lookback_days=60):
+    # 委托 smcore：前复权 K 线 + 唯一 Boll 实现 + 进程级单例会话。
+    # 此前自带 bs.login()/adjustflag="3"/手算 Boll，是命令行侧"不可信"的根因。
     if not rows:
         return {}
 
-    login_res = bs.login()
-    if login_res.error_code != "0":
-        return {}
-
     end_date_text = datetime.now().strftime("%Y-%m-%d")
+    start_date_text = (datetime.now() - timedelta(days=lookback_days)).strftime("%Y-%m-%d")
     levels = {}
-    try:
+    with _smcore_session() as ok:
+        if not ok:
+            return {}
         for item in rows:
             code = (item.get("code") or "").strip()
             key = _normalize_code(code)
             if not key:
                 continue
-            bs_code = _to_bs_code(code)
-            if not bs_code:
-                continue
-            df = _fetch_bs_close_series(bs_code, end_date_text, lookback_days=lookback_days)
+            df = _smcore_fetch_daily_k(key, start_date_text, end_date_text, adjust="qfq")
             if df.empty:
                 continue
-            close_series = df["close"]
+            close_series = pd.to_numeric(df["close"], errors="coerce").dropna()
+            if len(close_series) < 20:
+                continue
             latest_close = float(close_series.iloc[-1])
             ma10 = float(close_series.tail(10).mean()) if len(close_series) >= 10 else None
-            boll = _calc_boll_levels(close_series, k=k)
+            boll_df = _smcore_calc_bollinger(df, window=20, k=k)
+            last = boll_df.iloc[-1]
             levels[key] = {
                 "close": latest_close,
                 "ma10": ma10,
-                "ma20": boll.get("ma20"),
-                "upper": boll.get("upper"),
-                "lower": boll.get("lower"),
+                "ma20": float(last["MA"]) if pd.notna(last.get("MA")) else None,
+                "upper": float(last["Upper"]) if pd.notna(last.get("Upper")) else None,
+                "lower": float(last["Lower"]) if pd.notna(last.get("Lower")) else None,
             }
-    finally:
-        bs.logout()
-
     return levels
 
 
 def _to_ak_index_symbol(index_code):
-    text = str(index_code or "").strip().lower().replace(".", "")
-    if text.startswith("sh") or text.startswith("sz"):
-        return text
-    if text.isdigit() and len(text) == 6:
-        return ("sh" + text) if text.startswith("0") else ("sz" + text)
-    return text
+    # 委托 smcore（全项目唯一实现）。
+    return _smcore_to_ak_index(index_code)
 
 
 def _fetch_index_close_series(index_code, start_date_text, end_date_text):
-    def _normalize_index_df(df):
-        if df is None or df.empty:
-            return pd.DataFrame()
-
-        col_map_raw = {str(c).strip(): str(c) for c in df.columns}
-        date_col = col_map_raw.get("date", "")
-        close_col = col_map_raw.get("close", "")
-
-        if not date_col or not close_col:
-            col_map_lc = {str(c).strip().lower(): str(c) for c in df.columns}
-            date_col = col_map_lc.get("date", "")
-            close_col = col_map_lc.get("close", "")
-
-        if not date_col or not close_col:
-            return pd.DataFrame()
-
-        out_df = pd.DataFrame()
-        out_df["date"] = pd.to_datetime(df[date_col], errors="coerce")
-        out_df["close"] = pd.to_numeric(df[close_col], errors="coerce")
-        out_df = out_df.dropna(subset=["date", "close"]).sort_values("date").reset_index(drop=True)
-        return out_df
-
-    symbol = _to_ak_index_symbol(index_code)
-    out = pd.DataFrame()
-
-    cache_key = f"stock_data/index_close_{symbol}_{start_date_text}_{end_date_text}.csv"
-    table_name = _cache_table_name(cache_key)
-    cached_df = _read_cache_df(table_name)
-    if not cached_df.empty:
-        out = _normalize_index_df(cached_df)
-    else:
-        try:
-            raw = ak.stock_zh_index_daily_em(symbol=symbol)
-            out = _normalize_index_df(raw)
-        except Exception:
-            out = pd.DataFrame()
-
-    if out.empty:
-        try:
-            raw_fallback = ak.stock_zh_index_daily(symbol=symbol)
-            out = _normalize_index_df(raw_fallback)
-        except Exception:
-            out = pd.DataFrame()
-
-    if out.empty:
-        return out
-
-    _write_cache_df(table_name, out)
-
-    start_dt = pd.to_datetime(start_date_text, errors="coerce")
-    end_dt = pd.to_datetime(end_date_text, errors="coerce")
-    if pd.notna(start_dt):
-        out = out[out["date"] >= start_dt]
-    if pd.notna(end_dt):
-        out = out[out["date"] <= end_dt]
-    return out.reset_index(drop=True)
+    return _smcore_fetch_index_close_series(index_code, start_date_text, end_date_text)
 
 
 def _calc_index_metrics(index_df):
-    if index_df is None or index_df.empty:
-        return pd.DataFrame()
-
-    out = index_df[["date", "close"]].copy().sort_values("date").reset_index(drop=True)
-    out["ret_5d"] = (out["close"] / out["close"].shift(5) - 1.0) * 100.0
-    out["ret_20d"] = (out["close"] / out["close"].shift(20) - 1.0) * 100.0
-    daily_ret = out["close"].pct_change() * 100.0
-    out["vol_20d"] = daily_ret.rolling(20).std()
-    return out
-
-
-def _macro_risk_level(macro_risk_summary):
-    if not macro_risk_summary:
-        return "low"
-    high_hits = 0
-    medium_hits = 0
-    headline_match = re.search(r"- 命中统计\((?:entry|avg)\): 高=(\d+) 中=(\d+)", macro_risk_summary)
-    if headline_match:
-        try:
-            high_hits = int(headline_match.group(1))
-        except Exception:
-            high_hits = 0
-        try:
-            medium_hits = int(headline_match.group(2))
-        except Exception:
-            medium_hits = 0
-    else:
-        high_hits = macro_risk_summary.count("[高]")
-        medium_hits = macro_risk_summary.count("[中]")
-    try:
-        high_threshold = max(int(os.getenv("MACRO_RISK_HIGH_HITS", "2").strip() or "2"), 1)
-    except Exception:
-        high_threshold = 2
-    try:
-        medium_threshold = max(int(os.getenv("MACRO_RISK_MEDIUM_HITS", "2").strip() or "2"), 1)
-    except Exception:
-        medium_threshold = 2
-
-    if high_hits >= high_threshold:
-        return "high"
-    if medium_hits >= medium_threshold:
-        return "medium"
-    return "low"
+    return _smcore_calc_index_metrics(index_df)
 
 
 def _env_int_percent(name, default):
-    text = os.getenv(name, "").strip()
-    if not text:
-        return int(default)
-    try:
-        value = int(float(text))
-    except Exception:
-        return int(default)
-    return max(0, min(100, value))
+    return _smcore_env_int_percent(name, default)
 
 
 def _normalize_weight_map(weights):
-    normalized = {}
-    for key, value in weights.items():
-        try:
-            normalized[key] = max(0, int(value))
-        except Exception:
-            normalized[key] = 0
-
-    total = sum(normalized.values())
-    if total <= 0:
-        return {"boll": 40, "theme": 25, "cctv": 10, "relativity": 15, "cash": 10}
-
-    scaled = {key: int(round(val * 100.0 / total)) for key, val in normalized.items()}
-    delta = 100 - sum(scaled.values())
-    if delta != 0:
-        anchor = "cash" if "cash" in scaled else max(scaled, key=scaled.get)
-        scaled[anchor] = max(0, scaled.get(anchor, 0) + delta)
-    return scaled
+    return _smcore_normalize_weight_map(weights)
 
 
 def _rebalance_for_signal_availability(weights, *, boll_rows_count, theme_rows_count, has_cctv_hot):
-    adjusted = dict(weights)
-
-    if boll_rows_count <= 0 and adjusted.get("boll", 0) > 0:
-        adjusted["cash"] = adjusted.get("cash", 0) + adjusted.get("boll", 0)
-        adjusted["boll"] = 0
-
-    if theme_rows_count <= 0 and adjusted.get("theme", 0) > 0:
-        adjusted["cash"] = adjusted.get("cash", 0) + adjusted.get("theme", 0)
-        adjusted["theme"] = 0
-
-    if (not has_cctv_hot) and adjusted.get("cctv", 0) > 0:
-        if theme_rows_count > 0:
-            adjusted["theme"] = adjusted.get("theme", 0) + adjusted.get("cctv", 0)
-        else:
-            adjusted["cash"] = adjusted.get("cash", 0) + adjusted.get("cctv", 0)
-        adjusted["cctv"] = 0
-
-    return _normalize_weight_map(adjusted)
+    return _smcore_rebalance_for_signal_availability(weights, boll_rows_count=boll_rows_count, theme_rows_count=theme_rows_count, has_cctv_hot=has_cctv_hot)
 
 
 def _format_position_units(weight, units=10):
-    return f"{weight * units / 100.0:.1f}成"
+    return _smcore_format_position_units(weight, units=units)
 
 
 def _build_strategy_allocation(regime, *, boll_rows_count, theme_rows_count, has_cctv_hot, macro_level):
-    if regime == "趋势上行":
-        base_weights = {
-            "theme": _env_int_percent("ALLOC_UP_THEME", 35),
-            "cctv": _env_int_percent("ALLOC_UP_CCTV", 15),
-            "boll": _env_int_percent("ALLOC_UP_BOLL", 25),
-            "relativity": _env_int_percent("ALLOC_UP_RELATIVITY", 20),
-            "cash": _env_int_percent("ALLOC_UP_CASH", 5),
-        }
-        priority_line = "- 执行优先级: 题材热度确认 > Boll回踩确认 > Relativity 强势过滤"
-    elif regime == "下行防御":
-        base_weights = {
-            "cash": _env_int_percent("ALLOC_DOWN_CASH", 60),
-            "boll": _env_int_percent("ALLOC_DOWN_BOLL", 25),
-            "relativity": _env_int_percent("ALLOC_DOWN_RELATIVITY", 10),
-            "theme": _env_int_percent("ALLOC_DOWN_THEME", 5),
-            "cctv": _env_int_percent("ALLOC_DOWN_CCTV", 0),
-        }
-        priority_line = "- 执行优先级: 先控回撤，再做小仓位试错；题材策略明显降权。"
-    else:
-        theme_weight = 30 if theme_rows_count >= 20 else 25
-        cctv_weight = 15 if has_cctv_hot else 10
-        boll_weight = 35 if boll_rows_count >= 10 else 40
-        relativity_weight = 20 if macro_level != "high" else 15
-        cash_weight = 100 - theme_weight - cctv_weight - boll_weight - relativity_weight
-
-        base_weights = {
-            "boll": _env_int_percent("ALLOC_SIDE_BOLL", boll_weight),
-            "theme": _env_int_percent("ALLOC_SIDE_THEME", theme_weight),
-            "cctv": _env_int_percent("ALLOC_SIDE_CCTV", cctv_weight),
-            "relativity": _env_int_percent("ALLOC_SIDE_RELATIVITY", relativity_weight),
-            "cash": _env_int_percent("ALLOC_SIDE_CASH", cash_weight),
-        }
-        priority_line = "- 执行优先级: Boll定节奏，题材/CCTV找方向，Relativity做强弱确认。"
-
-    normalized = _normalize_weight_map(base_weights)
-    final_weights = _rebalance_for_signal_availability(
-        normalized,
-        boll_rows_count=boll_rows_count,
-        theme_rows_count=theme_rows_count,
-        has_cctv_hot=has_cctv_hot,
-    )
-
-    ratio_line = (
-        "- 策略配比: "
-        f"Boll低吸 {final_weights.get('boll', 0)}% | "
-        f"题材轮动 {final_weights.get('theme', 0)}% | "
-        f"CCTV跟随 {final_weights.get('cctv', 0)}% | "
-        f"Relativity过滤 {final_weights.get('relativity', 0)}% | "
-        f"现金观察 {final_weights.get('cash', 0)}%"
-    )
-
-    unit_line = (
-        "- 仓位折算(10成): "
-        f"Boll {_format_position_units(final_weights.get('boll', 0))} | "
-        f"题材 {_format_position_units(final_weights.get('theme', 0))} | "
-        f"CCTV {_format_position_units(final_weights.get('cctv', 0))} | "
-        f"Relativity {_format_position_units(final_weights.get('relativity', 0))} | "
-        f"现金 {_format_position_units(final_weights.get('cash', 0))}"
-    )
-
-    adaption_notes = []
-    if boll_rows_count <= 0:
-        adaption_notes.append("Boll候选不足")
-    if theme_rows_count <= 0:
-        adaption_notes.append("题材候选不足")
-    if not has_cctv_hot:
-        adaption_notes.append("CCTV热点缺失")
-    if adaption_notes:
-        adaption_line = "- 动态调整: " + "，".join(adaption_notes) + "，对应仓位已自动回流至其他策略或现金。"
-    else:
-        adaption_line = "- 动态调整: 当前信号完整，按默认推荐比例执行。"
-
-    return {
-        "base_weights": normalized,
-        "final_weights": final_weights,
-        "ratio_line": ratio_line,
-        "unit_line": unit_line,
-        "priority_line": priority_line,
-        "adaption_line": adaption_line,
-    }
+    return _smcore_build_strategy_allocation(regime, boll_rows_count=boll_rows_count, theme_rows_count=theme_rows_count, has_cctv_hot=has_cctv_hot, macro_level=macro_level)
 
 
 def _build_market_and_strategy_summary(*, boll_rows_count, theme_rows_count, macro_risk_summary, cctv_summary, has_cctv_hot, macro_external_level="low"):
@@ -2538,91 +1790,15 @@ def _read_cctv_top_summary(csv_path, top_n=5):
 
 
 def send_wecom_markdown(webhook_url, content, log_lines):
-    payload = {
-        "msgtype": "markdown",
-        "markdown": {
-            "content": content,
-        },
-    }
-    data = json.dumps(payload, ensure_ascii=False).encode("utf-8")
-    req = request.Request(
-        webhook_url,
-        data=data,
-        headers={"Content-Type": "application/json"},
-        method="POST",
-    )
-    try:
-        with request.urlopen(req, timeout=12) as resp:
-            body = resp.read().decode("utf-8", errors="replace")
-            _append_log(log_lines, f"WeCom webhook sent. Response: {body}")
-            return True
-    except error.URLError as exc:
-        _append_log(log_lines, f"WeCom webhook failed: {exc}")
-        return False
+    # 委托 smcore.notify（全项目唯一推送实现），保持本文件内签名不变。
+    from smcore.notify import send_wecom_markdown as _smcore_wecom
+    return _smcore_wecom(webhook_url, content, log_lines=log_lines)
 
 
 def send_email(subject, content, csv_path, log_lines, extra_attachment_paths=None):
-    host = os.getenv("SMTP_HOST", "").strip()
-    port = int(os.getenv("SMTP_PORT", "465").strip())
-    user = os.getenv("SMTP_USER", "").strip()
-    password = os.getenv("SMTP_PASS", "").strip()
-    to_addr = os.getenv("SMTP_TO", "").strip()
-
-    missing = []
-    if not host:
-        missing.append("SMTP_HOST")
-    if not user:
-        missing.append("SMTP_USER")
-    if not password:
-        missing.append("SMTP_PASS")
-    if not to_addr:
-        missing.append("SMTP_TO")
-
-    if missing:
-        _append_log(log_lines, f"SMTP config incomplete; missing: {', '.join(missing)}")
-        return False
-
-    msg = EmailMessage()
-    msg["Subject"] = subject
-    msg["From"] = user
-    msg["To"] = to_addr
-    msg.set_content(content)
-
-    attachment_paths = []
-    if csv_path:
-        attachment_paths.append(csv_path)
-    if extra_attachment_paths:
-        attachment_paths.extend(extra_attachment_paths)
-
-    attached_names = set()
-    for p in attachment_paths:
-        if not p:
-            continue
-        p = Path(p)
-        if not p.exists():
-            continue
-        if p.name in attached_names:
-            continue
-        with p.open("rb") as f:
-            msg.add_attachment(
-                f.read(),
-                maintype="text",
-                subtype="csv",
-                filename=p.name,
-            )
-        attached_names.add(p.name)
-    if attached_names:
-        _append_log(log_lines, f"Email attachments: {', '.join(sorted(attached_names))}")
-
-    try:
-        with smtplib.SMTP_SSL(host, port, timeout=15) as server:
-            server.login(user, password)
-            server.send_message(msg)
-        _append_log(log_lines, "SMTP email sent.")
-        return True
-    except Exception as exc:
-        _append_log(log_lines, f"SMTP email failed: {exc}")
-        return False
+    # 委托 smcore.notify（全项目唯一推送实现），保持本文件内签名不变。
+    from smcore.notify import send_email as _smcore_email
+    return _smcore_email(subject, content, csv_path=csv_path, log_lines=log_lines, extra_attachment_paths=extra_attachment_paths)
 
 
 def parse_args():

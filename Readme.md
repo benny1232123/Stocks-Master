@@ -24,8 +24,8 @@ Stocks-Master 是一个以 A 股筛选为主的脚本集合。为避免“脚本
 
 - `Frequently-Used-Program/`: 主程序脚本（选股、推送、清理）
 - `Frequently-Used-Program/README.md`: 主程序分组导航（BOLL/CCTV/分析/工具）
+- `smcore/`: 共享内核（两条主线的单一真相源，见下文）
 - `stock_data/`: 结果与缓存数据
-- `Unnecessary-Programs/`: 历史原型与低频脚本
 
 ## 首次使用
 
@@ -144,17 +144,89 @@ Stocks-Master 是一个以 A 股筛选为主的脚本集合。为避免“脚本
 - `RELATIVITY_DISABLE_RS=0` 关闭指数相对强弱，仅保留前置候选
 - `RELATIVITY_USE_SEED=0` 是否复用当日 Boll 结果作为 seed（默认关闭，避免 Relativity 只输出 Boll 候选）
 
-## 共享工具层（重构说明）
+## 共享内核 smcore/（重构核心）
 
-为减少策略脚本重复实现，新增共享模块：
+为消除"两条主线（命令行 `auto_notify_boll` + 可视化 `boll-visualizer`）各自独立实现、结果不可信"的问题，建立共享内核 `smcore/` 作为单一真相源。两条主线都依赖它，不再有重复实现。
 
-- `Frequently-Used-Program/strategy_common.py`
+### 为什么需要 smcore
 
-当前已统一能力：
+重构前的主要问题：
 
-- 股票代码标准化
-- 检查点读写
-- 结果合并去重
+- **复权方式冲突（头号根因）**：命令行用不复权(`adjustflag=3`)算 Boll，可视化用前复权(`qfq`)——同一只票两套信号；不复权数据遇除权除息日布林带断裂、信号失真。现已统一为前复权。
+- **Boll 逻辑 3 套独立实现**：`Stock-Selection-Boll.py` / `visualizer/core/indicators.py` / `auto_notify_boll._calc_boll_levels`，参数与边界条件各异。现已统一到 `smcore.indicators`。
+- **代码标准化 4 处、缓存双轨、baostock login 散落 6+ 处**。现已统一。
+
+### smcore 模块清单
+
+| 模块 | 职责 |
+|------|------|
+| `smcore/indicators/boll.py` | Boll 带计算与信号判定（唯一实现） |
+| `smcore/data/session.py` | baostock 进程级单例会话（全市场扫描提速关键） |
+| `smcore/data/kline.py` | 前复权日 K 线获取 + 文件缓存 |
+| `smcore/utils/code.py` | 股票代码标准化（6位/sh./SZ 等格式互转） |
+| `smcore/utils/dates.py` | 财报期判定（<5月用三季报，非年报） |
+| `smcore/config/defaults.py` | 全项目默认参数（window=20, k=1.645, 股价上限=30, 前复权） |
+| `smcore/cache.py` | SQLite 缓存统一读写 |
+| `smcore/notify/` | 企业微信 webhook + SMTP 邮件推送 |
+| `smcore/risk/external.py` | 美股/汇率/期货数据获取与风险评估 |
+
+### 关键参数（统一后）
+
+- Boll: `window=20`, `k=1.645`, `near_ratio=1.015`
+- 复权: `qfq`（`adjustflag=2`，前复权）
+- 股价上限: `30`
+- 财报期 <5月: 用去年三季报(0930)，非年报（年报披露中不齐全）
+
+重构进度详见 `REFACTOR_PROGRESS.md`。
+
+### 兼容旧入口
+
+`Frequently-Used-Program/strategy_common.py` 仍保留，作为旧脚本的兼容层；新代码应直接使用 `smcore`。
+
+## 后台守护进程（24h 运行）
+
+Streamlit 是被动展示工具，关了浏览器就不跑。为此新增独立后台守护进程 `run_daemon.py`，24h 常驻，不依赖 Streamlit。
+
+### 启动
+
+```bat
+scripts\start-daemon.bat
+```
+
+或命令行：
+
+```bash
+python run_daemon.py                # 前台运行，Ctrl+C 退出
+python run_daemon.py --once daily   # 只跑一次选股（调试）
+python run_daemon.py --once alert   # 只跑一次预警（调试）
+python run_daemon.py --status       # 查看任务状态
+```
+
+### 定时任务
+
+| 任务 | 时间 | 说明 |
+|------|------|------|
+| 每日选股推送 | 工作日 21:30 | 调 auto_notify_boll 子进程，选股 + 企微/邮件推送 |
+| 行情快照刷新 | 盘中每 5 分钟 | 拉全市场实时价，缓存到磁盘，供预警/持仓盈亏用 |
+| 盘中预警 | 盘中每 10 分钟 | 读操作清单，对比实时价与 Boll 止损/止盈位，触发推企微 |
+
+盘中时段 = 工作日 9:25-11:35 / 12:55-15:05（含集合竞价），周末不跑。
+
+### 与 Streamlit 的关系
+
+- **daemon**：24h 后台运行，负责定时选股、行情缓存、预警推送。单个任务失败不影响其他。
+- **streamlit**：交互式展示，读 daemon 写的结果文件，不承担定时计算。关了不影响 daemon。
+- 两者通过 `stock_data/` 下的文件解耦，互不依赖。
+
+### 日志
+
+- daemon 日志：`stock_data/auto_logs/daemon-YYYYMMDD.log`
+
+### 注意
+
+- daemon 需保持运行（开机自启可注册到 Windows 启动项）
+- 预警推送需要 `WECOM_WEBHOOK_URL` 环境变量，未配置则只记日志
+- 行情快照首次拉取约 60 秒，后续 5 分钟内秒级返回（磁盘缓存）
 
 ## 可视化界面（多策略选股）
 
