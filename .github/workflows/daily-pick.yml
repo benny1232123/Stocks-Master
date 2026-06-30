@@ -10,7 +10,7 @@ on:
 jobs:
   daily-pick:
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    timeout-minutes: 60
     steps:
       - uses: actions/checkout@v4
 
@@ -26,7 +26,8 @@ jobs:
           # K 线走 akshare 后端（KLINE_BACKEND=akshare），不依赖 baostock 网络
           # cos-python-sdk-v5: 腾讯云 COS SDK，上传操作清单供 SCF 预警用
 
-      - name: 运行选股主流程
+      - name: 运行选股主流程（巨石，可选）
+        timeout-minutes: 25
         env:
           KLINE_BACKEND: akshare          # K 线走 akshare（东财 HTTP，全球可达）
           PYTHONUNBUFFERED: "1"
@@ -48,8 +49,8 @@ jobs:
           FAST_MODE: "1"
         run: |
           python Frequently-Used-Program/auto_notify_boll.py || true
-          # 巨石可能因 baostock 网络问题部分失败，但不阻塞后续
-          # 核心选股（Boll）走 akshare，应能正常出结果
+          # 巨石可能因 baostock 网络问题部分失败/超时，但不阻塞后续
+          # 核心选股由下一步 fuse_signals 完成（走 akshare 后端）
 
       - name: 生成操作清单 + 上传 COS
         env:
