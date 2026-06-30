@@ -1,483 +1,230 @@
 # Stocks-Master
 
-Stocks-Master 是一个以 A 股筛选为主的脚本集合。为避免“脚本太多找不到入口”，建议优先使用统一入口：`stocks-master.bat`。
+A 股多策略选股系统 — Boll 布林带为主，融合题材/相对强弱/CCTV 舆情，支持本地运行与全云端自动运行。
 
-## 统一入口（推荐）
+## 快速开始
 
-- 运行：`stocks-master.bat`
-- 一个菜单覆盖常用操作：手动执行、注册任务、触发任务、检查任务、清理数据、启动可视化、邮件配置/测试、数据索引
+### 本地运行
 
-## 原入口（兼容保留）
+```bash
+# 1. 安装依赖
+pip install -r requirements.txt
 
-1. 手动跑一次并推送结果：`run-boll-auto-notify.bat`
-2. 注册每日任务（21:30，新闻联播后）：`register-boll-daily-task.bat`
-3. 立即触发一次已注册任务（显示进度）：`run-boll-daily-task-now.bat`
-4. 查看任务状态：`check-boll-daily-task.bat`
-5. 清理历史数据（默认保留 30 天）：`clean-stock-data.bat`
-6. 生成数据总览索引：`index-stock-data.bat`
-7. 自动归档历史数据（默认根目录保留 7 天）：`auto-archive-stock-data.bat`
-8. 运行信号样本回测：`run-backtest-signal-picks.bat`
-9. 运行真实成交回测：`run-backtest-tradebook.bat`
-10. 打开回测软件界面：`start-backtest-center.bat`
+# 2. 配置邮件推送（可选）
+# 在 Frequently-Used-Program/.env 或环境变量中设置 SMTP_* 
 
-## 目录说明（精简版）
+# 3. 启动可视化界面
+python streamlit_app.py
+# 或
+scripts\start-boll-visualizer.bat
 
-- `Frequently-Used-Program/`: 主程序脚本（选股、推送、清理）
-- `Frequently-Used-Program/README.md`: 主程序分组导航（BOLL/CCTV/分析/工具）
-- `smcore/`: 共享内核（两条主线的单一真相源，见下文）
-- `stock_data/`: 结果与缓存数据
+# 4. 命令行选股
+python Frequently-Used-Program/auto_notify_boll.py
+```
 
-## 首次使用
+### 全云端运行（不开机也跑）
 
-1. 创建并激活虚拟环境（可选但推荐）
-2. 安装依赖：`pip install -r requirements.txt`
-3. 如需邮件推送，先运行：`configure-email-smtp.bat`
-4. 验证邮件配置：`test-email-notify.bat`
+详见 `DEPLOY_CLOUD.md`，一分钟配置：
 
-## 自动推送说明
+1. Fork/Clone 本仓库到你的 GitHub
+2. 在 GitHub Secrets 配置 `SMTP_*` 和 `COS_*`
+3. 启用 GitHub Actions（工作日 21:30 自动选股 + 邮件推送）
+4. 可选：部署 SCF 云函数（盘中预警，详见 `DEPLOY_SCF.md`）
 
-- 主流程脚本：`Frequently-Used-Program/auto_notify_boll.py`
-- 支持 SMTP 邮件（`SMTP_HOST/PORT/USER/PASS/TO`）
-- 自动任务默认启用补跑：若错过计划时间，开机后执行一次
-- 自动任务默认按天分类归档结果到 `stock_data/archive/YYYYMM/分类/`（可用 `ARCHIVE_ALL_ROOT_DATED=0` 改回仅归档旧文件）
+---
 
-## 全流程策略原理（重点）
+## 目录结构
 
-主流程在 `Frequently-Used-Program/auto_notify_boll.py`，按“先筛信号，再做环境判断，最后给执行建议”的思路运行。
+```
+Stocks-Master/
+├── smcore/                  # 共享内核（两条主线唯一真相源）
+│   ├── indicators/boll.py   #   Boll 计算（唯一实现）
+│   ├── data/                #   K线/行情/指数数据获取
+│   ├── notify/email.py      #   邮件推送（唯一推送渠道）
+│   ├── strategy/fusion.py   #   信号融合（四策略→操作清单）
+│   ├── portfolio/pnl.py     #   持仓盈亏计算
+│   └── scheduler/           #   定时任务引擎
+├── Frequently-Used-Program/ # 主程序脚本
+│   ├── auto_notify_boll.py  #   命令行入口（选股+推送巨石，逐步重构中）
+│   ├── Stock-Selection-Boll.py      # Boll 选股独立脚本
+│   └── boll-visualizer/     #   Streamlit 可视化前端
+├── streamlit_app.py         # 可视化启动入口
+├── run_daemon.py            # 24h 本地守护进程
+├── scf_alert.py             # SCF 云函数入口（盘中预警）
+├── .github/workflows/       # GitHub Actions 云端选股
+└── stock_data/              # 结果输出目录
+```
 
-### 1. 流程结构（每日运行）
+---
 
-1. Boll 主策略：执行 `Stock-Selection-Boll.py`，得到技术面候选。
-2. CCTV 板块策略：执行 `Stock-Selection-CCTV-Sectors.py`，提取舆论热点方向。
-3. 宏观新闻风险：从 `*_news.csv` 提取地缘、能源、外需等风险标签。
-4. 题材 + 相对强弱：执行 `Stock-Selection-Ashare-Theme-Turnover.py` 与 `Stock-Selection-Relativity.py`，补充风格轮动与抗跌筛选。
-5. 数据归档：按规则移动历史结果到 `stock_data/archive/`。
-6. 数据清理：删除超期日志/图表/日期文件。
-7. 通知输出：把结论写成邮件日报（含 Boll/题材/相对强弱摘要）。
+## 共享内核 smcore/
 
-### 2. 市场状态判定逻辑
-
-系统会基于指数与风险信号做“市场状态体检”：
-
-- 指数维度：上证(sh.000001)、沪深300(sh.000300) 的 5 日/20 日收益与 20 日波动。
-- 结构维度：Boll 命中数量、题材候选数量、CCTV 热点活跃度。
-- 风险维度：宏观新闻中的高/中风险事件数量。
-
-最终将市场归类为：
-
-- 趋势上行：优先题材轮动与热点跟随，Boll 做回踩确认。
-- 震荡轮动：优先低吸高抛与强弱切换，保持分散。
-- 下行防御：优先降仓位、缩周期、严止损，题材策略降权。
-
-### 3. 为什么要多策略融合
-
-- Boll 解决“点位和节奏”（什么时候更接近低风险买点）。
-- 题材策略解决“方向和弹性”（哪些方向有资金共识）。
-- 相对强弱解决“风格筛选”（顺风不弱、逆风抗跌）。
-- CCTV/新闻解决“叙事与预期差”（市场在关注什么、是否升温）。
-- 宏观风险解决“仓位约束”（先控制回撤，再追求收益）。
-
-这是一套“信号分层”设计：技术面给时机，题材面给方向，宏观面给风控边界。
-
-### 4. 日报里的建议如何得出
-
-日报不是固定模板，而是由当前市场状态动态生成：
-
-- 主策略与辅策略（做什么）
-- 参数建议（怎么调阈值）
-- 失效信号（何时切换策略）
-- 执行清单（仓位、止损、止盈、复盘）
-
-## CCTV 模块与关键词自动更新
-
-### 1. CCTV 每天跑，统计按周期看
-
-- CCTV 抓取与板块热度计算仍是日频执行。
-- 日报展示可以按窗口聚合（默认 3 天，可改 5 天）：`CCTV_STATS_DAYS=3|5`。
-- 聚合口径包括：区间均值热度、区间变化、上榜次数。
-
-### 2. 关键词库自动更新原理
-
-脚本会先从新闻中提取“新候选词”，再做板块归类建议，然后按规则自动入库到：
-
-- `stock_data/cctv_keyword_accepts.json`（按 `yearly` 年度管理）
-
-自动入库条件（默认）：
-
-- 出现次数 >= 4
-- 建议置信度 >= 中
-- 与现有词库不重复
-
-可调参数：
-
-- `CCTV_AUTO_ACCEPT_KEYWORDS=1` 开启自动入库
-- `CCTV_AUTO_ACCEPT_MIN_COUNT=4` 最小出现次数
-- `CCTV_AUTO_ACCEPT_MIN_CONF=中` 最低置信度（低/中/高）
-
-### 3. 补充资讯源（用于发现新词）
-
-除了 CCTV 主源，还可抓取补充快讯源用于“关键词发现”，失败会自动降级，不影响主流程：
-
-- `CCTV_DISABLE_EXTRA_NEWS=0` 是否关闭补充源
-- `CCTV_EXTRA_NEWS_SOURCES=cls,sina` 补充源列表
-- `CCTV_EXTRA_NEWS_LIMIT=120` 每源抓取上限
-
-## 相对强弱策略接入说明
-
-- 策略脚本：`Frequently-Used-Program/Stock-Selection-Relativity.py`
-- 主流程开关：`ENABLE_RELATIVITY_STRATEGY=1`（`0` 关闭）
-- 输出文件：`stock_data/Stock-Selection-Relativity-YYYYMMDD.csv`
-- 邮件行为：会自动追加“相对强弱策略”摘要，并作为附件发送（成功时）。
-
-提速机制（已启用）：
-
-- 自动流程会把当日 `Stock-Selection-Boll-YYYYMMDD.csv` 作为 seed 传给相对强弱策略。
-- 相对强弱脚本在 seed 模式下会跳过前置的资金流/基本面/股东重复筛选，只做相对强弱评估。
-- 这样可显著减少重复 API 调用，缩短整体日报耗时。
-
-可调参数（由自动流程透传）：
-
-- `RELATIVITY_MAX_WORKERS=1` 相对强弱评估并发
-- `RELATIVITY_RESUME=1` 开启断点续跑
-- `RELATIVITY_SLEEP_SECONDS=2` 慢接口节流秒数
-- `RELATIVITY_DISABLE_RS=0` 关闭指数相对强弱，仅保留前置候选
-- `RELATIVITY_USE_SEED=0` 是否复用当日 Boll 结果作为 seed（默认关闭，避免 Relativity 只输出 Boll 候选）
-
-## 共享内核 smcore/（重构核心）
-
-为消除"两条主线（命令行 `auto_notify_boll` + 可视化 `boll-visualizer`）各自独立实现、结果不可信"的问题，建立共享内核 `smcore/` 作为单一真相源。两条主线都依赖它，不再有重复实现。
-
-### 为什么需要 smcore
-
-重构前的主要问题：
-
-- **复权方式冲突（头号根因）**：命令行用不复权(`adjustflag=3`)算 Boll，可视化用前复权(`qfq`)——同一只票两套信号；不复权数据遇除权除息日布林带断裂、信号失真。现已统一为前复权。
-- **Boll 逻辑 3 套独立实现**：`Stock-Selection-Boll.py` / `visualizer/core/indicators.py` / `auto_notify_boll._calc_boll_levels`，参数与边界条件各异。现已统一到 `smcore.indicators`。
-- **代码标准化 4 处、缓存双轨、baostock login 散落 6+ 处**。现已统一。
-
-### smcore 模块清单
+为消除"命令行 + 可视化两套实现结果不一致"的问题，所有核心逻辑统一到 `smcore/`。
 
 | 模块 | 职责 |
 |------|------|
 | `smcore/indicators/boll.py` | Boll 带计算与信号判定（唯一实现） |
-| `smcore/data/session.py` | baostock 进程级单例会话（全市场扫描提速关键） |
-| `smcore/data/kline.py` | 前复权日 K 线获取 + 文件缓存 |
-| `smcore/utils/code.py` | 股票代码标准化（6位/sh./SZ 等格式互转） |
-| `smcore/utils/dates.py` | 财报期判定（<5月用三季报，非年报） |
-| `smcore/config/defaults.py` | 全项目默认参数（window=20, k=1.645, 股价上限=30, 前复权） |
-| `smcore/cache.py` | SQLite 缓存统一读写 |
-| `smcore/notify/` | SMTP 邮件推送 |
-| `smcore/risk/external.py` | 美股/汇率/期货数据获取与风险评估 |
+| `smcore/data/kline.py` | 前复权日 K 线获取 + 文件缓存（支持 baostock/akshare 双后端） |
+| `smcore/data/quote.py` | 全市场实时报价（双层缓存，5 分钟 TTL） |
+| `smcore/notify/email.py` | SMTP 邮件推送（唯一推送渠道） |
+| `smcore/strategy/fusion.py` | 四策略信号融合 → 今日操作清单 |
+| `smcore/strategy/allocation.py` | 仓位分配 |
+| `smcore/portfolio/pnl.py` | 持仓盈亏计算 |
+| `smcore/scheduler/engine.py` | 纯标准库定时调度器 |
+| `smcore/storage/cos.py` | 腾讯云 COS 上传/下载 |
+| `smcore/config/defaults.py` | 全项目默认参数 |
 
-### 关键参数（统一后）
+**关键参数（统一后）**：
 
 - Boll: `window=20`, `k=1.645`, `near_ratio=1.015`
-- 复权: `qfq`（`adjustflag=2`，前复权）
+- 复权: 前复权 `qfq`（`adjustflag=2`）
 - 股价上限: `30`
-- 财报期 <5月: 用去年三季报(0930)，非年报（年报披露中不齐全）
+- 财报期 <5月: 用去年三季报(0930)
 
-重构进度详见 `REFACTOR_PROGRESS.md`。
+---
 
-### 兼容旧入口
+## 推送通知
 
-`Frequently-Used-Program/strategy_common.py` 仍保留，作为旧脚本的兼容层；新代码应直接使用 `smcore`。
+**仅邮件推送**（企业微信已移除）：
 
-## 后台守护进程（24h 运行）
+| 环境变量 | 说明 |
+|----------|------|
+| `SMTP_HOST` | SMTP 服务器（如 `smtp.qq.com`） |
+| `SMTP_PORT` | 端口（通常 465/587） |
+| `SMTP_USER` | 发件邮箱 |
+| `SMTP_PASS` | 邮箱授权码 |
+| `SMTP_TO` | 收件邮箱 |
 
-Streamlit 是被动展示工具，关了浏览器就不跑。为此新增独立后台守护进程 `run_daemon.py`，24h 常驻，不依赖 Streamlit。
+未配置则跳过推送，选股结果仍在 `stock_data/` 生成。
 
-### 启动
+---
 
-```bat
-scripts\start-daemon.bat
-```
+## 可视化界面
 
-或命令行：
+Streamlit 多策略选股界面：
 
 ```bash
-python run_daemon.py                # 前台运行，Ctrl+C 退出
+# 方式一：直接启动（推荐）
+python streamlit_app.py
+
+# 方式二：批处理脚本（自动找空闲端口）
+scripts\start-boll-visualizer.bat
+```
+
+访问 `http://localhost:8520`，功能包括：
+
+- **策略选股**：Boll / 相对强弱 / 央视新闻 / 短线题材，Tab 切换
+- **交易录入**：记录买卖操作
+- **持仓总览**：实时盈亏（依赖 `stock_data/portfolio.json`）
+- **交易历史**：历史成交记录
+
+---
+
+## 后台守护进程（本地 24h）
+
+Streamlit 关了就不跑，守护进程独立运行：
+
+```bash
+python run_daemon.py                # 前台运行
 python run_daemon.py --once daily   # 只跑一次选股（调试）
-python run_daemon.py --once alert   # 只跑一次预警（调试）
 python run_daemon.py --status       # 查看任务状态
 ```
 
-### 定时任务
-
 | 任务 | 时间 | 说明 |
 |------|------|------|
-| 每日选股推送 | 工作日 21:30 | 调 auto_notify_boll 子进程，选股 + 邮件推送 |
-| 行情快照刷新 | 盘中每 5 分钟 | 拉全市场实时价，缓存到磁盘，供预警/持仓盈亏用 |
-| 盘中预警 | 盘中每 10 分钟 | 读操作清单，对比实时价与 Boll 止损/止盈位，触发发邮件 |
+| 每日选股 | 工作日 21:30 | 选股 + 邮件推送 |
+| 行情刷新 | 盘中每 5 分钟 | 缓存实时价供预警用 |
+| 盘中预警 | 盘中每 10 分钟 | 触止损/止盈发邮件 |
 
-盘中时段 = 工作日 9:25-11:35 / 12:55-15:05（含集合竞价），周末不跑。
+---
 
-### 与 Streamlit 的关系
+## 全云端运行
 
-- **daemon**：24h 后台运行，负责定时选股、行情缓存、预警推送。单个任务失败不影响其他。
-- **streamlit**：交互式展示，读 daemon 写的结果文件，不承担定时计算。关了不影响 daemon。
-- 两者通过 `stock_data/` 下的文件解耦，互不依赖。
+不想开机也能跑？完全不用本地电脑：
 
-### 日志
+### GitHub Actions（选股 + 推送）
 
-- daemon 日志：`stock_data/auto_logs/daemon-YYYYMMDD.log`
+- 触发：工作日 21:30 北京时间（cron `30 13 * * 1-5` UTC）
+- 后端：akshare（不依赖 baostock 网络）
+- 输出：邮件推送 + COS 上传操作清单
+- 费用：**0 元/月**（GitHub Actions 免费额度）
 
-### 注意
+配置详见 `SETUP_GUIDE.md`。
 
-- daemon 需保持运行（开机自启可注册到 Windows 启动项）
-- 预警推送需要 `SMTP_*` 环境变量，未配置则只记日志
-- 行情快照首次拉取约 60 秒，后续 5 分钟内秒级返回（磁盘缓存）
+### SCF 云函数（盘中预警）
 
-## 可视化界面（多策略选股）
+- 触发：盘中每 10 分钟（腾讯云函数定时触发器）
+- 逻辑：从 COS 读操作清单 → 新浪行情 → 触止损/止盈发邮件
+- 费用：**0 元/月**（SCF 免费额度内）
+- 部署详见 `DEPLOY_SCF.md`
 
-Streamlit 多策略选股界面，集成 Boll、相对强弱、央视新闻、短线题材四种策略：
+---
 
-- 启动：`scripts\start-boll-visualizer.bat`
-- 入口页面：`策略选股`（Tab 切换四种策略）、`交易录入`、`持仓总览`、`交易历史`
-- 支持 Supabase 云端存储（自动回退本地 SQLite）
-- PWA 支持，可在手机浏览器安装为桌面应用
+## 多策略融合
 
-各策略 Tab 说明：
+日报不是固定模板，而是由市场状态动态生成：
 
-- **Boll 布林**：全流程选股（资金流 → 基本面 → 股东 → Boll 信号）或仅 Boll 模式
-- **相对强弱**：资金流筛选 → 基本面过滤 → 股东筛选 → 指数相对强弱验证
-- **央视新闻**：抓取新闻联播 → 舆情分析 → 热门板块识别 → 关联股票池
-- **短线题材**：基于 CCTV 热门板块 → 换手率 + 动量筛选 → 短线候选
+1. **Boll 主策略**：技术面买点/卖点
+2. **题材策略**：资金共识方向
+3. **相对强弱**：风格筛选（顺风不弱、逆风抗跌）
+4. **CCTV/新闻**：叙事与预期差
+5. **宏观风险**：仓位约束（先控回撤，再追求收益）
 
-## 策略有效性验证（回测）
+融合结果输出为 `Daily-Action-List-YYYYMMDD.csv`（今日操作清单），含止损/止盈/建议买入价。
 
-目前支持两种回测路径，建议组合使用：
+---
 
-- 真实成交回测：复盘你实际买卖记录（最贴近实盘）。
-- 信号样本回测：复盘每日选股信号在固定持有周期下的统计表现（用于验证策略是否有统计优势）。
+## 回测
 
-也可直接使用软件界面（推荐）：
+两套回测路径：
 
-- 启动：`scripts\\start-backtest-center.bat`
-- 功能：真实成交可页面直接录入；信号样本自动读取历史文件；填写参数后点击运行并下载结果（无需命令行）。
-
-### 1. 真实成交回测（你自己的买卖记录）
-
-- 脚本：`Frequently-Used-Program/backtest_tradebook.py`
-- 输入方式：
-	- 单文件：同一 CSV 包含买入和卖出记录（用“买/卖”字段区分）
-	- 双文件：买入 CSV + 卖出 CSV
-- 输出：
-	- `*-summary.csv`：总收益、胜率、最大回撤等
-	- `*-closed-trades.csv`：逐笔已平仓明细
-	- `*-equity-curve.csv`：权益曲线
-
-示例：
+### 信号样本回测（验证策略统计优势）
 
 ```bash
-python Frequently-Used-Program/backtest_tradebook.py --trades-csv stock_data/my_trades.csv
-python Frequently-Used-Program/backtest_tradebook.py --buy-csv stock_data/my_buys.csv --sell-csv stock_data/my_sells.csv
+python Frequently-Used-Program/backtest_signal_picks.py \
+  --signals-glob "stock_data/Stock-Selection-Boll-*.csv" \
+  --top-n 10 --hold-days 5
 ```
 
-可先复制模板再填充真实成交：`stock_data/my_trades.template.csv`
-
-### 2. 信号样本回测（按每日候选自动复盘）
-
-- 脚本：`Frequently-Used-Program/backtest_signal_picks.py`
-- 逻辑：
-	- 读取每日选股 CSV（默认 `stock_data/Stock-Selection-Boll-*.csv`）
-	- 每个信号日取前 N 只（`--top-n`）
-	- 以“次日开盘买入 + 持有 N 个交易日后收盘卖出”计算毛收益
-	- 支持滑点/佣金/印花税，得到净收益（更贴近实盘）
-	- 汇总净胜率、净收益、回撤统计
-	- 回测按交易日执行，周末和节假日自动跳过，不按自然日累加
-- 输出：
-	- `*-trades.csv`：逐标的回测明细
-	- `*-daily.csv`：按信号日聚合表现
-	- `*-summary.csv`：总体统计
-
-成本参数（可选）：
-
-- `--buy-slip-bps`：买入滑点（基点，默认 5）
-- `--sell-slip-bps`：卖出滑点（基点，默认 5）
-- `--buy-fee-rate`：买入佣金（默认 0.0003）
-- `--sell-fee-rate`：卖出佣金（默认 0.0003）
-- `--sell-stamp-tax-rate`：卖出印花税（默认 0.001）
-
-示例：
+### 真实成交回测（验证执行质量）
 
 ```bash
-python Frequently-Used-Program/backtest_signal_picks.py --signals-glob "stock_data/Stock-Selection-Boll-*.csv" --top-n 10 --hold-days 5
-python Frequently-Used-Program/backtest_signal_picks.py --signals-glob "stock_data/Stock-Selection-Relativity-*.csv" --top-n 8 --hold-days 7 --start-date 20260301 --end-date 20260411
-python Frequently-Used-Program/backtest_signal_picks.py --signals-glob "stock_data/Stock-Selection-Boll-*.csv" --top-n 10 --hold-days 5 --buy-slip-bps 8 --sell-slip-bps 8 --buy-fee-rate 0.00025 --sell-fee-rate 0.00025 --sell-stamp-tax-rate 0.001
+python Frequently-Used-Program/backtest_tradebook.py \
+  --trades-csv stock_data/my_trades.csv
 ```
 
-建议先用信号样本回测找参数区间，再用真实成交回测验证执行质量。
+也可用界面：`scripts\start-backtest-center.bat`
 
-## 推荐生产参数模板（可直接套用）
+---
 
-下面给出两套常用参数。建议先用“稳健版”跑一周观察，再按机器性能切到“快速版”。
+## 依赖
 
-### 1. 稳健版（优先稳定与可复现）
+核心依赖：`akshare`, `pandas`, `streamlit`, `requests`, `baostock`
 
-适用场景：网络一般、希望减少接口抖动、强调结果一致性。
+完整列表见 `requirements.txt`。
 
-```bat
-set FAST_MODE=0
-set ENABLE_THEME_STRATEGY=1
-set ENABLE_RELATIVITY_STRATEGY=1
+云端运行额外需要：`cos-python-sdk-v5`（COS 上传用）
 
-set CCTV_STATS_DAYS=3
-set CCTV_AUTO_ACCEPT_KEYWORDS=1
-set CCTV_AUTO_ACCEPT_MIN_COUNT=5
-set CCTV_AUTO_ACCEPT_MIN_CONF=中
-set CCTV_DISABLE_EXTRA_NEWS=0
-set CCTV_EXTRA_NEWS_SOURCES=cls,sina
-set CCTV_EXTRA_NEWS_LIMIT=80
+---
 
-set RELATIVITY_MAX_WORKERS=1
-set RELATIVITY_RESUME=1
-set RELATIVITY_SLEEP_SECONDS=3
-set RELATIVITY_DISABLE_RS=0
+## 常见问题
 
-set ENABLE_AUTO_ARCHIVE=1
-set ENABLE_AUTO_CLEANUP=1
-```
+**Q：可视化打不开？**
+A：不要用 `streamlit run streamlit_app.py`。正确方式是 `python streamlit_app.py`（脚本会自动启动 streamlit）。或直接用 `scripts\start-boll-visualizer.bat`。
 
-### 2. 快速版（优先时效）
+**Q：选股结果不可信？**
+A：检查是否统一用前复权（`qfq`）。本项目已统一，若发现不一致请提 issue。
 
-适用场景：机器性能较好、希望更快出日报。
+**Q：云端运行需要付费吗？**
+A：不需要。GitHub Actions + SCF 均在免费额度内，0 元/月。
 
-```bat
-set FAST_MODE=1
-set ENABLE_THEME_STRATEGY=1
-set ENABLE_RELATIVITY_STRATEGY=1
+**Q：邮件推送失败？**
+A：检查 SMTP 配置。QQ 邮箱需要用"授权码"而非登录密码。腾讯云/企业邮箱可能需要开启 SMTP 服务。
 
-set CCTV_STATS_DAYS=3
-set CCTV_AUTO_ACCEPT_KEYWORDS=1
-set CCTV_AUTO_ACCEPT_MIN_COUNT=4
-set CCTV_AUTO_ACCEPT_MIN_CONF=中
-set CCTV_DISABLE_EXTRA_NEWS=0
-set CCTV_EXTRA_NEWS_SOURCES=cls,sina
-set CCTV_EXTRA_NEWS_LIMIT=120
+---
 
-set RELATIVITY_MAX_WORKERS=2
-set RELATIVITY_RESUME=1
-set RELATIVITY_SLEEP_SECONDS=1
-set RELATIVITY_DISABLE_RS=0
-
-set ENABLE_AUTO_ARCHIVE=1
-set ENABLE_AUTO_CLEANUP=1
-```
-
-### 3. 参数调整建议
-
-- 若接口超时增多：降低 `RELATIVITY_MAX_WORKERS`，并提高 `RELATIVITY_SLEEP_SECONDS`。
-- 若关键词噪声偏多：提高 `CCTV_AUTO_ACCEPT_MIN_COUNT` 到 `6`，或把 `CCTV_AUTO_ACCEPT_MIN_CONF` 调到 `高`。
-- 若日报过慢：保持 `FAST_MODE=1`，并将 `CCTV_EXTRA_NEWS_LIMIT` 下调到 `60`。
-
-## 数据清理说明
-
-- 清理脚本：`Frequently-Used-Program/cleanup_stock_data.py`
-- 默认保留 30 天（日期结果、日志、图片）
-- 手动执行示例：`clean-stock-data.bat 20`
-
-可选环境变量：
-
-- `ENABLE_AUTO_CLEANUP=0` 关闭自动清理
-- `CLEANUP_KEEP_DAYS=30` 日期文件保留天数
-- `CLEANUP_LOG_KEEP_DAYS=30` 日志保留天数
-- `CLEANUP_PLOTS_KEEP_DAYS=30` 图片保留天数
-- `CLEANUP_DRY_RUN=1` 仅预览，不删除
-
-## 自动归档说明
-
-- 归档脚本：`Frequently-Used-Program/archive_stock_data.py`
-- 一键入口：`auto-archive-stock-data.bat`
-- 默认策略：
-	- 先整理已有归档目录，再执行归档
-	- `stock_data/` 根目录仅保留最近 7 天日期文件
-	- 更早文件移动到 `stock_data/archive/YYYYMM/类型/`
-	- 归档区默认保留 365 天，超期自动删除
-
-二级目录类型示例：
-
-- `stock_data/archive/202603/boll/`
-- `stock_data/archive/202603/cctv/`
-- `stock_data/archive/202603/theme/`
-- `stock_data/archive/202603/news/`
-
-可选环境变量（自动任务中生效）：
-
-- `ENABLE_AUTO_ARCHIVE=1` 开关自动归档（`0` 关闭）
-- `ARCHIVE_KEEP_ROOT_DAYS=7` 根目录保留天数
-- `ARCHIVE_KEEP_DAYS=365` 归档区保留天数
-- `ARCHIVE_DRY_RUN=1` 仅预览，不移动删除
-- `ENABLE_AUTO_COMPRESS=1` 开关自动压缩（`0` 关闭）
-- `COMPRESS_AUTO_LOGS_KEEP_DAYS=30` auto_logs 压缩阈值
-- `COMPRESS_PLOTS_KEEP_DAYS=30` plots 压缩阈值
-- `COMPRESS_UI_UPLOADS_KEEP_DAYS=30` ui_uploads 压缩阈值
-- `COMPRESS_CHECKPOINTS_KEEP_DAYS=180` checkpoints 压缩阈值
-- `COMPRESS_DRY_RUN=1` 仅预览，不真正压缩
-
-## stock_data 快速定位
-
-- 执行：`index-stock-data.bat`
-- 作用：自动生成 `stock_data/INDEX.md`
-- 你可以在 `INDEX.md` 里一眼看到：
-	- 今日新增文件
-	- 每类数据的最新文件
-	- 最近日期文件列表
-	- 子目录（如 `auto_logs`、`plots`）文件数量与占用
-
-## 策略有效性验证（回测）
-
-### 1. 交易流水回测（推荐）
-
-脚本：`Frequently-Used-Program/backtest_tradebook.py`
-
-作用：基于你真实买卖成交记录，计算胜率、单笔收益、总收益、盈亏比、最大回撤，并输出权益曲线。
-
-运行示例（单文件流水）：
-
-`python Frequently-Used-Program/backtest_tradebook.py --trades-csv stock_data/my_trades.csv`
-
-运行示例（买卖分文件）：
-
-`python Frequently-Used-Program/backtest_tradebook.py --buy-csv stock_data/my_buys.csv --sell-csv stock_data/my_sells.csv`
-
-输出文件（默认）：
-
-- `stock_data/Trade-Backtest-YYYYMMDD-raw-trades.csv`
-- `stock_data/Trade-Backtest-YYYYMMDD-closed-trades.csv`
-- `stock_data/Trade-Backtest-YYYYMMDD-summary.csv`
-- `stock_data/Trade-Backtest-YYYYMMDD-equity-curve.csv`
-
-### 2. 如何导入买入/卖出信息
-
-支持中英文列名自动识别。常用字段如下：
-
-- 日期：`date` / `trade_date` / `日期` / `成交日期`
-- 代码：`code` / `股票代码`
-- 方向：`side` / `方向`（`BUY/SELL` 或 `买入/卖出`）
-- 价格：`price` / `成交价`
-- 数量（可选）：`quantity` / `数量`
-- 手续费（可选）：`fee` / `手续费`
-
-说明：
-
-- 若不提供数量，默认按 `1` 计算。
-- 若不提供手续费，默认按 `0` 计算。
-- 买卖配对采用 FIFO（先进先出）。
-
-### 3. 最小可用CSV模板
-
-```csv
-date,code,side,price,quantity,fee
-2026-04-01,600000,BUY,10.25,1000,5
-2026-04-08,600000,SELL,10.90,1000,5
-2026-04-02,000001,BUY,12.30,800,4
-2026-04-15,000001,SELL,11.80,800,4
-```
-
-## CCTV 板块策略（可选）
-
-- 脚本：`Frequently-Used-Program/Stock-Selection-CCTV-Sectors.py`
-- 运行：`python Frequently-Used-Program/Stock-Selection-CCTV-Sectors.py`
-- 输出到 `stock_data/` 下的 `CCTV-*` 文件
-
-如只关注每日选股与通知，可暂时忽略该模块。
+详细配置见：
+- `SETUP_GUIDE.md` — 从零开始完整配置
+- `DEPLOY_CLOUD.md` — 全云端部署
+- `DEPLOY_SCF.md` — SCF 盘中预警部署
+- `REFACTOR_PROGRESS.md` — 重构进度
