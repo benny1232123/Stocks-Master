@@ -1789,12 +1789,6 @@ def _read_cctv_top_summary(csv_path, top_n=5):
         return ""
 
 
-def send_wecom_markdown(webhook_url, content, log_lines):
-    # 委托 smcore.notify（全项目唯一推送实现），保持本文件内签名不变。
-    from smcore.notify import send_wecom_markdown as _smcore_wecom
-    return _smcore_wecom(webhook_url, content, log_lines=log_lines)
-
-
 def send_email(subject, content, csv_path, log_lines, extra_attachment_paths=None):
     # 委托 smcore.notify（全项目唯一推送实现），保持本文件内签名不变。
     from smcore.notify import send_email as _smcore_email
@@ -1975,12 +1969,6 @@ def main():
         msg = _build_test_message()
 
         pushed = False
-        if not args.test_email_only:
-            webhook_url = os.getenv("WECOM_WEBHOOK_URL", "").strip()
-            if webhook_url:
-                pushed = send_wecom_markdown(webhook_url, msg, log_lines) or pushed
-            else:
-                _append_log(log_lines, "WECOM_WEBHOOK_URL is empty; skip wecom push.")
 
         subject = args.subject.strip() or "Stocks-Master Notify Test"
         pushed = send_email(subject, msg, None, log_lines) or pushed
@@ -2432,12 +2420,6 @@ def main():
             _append_log(log_lines, f"{_stage_tag(7, 'notify', percent=85)} resolved archived relativity csv: {relativity_csv_path}")
 
     pushed = False
-    webhook_url = os.getenv("WECOM_WEBHOOK_URL", "").strip()
-    if webhook_url:
-        _append_log(log_lines, f"{_stage_tag(7, 'notify', percent=86)} sending WeCom message")
-        pushed = send_wecom_markdown(webhook_url, msg, log_lines) or pushed
-    else:
-        _append_log(log_lines, f"{_stage_tag(7, 'notify', percent=86)} WECOM_WEBHOOK_URL is empty; skip wecom push")
 
     subject = f"Stocks-Master Daily {'OK' if success else 'FAILED'} | {regime}"
     extra_csv_paths = []

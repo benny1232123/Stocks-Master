@@ -58,10 +58,6 @@ echo [Stocks-Master] Stage4 watchdog: heartbeat=%STAGE4_HEARTBEAT_SECONDS%s them
 echo [Stocks-Master] Optional allocation env: ALLOC_UP_* / ALLOC_DOWN_* / ALLOC_SIDE_* (unit=percent)
 echo [Stocks-Master] Example: set ALLOC_SIDE_BOLL=35 ^& set ALLOC_SIDE_THEME=30
 
-if "%WECOM_WEBHOOK_URL%"=="" (
-    echo [Stocks-Master] WECOM_WEBHOOK_URL is empty. Push will be skipped unless SMTP is configured.
-)
-
 "%PYTHON_EXE%" "..\Frequently-Used-Program\auto_notify_boll.py" --fast-mode
 
 if errorlevel 1 (

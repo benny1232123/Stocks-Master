@@ -37,7 +37,6 @@ Stocks-Master 是一个以 A 股筛选为主的脚本集合。为避免“脚本
 ## 自动推送说明
 
 - 主流程脚本：`Frequently-Used-Program/auto_notify_boll.py`
-- 支持企业微信机器人（`WECOM_WEBHOOK_URL`）
 - 支持 SMTP 邮件（`SMTP_HOST/PORT/USER/PASS/TO`）
 - 自动任务默认启用补跑：若错过计划时间，开机后执行一次
 - 自动任务默认按天分类归档结果到 `stock_data/archive/YYYYMM/分类/`（可用 `ARCHIVE_ALL_ROOT_DATED=0` 改回仅归档旧文件）
@@ -54,7 +53,7 @@ Stocks-Master 是一个以 A 股筛选为主的脚本集合。为避免“脚本
 4. 题材 + 相对强弱：执行 `Stock-Selection-Ashare-Theme-Turnover.py` 与 `Stock-Selection-Relativity.py`，补充风格轮动与抗跌筛选。
 5. 数据归档：按规则移动历史结果到 `stock_data/archive/`。
 6. 数据清理：删除超期日志/图表/日期文件。
-7. 通知输出：把结论写成企业微信/邮件日报（含 Boll/题材/相对强弱摘要）。
+7. 通知输出：把结论写成邮件日报（含 Boll/题材/相对强弱摘要）。
 
 ### 2. 市场状态判定逻辑
 
@@ -167,7 +166,7 @@ Stocks-Master 是一个以 A 股筛选为主的脚本集合。为避免“脚本
 | `smcore/utils/dates.py` | 财报期判定（<5月用三季报，非年报） |
 | `smcore/config/defaults.py` | 全项目默认参数（window=20, k=1.645, 股价上限=30, 前复权） |
 | `smcore/cache.py` | SQLite 缓存统一读写 |
-| `smcore/notify/` | 企业微信 webhook + SMTP 邮件推送 |
+| `smcore/notify/` | SMTP 邮件推送 |
 | `smcore/risk/external.py` | 美股/汇率/期货数据获取与风险评估 |
 
 ### 关键参数（统一后）
@@ -206,9 +205,9 @@ python run_daemon.py --status       # 查看任务状态
 
 | 任务 | 时间 | 说明 |
 |------|------|------|
-| 每日选股推送 | 工作日 21:30 | 调 auto_notify_boll 子进程，选股 + 企微/邮件推送 |
+| 每日选股推送 | 工作日 21:30 | 调 auto_notify_boll 子进程，选股 + 邮件推送 |
 | 行情快照刷新 | 盘中每 5 分钟 | 拉全市场实时价，缓存到磁盘，供预警/持仓盈亏用 |
-| 盘中预警 | 盘中每 10 分钟 | 读操作清单，对比实时价与 Boll 止损/止盈位，触发推企微 |
+| 盘中预警 | 盘中每 10 分钟 | 读操作清单，对比实时价与 Boll 止损/止盈位，触发发邮件 |
 
 盘中时段 = 工作日 9:25-11:35 / 12:55-15:05（含集合竞价），周末不跑。
 
@@ -225,7 +224,7 @@ python run_daemon.py --status       # 查看任务状态
 ### 注意
 
 - daemon 需保持运行（开机自启可注册到 Windows 启动项）
-- 预警推送需要 `WECOM_WEBHOOK_URL` 环境变量，未配置则只记日志
+- 预警推送需要 `SMTP_*` 环境变量，未配置则只记日志
 - 行情快照首次拉取约 60 秒，后续 5 分钟内秒级返回（磁盘缓存）
 
 ## 可视化界面（多策略选股）

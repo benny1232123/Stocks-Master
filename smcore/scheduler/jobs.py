@@ -15,7 +15,7 @@ from pathlib import Path
 
 from smcore.config.defaults import STOCK_DATA_DIR
 from smcore.data.quote import _load_full_snapshot, clear_quote_cache, fetch_realtime_quotes
-from smcore.notify import send_wecom_markdown
+from smcore.notify import send_email
 from smcore.utils.code import format_stock_code
 
 logger = logging.getLogger("smcore.daemon")
@@ -74,15 +74,11 @@ def job_refresh_quotes() -> None:
 
 
 def job_intraday_alert() -> None:
-    """盘中预警：监控操作清单候选股，触止损/止盈推企微。
+    """盘中预警：监控操作清单候选股，触止损/止盈发邮件。
 
     读取最新的 Daily-Action-List-*.csv，对比实时价与止损/止盈位。
-    需要 WECOM_WEBHOOK_URL 环境变量，未配置则只记日志不推送。
+    需要 SMTP_* 环境变量，未配置则只记日志不推送。
     """
-    webhook = os.getenv("WECOM_WEBHOOK_URL", "").strip()
-    if not webhook:
-        logger.info("未配置 WECOM_WEBHOOK_URL，跳过推送（仅记日志）")
-
     # 找最新操作清单
     today = date.today().strftime("%Y%m%d")
     candidates = sorted(STOCK_DATA_DIR.glob("Daily-Action-List-*.csv"), reverse=True)
@@ -152,15 +148,21 @@ def job_intraday_alert() -> None:
 
     logger.info("盘中预警触发 %d 条", len(triggered))
 
-    # 推送企微
-    if webhook:
-        content = "## 盘中预警\n" + "\n".join(triggered)
-        logs = []
-        ok = send_wecom_markdown(webhook, content, log_lines=logs)
-        if ok:
-            logger.info("预警已推送企微")
-        else:
-            logger.warning("预警推送失败: %s", logs)
+    # 推送邮件
+    # 推送邮件
+    today_str = date.today().strftime("%Y-%m-%d")
+    content = f"## 盘中预警（{today_str}）\n\n" + "\n".join(triggered)
+    logs: list[str] = []
+    ok = send_email(
+        subject=f"盘中预警 {today_str}",
+        content=content,
+        csv_path=str(csv_path),
+        log_lines=logs,
+    )
+    if ok:
+        logger.info("预警已推送邮件")
+    else:
+        logger.warning("预警推送失败: %s", logs)
 
 
 def _to_float(val):

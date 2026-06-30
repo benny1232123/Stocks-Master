@@ -21,9 +21,10 @@ jobs:
       - name: 安装依赖
         run: |
           pip install --upgrade pip
-          pip install akshare pandas requests baostock
+          pip install akshare pandas requests baostock matplotlib cos-python-sdk-v5
           # baostock 在 GitHub Actions 可能连不上服务器，但安装本身能成功
           # K 线走 akshare 后端（KLINE_BACKEND=akshare），不依赖 baostock 网络
+          # cos-python-sdk-v5: 腾讯云 COS SDK，上传操作清单供 SCF 预警用
 
       - name: 运行选股主流程
         env:
@@ -31,7 +32,6 @@ jobs:
           PYTHONUNBUFFERED: "1"
           PYTHONIOENCODING: utf-8
           # 推送配置（在 GitHub Secrets 里设置）
-          WECOM_WEBHOOK_URL: ${{ secrets.WECOM_WEBHOOK_URL }}
           SMTP_HOST: ${{ secrets.SMTP_HOST }}
           SMTP_PORT: ${{ secrets.SMTP_PORT }}
           SMTP_USER: ${{ secrets.SMTP_USER }}

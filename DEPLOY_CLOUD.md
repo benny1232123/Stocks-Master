@@ -15,7 +15,7 @@ GitHub Actions（免费，美国服务器）
   └─ 盘中每 10 分钟
      ├─ 从 COS 读操作清单
      ├─ 拉新浪实时行情
-     └─ 触止损/止盈 → 推企微
+     └─ 触止损/止盈 → 发邮件
 ```
 
 **完全不用开电脑。** 选股在 GitHub，预警在腾讯云，两者通过 COS 传递数据。
@@ -42,7 +42,6 @@ git push -u origin main
 
 | Secret 名 | 值 | 必填 |
 |-----------|---|------|
-| WECOM_WEBHOOK_URL | 企微机器人 webhook 地址 | 推送用 |
 | SMTP_HOST | smtp.qq.com | 邮件用 |
 | SMTP_PORT | 465 | |
 | SMTP_USER | 你的邮箱 | |
@@ -53,7 +52,7 @@ git push -u origin main
 | COS_BUCKET | stocks-master-1250000000 | |
 | COS_REGION | ap-guangzhou | |
 
-不配推送/邮件的可以跳过对应 Secret，选股仍能跑（结果在 Actions 产物里）。
+不配邮件的可以跳过 SMTP_* Secret，选股仍能跑（结果在 Actions 产物里）。
 不配 COS 的可以跳过，但 SCF 预警就读不到操作清单。
 
 ### 3. 测试
@@ -97,7 +96,7 @@ git push -u origin main
 | akshare 报错 | 网络问题，重跑一次。东财接口偶发限流 |
 | COS 上传失败 | 检查 COS_* Secrets 是否配对 |
 | SCF 预警无数据 | 检查 GitHub Actions 是否成功上传了操作清单到 COS |
-| 推送没收到 | 检查 WECOM_WEBHOOK_URL / SMTP_* Secrets |
+| 推送没收到 | 检查 SMTP_* Secrets |
 
 ## 费用
 

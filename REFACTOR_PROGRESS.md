@@ -38,7 +38,7 @@
 
 ### 阶段 2-B：命令行主线迁移（任务3，进行中）
 - [x] **3a Boll/数据委托（"不可信"根因修复）**：`auto_notify_boll.py` 第三套 Boll 实现 `_build_indicator_levels` 重写为委托 smcore（前复权 + 单例会话 + calc_bollinger）；`_fetch_bs_latest_row`/`_fetch_bs_close_series` 的 `adjustflag="3"`→`"2"`；`_normalize_code`/`_to_bs_code`/`_to_ak_index_symbol` 委托 smcore。等价性验证通过（代码标准化 8 用例全等、Boll 水位误差 <1e-9），真实数据冒烟通过（600519/000001/601318 三票水位合理）
-- [x] **3c 推送抽出**：`smcore/notify/`（wecom.py + email.py）落地，巨石 `send_wecom_markdown`/`send_email` 改委托，签名不变调用方零改动
+- [x] **3c 推送抽出**：`smcore/notify/`（email.py）落地，巨石 `send_email` 改委托，签名不变调用方零改动
 - [x] **3e 缓存层抽出（任务5核心，3b前提）**：`smcore/cache.py`（cache_table_name + read_cache_df + write_cache_df + clear_cache_by_prefix + DB_PATH）；巨石 3 个缓存函数改委托；表名生成规则与原实现逐字符等价验证通过
 - [x] **3b-1 外部市场风险抽出（3b 安全部分）**：`smcore/risk/external.py`（safe_float + fetch_us_market_data + fetch_fx_data + fetch_futures_data + assess_us/fx/futures_risk，~170行）；巨石 6 个函数改委托；行为等价验证通过（safe_float/阈值/期货多条件全对照）
 - [x] **3b-2 宏观风险深度耦合部分抽出（~500行）**：`smcore/risk/macro.py`（9 个词库常量 + 13 个文本/NLP/事件函数：is_*/clean/extract_tokens/nlp_classify/extract_burst_tokens/collect_macro_risk_events/macro_risk_level）；巨石对应函数与常量改委托，行为逐项等价验证通过（词库成员、阈值判定、token 提取正则、风险等级反推全对照）。构造 news CSV 冒烟：联播快讯排除/中东冲突命中/无风险词跳过 均符合原逻辑。

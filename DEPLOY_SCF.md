@@ -10,7 +10,7 @@
   └─ 生成操作清单 → 上传 COS
                           ↓
 SCF 云函数（云端，不开机也跑）
-  └─ 盘中每 10 分钟：从 COS 读清单 → 拉新浪行情 → 触发推企微
+  └─ 盘中每 10 分钟：从 COS 读清单 → 拉新浪行情 → 触发发邮件
 ```
 
 ## 前置准备
@@ -45,7 +45,11 @@ set COS_SECRET_ID=你的SecretId
 set COS_SECRET_KEY=你的SecretKey
 set COS_BUCKET=stocks-master-1250000000
 set COS_REGION=ap-guangzhou
-set WECOM_WEBHOOK_URL=https://qyapi.weixin.qq.com/cgi-bin/webhook/send?key=xxx
+set SMTP_HOST=smtp.qq.com
+set SMTP_PORT=465
+set SMTP_USER=你的邮箱
+set SMTP_PASS=你的授权码
+set SMTP_TO=收件邮箱
 ```
 
 建议写到 `scripts\start-daemon.bat` 开头，或系统环境变量。
@@ -76,7 +80,11 @@ python build_scf_package.py
 
 | Key | Value |
 |-----|-------|
-| WECOM_WEBHOOK_URL | https://qyapi.weixin.qq.com/cgi-bin/webhook/send?key=你的key |
+| SMTP_HOST | smtp.qq.com |
+| SMTP_PORT | 465 |
+| SMTP_USER | 你的邮箱 |
+| SMTP_PASS | 你的授权码 |
+| SMTP_TO | 收件邮箱 |
 | COS_SECRET_ID | 你的SecretId |
 | COS_SECRET_KEY | 你的SecretKey |
 | COS_BUCKET | stocks-master-1250000000 |
@@ -88,13 +96,13 @@ python build_scf_package.py
 
 - 类型：定时触发
 - 周期：自定义 Cron
-- Cron 表达式：`0/10 9-14 ? * MON-FRI *`
+- Cron 表达式：`0 */10 9-14 ? * MON-FRI *`
 
 含义：工作日 9:00-14:59 每 10 分钟触发一次（覆盖上午+下午盘）。
 
-> SCF Cron 用 7 段格式，`9-14` 是 UTC+8 的 9-15 点需减 8（实际写 1-7）？
-> **不是**，腾讯云 SCF 默认 UTC+8，直接写北京时间：`0/10 9-14 ? * MON-FRI *`
-> 9:00-14:59 每 10 分钟，覆盖 9:30-15:00 盘中时段。
+> SCF Cron 是 **7 段**格式：`秒 分 时 日 月 星期 年`。
+> 时区默认 UTC+8（北京时间），直接写北京时间即可，无需减 8。
+> `?` 只能用于"日"和"星期"字段，表示不指定。
 
 ### 步骤 6：测试
 
@@ -105,7 +113,7 @@ python build_scf_package.py
 
 1. **开机时**：`scripts\start-daemon.bat` 启动 daemon
    - 21:30 自动跑选股 + 生成操作清单 + 上传 COS
-2. **关机后**：SCF 在云端每 10 分钟检查预警，触发推企微
+2. **关机后**：SCF 在云端每 10 分钟检查预警，触发发邮件
 3. **第二天**：再开机，daemon 自动跑当天选股，更新 COS
 
 ## 费用
@@ -120,12 +128,12 @@ python build_scf_package.py
 |------|------|
 | SCF 测试报错 | 看控制台日志，检查环境变量是否配齐 |
 | 预警没触发 | 检查 COS 是否有 `Daily-Action-List-*.csv`（本地 daemon 要先跑+上传） |
-| 推送没收到 | 检查 `WECOM_WEBHOOK_URL` 是否正确 |
+| 推送没收到 | 检查 SMTP_* 环境变量是否正确 |
 | 行情拉不到 | 新浪接口偶发超时，SCF 会跳过本次，下次重试 |
 | 操作清单过期 | daemon 没跑（没开机），SCF 用旧清单。连续几天不开机会导致预警基于旧数据 |
 
 ## 限制
 
 - **选股仍需开机**：四策略选股依赖 baostock + 巨石，不适合 SCF。开机时 daemon 跑一次。
-- **预警全云上**：SCF 每 10 分钟检查，盘中触发推企微。不开机也能收到。
+- **预警全云上**：SCF 每 10 分钟检查，盘中触发发邮件。不开机也能收到。
 - 如果完全不开机：SCF 用最近一次的旧操作清单做预警，数据会过时但不会报错。

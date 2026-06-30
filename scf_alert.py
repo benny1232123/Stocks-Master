@@ -1,7 +1,7 @@
 """SCF 盘中预警入口 —— 腾讯云函数。
 
 部署后在 SCF 定时触发器运行（盘中每 10 分钟），不依赖本地电脑。
-从 COS 读操作清单 → 拉新浪行情 → 对比止损止盈 → 推企微。
+从 COS 读操作清单 → 拉新浪行情 → 对比止损止盈 → 发邮件。
 
 本地测试：python scf_alert.py
 SCF 入口：main_handler(event, context)
@@ -10,7 +10,6 @@ from __future__ import annotations
 
 import csv
 import logging
-import os
 import sys
 import tempfile
 from datetime import date
@@ -23,7 +22,7 @@ if str(_REPO) not in sys.path:
     sys.path.insert(0, str(_REPO))
 
 from smcore.data.quote_sina import fetch_sina_quotes
-from smcore.notify import send_wecom_markdown
+from smcore.notify import send_email
 from smcore.storage import download_latest
 from smcore.utils.code import format_stock_code
 
@@ -112,19 +111,20 @@ def main_handler(event: dict, context: object) -> dict:
 
     logger.info("触发 %d 条预警", len(triggered))
 
-    # 3. 推送企微
-    webhook = os.getenv("WECOM_WEBHOOK_URL", "").strip()
-    if webhook:
-        today = date.today().strftime("%Y-%m-%d")
-        content = f"## 盘中预警（{today}）\n" + "\n".join(triggered)
-        logs = []
-        ok = send_wecom_markdown(webhook, content, log_lines=logs)
-        if ok:
-            logger.info("已推送企微")
-        else:
-            logger.warning("推送失败: %s", logs)
+    # 3. 发邮件推送
+    today_str = date.today().strftime("%Y-%m-%d")
+    content = f"## 盘中预警（{today_str}）\n\n" + "\n".join(triggered)
+    logs: list[str] = []
+    ok = send_email(
+        subject=f"盘中预警 {today_str}",
+        content=content,
+        csv_path=str(action_list),
+        log_lines=logs,
+    )
+    if ok:
+        logger.info("已推送邮件")
     else:
-        logger.info("未配置 WECOM_WEBHOOK_URL，跳过推送")
+        logger.warning("推送失败: %s", logs)
 
     return {"code": 0, "message": "完成", "triggered": len(triggered)}
 

@@ -45,7 +45,7 @@ def main() -> None:
     print("  1. 登录 https://console.cloud.tencent.com/scf")
     print("  2. 新建函数 → Python 3.9 → 上传 zip")
     print("  3. 入口：scf_alert.main_handler")
-    print("  4. 环境变量：WECOM_WEBHOOK_URL / COS_SECRET_ID / COS_SECRET_KEY / COS_BUCKET / COS_REGION")
+    print("  4. 环境变量：SMTP_HOST / SMTP_PORT / SMTP_USER / SMTP_PASS / SMTP_TO / COS_SECRET_ID / COS_SECRET_KEY / COS_BUCKET / COS_REGION")
     print("  5. 触发器：定时 → cron(0/10 * 9-15 * * MON-FRI)")
     print("  详见 DEPLOY_SCF.md")
 
