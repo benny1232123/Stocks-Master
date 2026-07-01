@@ -24,6 +24,11 @@ _DB_PATH = STOCK_DATA_DIR / "trading.db"
 def _get_supabase_client():
     """尝试创建 Supabase 客户端。返回 None 表示未配置。"""
     try:
+        from supabase import create_client
+    except ImportError:
+        return None  # supabase 未安装，直接跳过
+
+    try:
         import streamlit as st
         url = st.secrets.get("SUPABASE_URL", "")
         key = st.secrets.get("SUPABASE_KEY", "")
@@ -41,7 +46,6 @@ def _get_supabase_client():
             url = url[: -len(suffix)].rstrip("/")
 
     try:
-        from supabase import create_client
         return create_client(url, key)
     except Exception:
         return None

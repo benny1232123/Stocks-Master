@@ -5,18 +5,12 @@
 """
 from __future__ import annotations
 
-import csv
 import logging
 import os
 import subprocess
 import sys
-from datetime import date, datetime
+from datetime import date
 from pathlib import Path
-
-from smcore.config.defaults import STOCK_DATA_DIR
-from smcore.data.quote import _load_full_snapshot, clear_quote_cache, fetch_realtime_quotes
-from smcore.notify import send_email
-from smcore.utils.code import format_stock_code
 
 logger = logging.getLogger("smcore.daemon")
 
@@ -63,111 +57,3 @@ def job_daily_pick() -> None:
         logger.exception("生成/上传操作清单失败: %s", e)
 
 
-def job_refresh_quotes() -> None:
-    """刷新实时行情快照缓存（盘中每 5 分钟）。
-
-    清内存+磁盘缓存后重新拉全量，保证后续预警用最新价。
-    """
-    clear_quote_cache()
-    df = _load_full_snapshot()
-    logger.info("行情快照已刷新: %d 只股票", len(df))
-
-
-def job_intraday_alert() -> None:
-    """盘中预警：监控操作清单候选股，触止损/止盈发邮件。
-
-    读取最新的 Daily-Action-List-*.csv，对比实时价与止损/止盈位。
-    需要 SMTP_* 环境变量，未配置则只记日志不推送。
-    """
-    # 找最新操作清单
-    today = date.today().strftime("%Y%m%d")
-    candidates = sorted(STOCK_DATA_DIR.glob("Daily-Action-List-*.csv"), reverse=True)
-    if not candidates:
-        logger.info("无操作清单，跳过预警")
-        return
-
-    csv_path = candidates[0]
-    alerts = []
-
-    with csv_path.open("r", encoding="utf-8-sig", newline="") as f:
-        reader = csv.DictReader(f)
-        for row in reader:
-            code = format_stock_code(row.get("股票代码", ""))
-            name = row.get("股票名称", "")
-            stop_loss = _to_float(row.get("止损价(下轨)"))
-            take_profit = _to_float(row.get("止盈价(上轨)"))
-            buy_price = _to_float(row.get("建议买入价"))
-
-            if not code:
-                continue
-            # 没有水位就跳过（fusion fetch_levels=False 时）
-            if stop_loss is None and take_profit is None:
-                continue
-
-            alerts.append({
-                "code": code,
-                "name": name,
-                "stop_loss": stop_loss,
-                "take_profit": take_profit,
-                "buy_price": buy_price,
-            })
-
-    if not alerts:
-        logger.info("操作清单无水位数据，跳过预警")
-        return
-
-    # 拉实时价（从缓存，5分钟刷新一次）
-    codes = [a["code"] for a in alerts]
-    quotes = fetch_realtime_quotes(codes)
-    quote_map = {row["code"]: float(row["price"]) for _, row in quotes.iterrows()}
-
-    triggered = []
-    for a in alerts:
-        price = quote_map.get(a["code"])
-        if price is None:
-            continue
-
-        sl = a["stop_loss"]
-        tp = a["take_profit"]
-        buy = a["buy_price"]
-
-        if sl and price <= sl:
-            triggered.append(f"⚠️ 止损: {a['name']}({a['code']}) 现价{price:.2f} ≤ 下轨{sl:.2f}")
-        elif sl and price <= sl * 1.02:
-            triggered.append(f"🔔 接近止损: {a['name']}({a['code']}) 现价{price:.2f} 接近下轨{sl:.2f}")
-        elif tp and price >= tp:
-            triggered.append(f"✅ 止盈: {a['name']}({a['code']}) 现价{price:.2f} ≥ 上轨{tp:.2f}")
-        elif tp and price >= tp * 0.98:
-            triggered.append(f"🎯 接近止盈: {a['name']}({a['code']}) 现价{price:.2f} 接近上轨{tp:.2f}")
-        elif buy and price <= buy * 1.01:
-            triggered.append(f"📍 接近买点: {a['name']}({a['code']}) 现价{price:.2f} ≈ 建议买入{buy:.2f}")
-
-    if not triggered:
-        logger.info("盘中预警检查完成: %d 只监控，无触发", len(alerts))
-        return
-
-    logger.info("盘中预警触发 %d 条", len(triggered))
-
-    # 推送邮件
-    # 推送邮件
-    today_str = date.today().strftime("%Y-%m-%d")
-    content = f"## 盘中预警（{today_str}）\n\n" + "\n".join(triggered)
-    logs: list[str] = []
-    ok = send_email(
-        subject=f"盘中预警 {today_str}",
-        content=content,
-        csv_path=str(csv_path),
-        log_lines=logs,
-    )
-    if ok:
-        logger.info("预警已推送邮件")
-    else:
-        logger.warning("预警推送失败: %s", logs)
-
-
-def _to_float(val):
-    try:
-        v = float(val)
-        return v if v == v else None  # NaN 检查
-    except (TypeError, ValueError):
-        return None

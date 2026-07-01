@@ -2,8 +2,6 @@
 
 24h 常驻运行，独立于 streamlit，负责：
 - 工作日 21:30 自动选股 + 推送（替代 Windows 任务计划程序）
-- 盘中每 5 分钟刷新行情快照缓存
-- 盘中每 10 分钟检查预警（触止损/止盈/买点 → 发邮件）
 
 用法：
     python run_daemon.py                # 前台运行
@@ -25,7 +23,7 @@ if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
 from smcore.scheduler import Scheduler
-from smcore.scheduler.jobs import job_daily_pick, job_intraday_alert, job_refresh_quotes
+from smcore.scheduler.jobs import job_daily_pick
 
 
 def _setup_logging() -> None:
@@ -52,12 +50,6 @@ def build_scheduler() -> Scheduler:
     # 1. 每日选股推送（工作日 21:30，新闻联播后）
     sched.weekday("21:30", job_daily_pick, name="每日选股推送")
 
-    # 2. 行情快照刷新（盘中每 5 分钟）
-    sched.interval(5, job_refresh_quotes, name="行情快照刷新", trading_hours_only=True)
-
-    # 3. 盘中预警（盘中每 10 分钟）
-    sched.interval(10, job_intraday_alert, name="盘中预警", trading_hours_only=True)
-
     return sched
 
 
@@ -65,8 +57,6 @@ def run_once(job_name: str) -> None:
     """只跑一次指定任务（调试用）。"""
     jobs = {
         "daily": ("每日选股推送", job_daily_pick),
-        "quotes": ("行情快照刷新", job_refresh_quotes),
-        "alert": ("盘中预警", job_intraday_alert),
     }
     if job_name not in jobs:
         print(f"未知任务: {job_name}，可选: {list(jobs.keys())}")
@@ -89,7 +79,7 @@ def print_status() -> None:
 
 def main() -> None:
     parser = argparse.ArgumentParser(description="Stocks-Master 后台守护进程")
-    parser.add_argument("--once", help="只跑一次指定任务 (daily/quotes/alert)", default=None)
+    parser.add_argument("--once", help="只跑一次指定任务 (daily)", default=None)
     parser.add_argument("--status", action="store_true", help="打印任务状态后退出")
     args = parser.parse_args()
 

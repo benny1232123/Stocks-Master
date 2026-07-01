@@ -1,1 +1,6 @@
--r Frequently-Used-Program/boll-visualizer/requirements.txt
+# Hugging Face Spaces 依赖
+streamlit>=1.30
+pandas
+akshare
+matplotlib
+pillow

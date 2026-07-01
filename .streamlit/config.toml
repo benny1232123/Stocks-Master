@@ -1,13 +1,16 @@
-[theme]
-primaryColor = "#1f77b4"
-backgroundColor = "#ffffff"
-secondaryBackgroundColor = "#f0f2f6"
-textColor = "#262730"
-font = "sans serif"
-
 [server]
-enableStaticServing = true
-maxUploadSize = 10
+# Hugging Face Spaces 配置
+headless = true
+port = 7860
+enableCORS = false
+enableXsrfProtection = false
 
 [browser]
 gatherUsageStats = false
+
+[theme]
+primaryColor = "#E33E3E"
+backgroundColor = "#FFFFFF"
+secondaryBackgroundColor = "#F8F9FA"
+textColor = "#262730"
+font = "sans serif"

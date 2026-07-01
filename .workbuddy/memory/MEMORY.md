@@ -20,7 +20,9 @@
 - 阶段2-A（可视化主线）完成。
 - 阶段2-B（命令行主线）基本完成：3a-3e 全部抽出委托 smcore，"不可信"根因（adjustflag=3 不复权）已治；3d-2(消息构建+pipeline，耦合深非bug)保留巨石。
 - 巨石 auto_notify_boll.py 3306→2482 行（减25%）。
-- 阶段3（功能补全）：① 信号融合、④ 持仓盈亏联动、⑥ 24h守护进程(run_daemon.py)、⑦ SCF云端预警(不开机也跑) 完成。
-- 阶段4（全云端）：kline.py 加 akshare 后端(KLINE_BACKEND=akshare)；GitHub Actions workflow(daily-pick.yml) 工作日21:30选股+上传COS；SCF 盘中预警。完全不用开机，0元/月。
+- 阶段3（功能补全）：① 信号融合、④ 持仓盈亏联动、⑥ 24h守护进程(run_daemon.py) 完成。
+- 阶段4（全云端）：kline.py 加 akshare 后端(KLINE_BACKEND=akshare)；GitHub Actions workflow(daily-pick.yml) 工作日21:30选股+上传COS。完全不用开机，0元/月。
+- **盘中预警已删除（2026-07-01）**：scf_alert.py/zip、build_scf_package.py、DEPLOY_SCF.md 均已删除；jobs.py 移除 job_intraday_alert+job_refresh_quotes；run_daemon.py 只保留每日选股。
 - smcore 模块：utils/(code+dates+format+logging) indicators/boll config/defaults data/(session+kline+index+quote+quote_sina) cache.py notify/(wecom+email) risk/(external+macro) strategy/(allocation+fusion) portfolio/pnl scheduler/(engine+jobs) storage/cos
-- 部署文档：DEPLOY_CLOUD.md（全云端）、DEPLOY_SCF.md（SCF预警）
+- 部署文档：DEPLOY_CLOUD.md（全云端）
+- HF Spaces 网页版（2026-07-01）：app.py 为入口，pages/ 下 5 个功能页面，零费用全云端，详见各页面文件
