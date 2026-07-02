@@ -12,10 +12,6 @@ for p in [str(ROOT), str(VIZ_SRC)]:
         sys.path.insert(0, p)
 os.environ.setdefault("KLINE_BACKEND", "akshare")
 
-from auth import check_auth
-
-check_auth()
-
 import streamlit as st
 import pandas as pd
 import numpy as np
