@@ -19,10 +19,6 @@ for p in [str(ROOT), str(VIZ_SRC)]:
 # 云端强制使用 akshare（无需 baostock C 扩展）
 os.environ.setdefault("KLINE_BACKEND", "akshare")
 
-# ── 认证 ──
-from auth import check_auth
-check_auth()
-
 # ── 首页 ──
 import streamlit as st
 
