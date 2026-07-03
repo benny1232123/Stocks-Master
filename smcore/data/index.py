@@ -38,7 +38,7 @@ def _normalize_index_df(df: pd.DataFrame) -> pd.DataFrame:
 def fetch_index_close_series(index_code, start_date_text, end_date_text) -> pd.DataFrame:
     """获取指数日线 close 序列（带 SQLite 缓存）。
 
-    主源 akshare Eastmoney，失败回退 Sina。
+    主源 akshare 新浪，失败回退东财。
     """
     symbol = to_ak_index_symbol(index_code)
     out = pd.DataFrame()
@@ -50,7 +50,7 @@ def fetch_index_close_series(index_code, start_date_text, end_date_text) -> pd.D
         out = _normalize_index_df(cached_df)
     else:
         try:
-            raw = ak.stock_zh_index_daily_em(symbol=symbol)
+            raw = ak.stock_zh_index_daily(symbol=symbol)
             out = _normalize_index_df(raw)
         except Exception:
             out = pd.DataFrame()

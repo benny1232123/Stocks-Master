@@ -145,7 +145,7 @@ def fetch_daily_k(
 
     parts: list[pd.DataFrame] = []
     if _backend() == "akshare":
-        # 云端后端：akshare HTTP 接口（东财数据源，无需登录会话）
+    # 云端后端：akshare HTTP 接口（新浪数据源，无需登录会话）
         for seg_start, seg_end in segments:
             if seg_start > seg_end:
                 continue
@@ -197,14 +197,17 @@ _AK_COL_MAP = {
 
 
 def _fetch_via_akshare(code6: str, start: date, end: date, adjust: str) -> pd.DataFrame:
-    """通过 akshare HTTP 接口获取 K 线（东财数据源，无需登录会话）。
+    """通过 akshare 新浪接口获取 K 线（无需登录会话）。
 
-    专为云端环境（GitHub Actions / SCF）设计，不依赖 baostock。
+    使用 stock_zh_a_daily（新浪数据源），不依赖东财接口。
     """
     try:
         import akshare as ak
     except ImportError:
         return pd.DataFrame()
+
+    # 新浪格式 symbol：sh600519 / sz000001
+    sina_symbol = ("sh" if code6.startswith(("5", "6", "9")) else "sz") + code6
 
     # akshare 复权参数：qfq/hfq/"" (空=不复权)
     ak_adjust = adjust if adjust in ("qfq", "hfq") else ""
@@ -212,9 +215,11 @@ def _fetch_via_akshare(code6: str, start: date, end: date, adjust: str) -> pd.Da
     end_str = end.strftime("%Y%m%d")
 
     try:
-        raw = ak.stock_zh_a_hist(
-            symbol=code6, period="daily",
-            start_date=start_str, end_date=end_str, adjust=ak_adjust,
+        raw = ak.stock_zh_a_daily(
+            symbol=sina_symbol,
+            start_date=start_str,
+            end_date=end_str,
+            adjust=ak_adjust,
         )
     except Exception:
         return pd.DataFrame()
@@ -222,8 +227,8 @@ def _fetch_via_akshare(code6: str, start: date, end: date, adjust: str) -> pd.Da
     if raw is None or raw.empty:
         return pd.DataFrame()
 
-    # 中文列名映射成英文
-    out = raw.rename(columns=_AK_COL_MAP)
+    # stock_zh_a_daily 返回英文列名：date, open, high, low, close, volume, amount
+    out = raw.copy()
     for col in DAILY_K_COLUMNS:
         if col not in out.columns:
             out[col] = pd.NA

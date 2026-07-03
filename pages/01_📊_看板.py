@@ -33,22 +33,26 @@ INDEX_MAP = {
 
 @st.cache_data(ttl=300, show_spinner="正在获取大盘数据...")
 def fetch_index_snapshot() -> pd.DataFrame:
-    """获取主要指数最新行情。"""
+    """获取主要指数最新行情（新浪HTTP源）。"""
     try:
-        import akshare as ak
-        df = ak.stock_zh_index_spot_em()
-        if df is None or df.empty:
+        from smcore.data.quote_sina import fetch_sina_index_quotes
+        quotes = fetch_sina_index_quotes(INDEX_MAP.values())
+        if not quotes:
             return pd.DataFrame()
         rows = []
         for name, code in INDEX_MAP.items():
-            row = df[df["代码"] == code]
-            if not row.empty:
-                r = row.iloc[0]
+            code6 = code[2:]  # 去掉 sh/sz 前缀
+            info = quotes.get(code6)
+            if info and info.get("price"):
+                price = info["price"]
+                pre_close = info.get("pre_close")
+                change_pct = ((price - pre_close) / pre_close * 100) if pre_close else 0.0
+                change_amt = (price - pre_close) if pre_close else 0.0
                 rows.append({
                     "指数": name,
-                    "最新价": float(r["最新价"]),
-                    "涨跌幅": float(r["涨跌幅"]),
-                    "涨跌额": float(r["涨跌额"]),
+                    "最新价": price,
+                    "涨跌幅": change_pct,
+                    "涨跌额": change_amt,
                 })
         return pd.DataFrame(rows)
     except Exception as e:
@@ -58,10 +62,10 @@ def fetch_index_snapshot() -> pd.DataFrame:
 
 @st.cache_data(ttl=600, show_spinner="正在获取市场热度...")
 def fetch_market_breadth() -> dict:
-    """获取全市场涨跌家数。"""
+    """获取全市场涨跌家数（新浪源）。"""
     try:
         import akshare as ak
-        df = ak.stock_zh_a_spot_em()
+        df = ak.stock_zh_a_spot()
         if df is None or df.empty:
             return {}
         up = (df["涨跌幅"] > 0).sum()
@@ -191,4 +195,4 @@ else:
     st.info("还没有操作清单。去「选股中心」跑一次选股吧 👉")
 
 st.markdown("---")
-st.caption(f"数据更新时间：{date.today()} | 数据来源：akshare（东方财富）")
+st.caption(f"数据更新时间：{date.today()} | 数据来源：新浪财经")

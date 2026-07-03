@@ -74,14 +74,16 @@ def scan_boll_batch(
 
 
 def get_candidate_codes(price_min: float, price_max: float) -> list[str]:
-    """从 akshare 获取 A 股列表并按价格筛选。"""
+    """从新浪源获取 A 股列表并按价格筛选。"""
     try:
         import akshare as ak
-        spot = ak.stock_zh_a_spot_em()
+        from smcore.utils.code import format_stock_code
+        spot = ak.stock_zh_a_spot()
         if spot is None or spot.empty:
             return []
         spot = spot[(spot["最新价"] >= price_min) & (spot["最新价"] <= price_max)]
-        return spot["代码"].tolist()
+        # 新浪源代码带 sh/sz/bj 前缀，需标准化为纯 6 位
+        return [format_stock_code(c) for c in spot["代码"].tolist() if format_stock_code(c)]
     except Exception:
         return []
 

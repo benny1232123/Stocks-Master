@@ -1,12 +1,11 @@
-"""实时行情报价 —— 双层缓存（内存 + 磁盘）。
+"""实时行情报价 —— 新浪HTTP接口，无需akshare。
 
-akshare 全市场实时接口（stock_zh_a_spot_em）较慢（~80秒/5867只），
-但持仓盈亏只需要持仓股的实时价。本模块拉一次全量后缓存 5 分钟，
-持仓股从中过滤，后续调用秒级返回。
+使用 quote_sina 模块（纯 requests + 新浪财经 API）按需查询，
+不依赖 akshare 的东财全市场快照接口。
 
 缓存策略：
 - 内存缓存：进程内，5 分钟过期
-- 磁盘缓存：pickle 文件，5 分钟过期，跨进程复用（命令行场景受益）
+- 磁盘缓存：pickle 文件，5 分钟过期，跨进程复用
 """
 from __future__ import annotations
 
@@ -15,10 +14,10 @@ import time
 from pathlib import Path
 from typing import Iterable, Optional
 
-import akshare as ak
 import pandas as pd
 
 from smcore.config.defaults import STOCK_DATA_DIR
+from smcore.data.quote_sina import fetch_sina_quotes
 from smcore.utils.code import format_stock_code
 
 _CACHE_TTL = 300.0  # 5 分钟
@@ -30,7 +29,11 @@ _mem_ts: float = 0.0
 
 
 def _load_full_snapshot() -> pd.DataFrame:
-    """加载全市场实时快照（内存→磁盘→网络，三级回退）。"""
+    """加载全市场实时快照（新浪源）。
+
+    使用 ak.stock_zh_a_spot()（新浪）替代东财接口。
+    新浪源同样返回全市场数据，列名与东财版一致。
+    """
     global _mem_df, _mem_ts
     now = time.time()
 
@@ -52,9 +55,12 @@ def _load_full_snapshot() -> pd.DataFrame:
             except Exception:
                 pass
 
-    # 3. 网络
+    # 3. 网络（新浪源）
     try:
-        raw = ak.stock_zh_a_spot_em()
+        import akshare as ak
+        raw = ak.stock_zh_a_spot()
+        if raw is None or raw.empty:
+            return pd.DataFrame(columns=["code", "name", "price", "pct"])
         df = raw.rename(columns={"代码": "code", "名称": "name", "最新价": "price", "涨跌幅": "pct"})
         df["code"] = df["code"].astype(str).map(format_stock_code)
         df["price"] = pd.to_numeric(df["price"], errors="coerce")
@@ -73,7 +79,9 @@ def _load_full_snapshot() -> pd.DataFrame:
 
 
 def fetch_realtime_quotes(codes: Iterable[str]) -> pd.DataFrame:
-    """获取指定股票的实时报价。
+    """获取指定股票的实时报价（新浪HTTP源）。
+
+    优先使用新浪HTTP按需查询（秒级），失败回退全市场快照缓存。
 
     Args:
         codes: 股票代码列表（任意格式，内部标准化）
@@ -85,6 +93,27 @@ def fetch_realtime_quotes(codes: Iterable[str]) -> pd.DataFrame:
     if not codes_set:
         return pd.DataFrame(columns=["code", "name", "price", "pct"])
 
+    # 优先：新浪HTTP按需查询（快，不拉全量）
+    try:
+        sina_result = fetch_sina_quotes(codes_set)
+        if sina_result:
+            rows = []
+            for code, info in sina_result.items():
+                if info.get("price") is not None:
+                    pre_close = info.get("pre_close")
+                    pct = ((info["price"] - pre_close) / pre_close * 100) if pre_close else 0.0
+                    rows.append({
+                        "code": code,
+                        "name": info.get("name", ""),
+                        "price": info["price"],
+                        "pct": round(pct, 2),
+                    })
+            if rows:
+                return pd.DataFrame(rows)
+    except Exception:
+        pass
+
+    # 回退：全市场快照缓存
     full = _load_full_snapshot()
     return full[full["code"].isin(codes_set)].reset_index(drop=True)
 

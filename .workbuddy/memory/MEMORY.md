@@ -26,3 +26,5 @@
 - smcore 模块：utils/(code+dates+format+logging) indicators/boll config/defaults data/(session+kline+index+quote+quote_sina) cache.py notify/(wecom+email) risk/(external+macro) strategy/(allocation+fusion) portfolio/pnl scheduler/(engine+jobs) storage/cos
 - 部署文档：DEPLOY_CLOUD.md（全云端）
 - HF Spaces 网页版（2026-07-01）：app.py 为入口，pages/ 下 5 个功能页面，零费用全云端，详见各页面文件
+- **数据源迁移（2026-07-03）**：akshare 东方财富(`_em`)接口全部不可用，替换为新浪源。kline→stock_zh_a_daily，quote→stock_zh_a_spot+quote_sina(HTTP)，index→stock_zh_index_daily，看板指数→quote_sina.fetch_sina_index_quotes。auth 已移除。
+- 部署平台：Render（免费，GitHub 连接自动部署），不要密码
