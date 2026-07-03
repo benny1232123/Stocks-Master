@@ -23,8 +23,20 @@ DAILY_K_COLUMNS = ["date", "open", "high", "low", "close", "volume", "amount"]
 
 
 def _backend() -> str:
-    """返回当前 K 线后端：baostock（默认/本地）或 akshare（云端）。"""
-    return os.getenv("KLINE_BACKEND", "baostock").strip().lower()
+    """返回当前 K 线后端：baostock（本地）或 akshare（云端）。
+
+    优先读取 KLINE_BACKEND 环境变量，未设置时自动检测 baostock 是否可用，
+    不可用则自动回退到 akshare（避免云端部署报 No module named 'baostock'）。
+    """
+    backend = os.getenv("KLINE_BACKEND", "").strip().lower()
+    if backend in ("baostock", "akshare"):
+        return backend
+    # 自动检测：baostock 可用则用 baostock，否则用 akshare
+    try:
+        import baostock as bs  # noqa: F401
+        return "baostock"
+    except ImportError:
+        return "akshare"
 
 
 def _to_date_string(value) -> str:

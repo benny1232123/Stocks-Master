@@ -3,14 +3,14 @@
 此前 bs.login()/bs.logout() 散落在 6+ 处（Stock-Selection-Boll / data_fetcher /
 boll_strategy / auto_notify_boll...），全市场扫描时每只股票都 login/logout，
 极慢且易触发连接限制。本模块提供进程级单例，确保只登录一次、全程复用。
+
+云端部署提示：baostock 延迟导入，若未安装 baostock 包不会触发 ImportError。
 """
 from __future__ import annotations
 
 import atexit
 import threading
 from contextlib import contextmanager
-
-import baostock as bs
 
 _lock = threading.Lock()
 _logged_in = False
@@ -19,6 +19,8 @@ _atexit_registered = False
 
 def login() -> bool:
     """登录 baostock，已登录则复用。返回是否处于可用状态。"""
+    import baostock as bs
+
     global _logged_in, _atexit_registered
     with _lock:
         if _logged_in:
@@ -35,6 +37,8 @@ def login() -> bool:
 
 def ensure_logout() -> None:
     """显式登出（进程退出时自动调用）。"""
+    import baostock as bs
+
     global _logged_in
     with _lock:
         if _logged_in:
