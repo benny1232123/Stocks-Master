@@ -1,4 +1,8 @@
-"""选股中心：布林带扫描 + 策略融合 + 操作清单"""
+"""选股中心：布林带扫描 + 策略融合 + 操作清单
+
+候选股票列表一天只拉一次，结果持久化。
+扫描结果也可以导出存档。
+"""
 from __future__ import annotations
 
 import os
@@ -18,8 +22,11 @@ from datetime import date
 
 st.set_page_config(page_title="选股中心", page_icon="🔍", layout="wide")
 
+from smcore.cache_daily import get_daily, force_refresh
+
+
 # ═══════════════════════════════════════════════
-# 布林带扫描（简化版，纯 smcore）
+# 布林带扫描
 # ═══════════════════════════════════════════════
 
 
@@ -68,24 +75,27 @@ def scan_boll_batch(
         return pd.DataFrame()
 
     df = pd.DataFrame(results)
-    # 排序：距下轨越近越靠前
     df = df.sort_values("距下轨%", ascending=True)
     return df
 
 
-def get_candidate_codes(price_min: float, price_max: float) -> list[str]:
-    """从新浪源获取 A 股列表并按价格筛选。"""
-    try:
-        import akshare as ak
-        from smcore.utils.code import format_stock_code
-        spot = ak.stock_zh_a_spot()
-        if spot is None or spot.empty:
-            return []
-        spot = spot[(spot["最新价"] >= price_min) & (spot["最新价"] <= price_max)]
-        # 新浪源代码带 sh/sz/bj 前缀，需标准化为纯 6 位
-        return [format_stock_code(c) for c in spot["代码"].tolist() if format_stock_code(c)]
-    except Exception:
+def _fetch_candidate_codes(price_min: float, price_max: float) -> list[str]:
+    """从新浪源获取 A 股列表并按价格筛选（被 get_daily 调用）。"""
+    import akshare as ak
+    from smcore.utils.code import format_stock_code
+    spot = ak.stock_zh_a_spot()
+    if spot is None or spot.empty:
         return []
+    spot = spot[(spot["最新价"] >= price_min) & (spot["最新价"] <= price_max)]
+    return [format_stock_code(c) for c in spot["代码"].tolist() if format_stock_code(c)]
+
+
+def get_candidate_codes(price_min: float, price_max: float) -> tuple[list[str], str | None]:
+    """获取候选股票列表（每日缓存）。"""
+    # 缓存 key 带价格范围，不同范围独立缓存
+    cache_key = f"candidate_codes_{int(price_min)}_{int(price_max)}"
+    codes, cache_date = get_daily(cache_key, _fetch_candidate_codes, price_min, price_max)
+    return codes or [], cache_date
 
 
 # ═══════════════════════════════════════════════
@@ -120,7 +130,6 @@ with tab1:
     with scan_col1:
         do_scan = st.button("🚀 开始扫描", type="primary", use_container_width=True)
 
-    # 手动输入模式
     manual_codes = st.text_input(
         "或手动输入代码（用逗号/空格/换行分隔，留空则扫描全市场）",
         placeholder="例如：000001, 600519, 002415",
@@ -129,9 +138,13 @@ with tab1:
     if do_scan:
         if manual_codes.strip():
             codes = [c.strip() for c in manual_codes.replace("\n", ",").replace(" ", ",").split(",") if c.strip()]
+            cache_date = None
         else:
-            with st.spinner("正在获取 A 股列表..."):
-                codes = get_candidate_codes(price_min, price_max)
+            with st.spinner("正在获取 A 股列表（每日缓存，一天只拉一次）..."):
+                codes, cache_date = get_candidate_codes(price_min, price_max)
+            if cache_date:
+                if cache_date != date.today().strftime("%Y-%m-%d"):
+                    st.info(f"📋 候选列表来自 {cache_date} 的缓存（今日未刷新）")
 
         if not codes:
             st.warning("没有符合条件的股票")
@@ -144,7 +157,6 @@ with tab1:
             else:
                 st.success(f"扫描完成，发现 {len(df_result)} 条信号")
 
-                # 信号分布
                 near_count = (df_result["信号"] == "靠近下轨").sum()
                 touch_count = (df_result["信号"] == "触及下轨").sum()
                 upper_count = (df_result["信号"].str.contains("上轨", na=False)).sum()
@@ -152,7 +164,6 @@ with tab1:
                     f"靠近下轨 {near_count} | 触及下轨 {touch_count} | 上轨相关 {upper_count}"
                 )
 
-                # 结果表格
                 disp_cols = ["代码", "最新价", "中轨", "下轨", "上轨", "信号", "距下轨%"]
                 st.dataframe(
                     df_result[disp_cols].style.format({
@@ -163,7 +174,6 @@ with tab1:
                     height=500,
                 )
 
-                # 导出
                 csv = df_result.to_csv(index=False, encoding="utf-8-sig").encode("utf-8-sig")
                 st.download_button(
                     "📥 导出 CSV",
@@ -194,18 +204,15 @@ with tab2:
                 if df.empty:
                     st.warning("策略融合未产出结果（可能无可选标的或网络问题）")
                 else:
-                    # 保存操作清单
                     path = save_action_list(df, today)
 
                     st.success(f"策略融合完成！选出 {len(df)} 只股票")
 
-                    # 显示元信息
                     if meta:
                         with st.expander("📊 选股统计"):
                             for k, v in meta.items():
                                 st.metric(label=k, value=str(v))
 
-                    # 结果表格
                     st.dataframe(df, use_container_width=True, height=600)
 
                     if path:

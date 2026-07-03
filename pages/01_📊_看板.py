@@ -1,4 +1,8 @@
-"""首页看板：大盘指数 + 市场概况 + 宏观指标"""
+"""首页看板：大盘指数 + 市场概况 + 宏观指标
+
+数据一天只跑一次，结果持久化到 stock_data/daily_cache/。
+当天没跑出来用前一天的，页面标注实际数据日期。
+"""
 from __future__ import annotations
 
 import os
@@ -14,12 +18,12 @@ os.environ.setdefault("KLINE_BACKEND", "akshare")
 
 import streamlit as st
 import pandas as pd
-from datetime import date, timedelta
+from datetime import date
 
 st.set_page_config(page_title="首页看板", page_icon="📊", layout="wide")
 
 # ═══════════════════════════════════════════════
-# 数据获取（带缓存）
+# 数据获取函数（无缓存，被 get_daily 调用）
 # ═══════════════════════════════════════════════
 
 INDEX_MAP = {
@@ -31,75 +35,64 @@ INDEX_MAP = {
 }
 
 
-@st.cache_data(ttl=300, show_spinner="正在获取大盘数据...")
-def fetch_index_snapshot() -> pd.DataFrame:
+def _fetch_index_snapshot() -> pd.DataFrame:
     """获取主要指数最新行情（新浪HTTP源）。"""
-    try:
-        from smcore.data.quote_sina import fetch_sina_index_quotes
-        quotes = fetch_sina_index_quotes(INDEX_MAP.values())
-        if not quotes:
-            return pd.DataFrame()
-        rows = []
-        for name, code in INDEX_MAP.items():
-            code6 = code[2:]  # 去掉 sh/sz 前缀
-            info = quotes.get(code6)
-            if info and info.get("price"):
-                price = info["price"]
-                pre_close = info.get("pre_close")
-                change_pct = ((price - pre_close) / pre_close * 100) if pre_close else 0.0
-                change_amt = (price - pre_close) if pre_close else 0.0
-                rows.append({
-                    "指数": name,
-                    "最新价": price,
-                    "涨跌幅": change_pct,
-                    "涨跌额": change_amt,
-                })
-        return pd.DataFrame(rows)
-    except Exception as e:
-        st.warning(f"获取指数数据失败：{e}")
+    from smcore.data.quote_sina import fetch_sina_index_quotes
+    quotes = fetch_sina_index_quotes(INDEX_MAP.values())
+    if not quotes:
         return pd.DataFrame()
+    rows = []
+    for name, code in INDEX_MAP.items():
+        code6 = code[2:]
+        info = quotes.get(code6)
+        if info and info.get("price"):
+            price = info["price"]
+            pre_close = info.get("pre_close")
+            change_pct = ((price - pre_close) / pre_close * 100) if pre_close else 0.0
+            change_amt = (price - pre_close) if pre_close else 0.0
+            rows.append({
+                "指数": name,
+                "最新价": price,
+                "涨跌幅": change_pct,
+                "涨跌额": change_amt,
+            })
+    return pd.DataFrame(rows)
 
 
-@st.cache_data(ttl=600, show_spinner="正在获取市场热度...")
-def fetch_market_breadth() -> dict:
+def _fetch_market_breadth() -> dict:
     """获取全市场涨跌家数（新浪源）。"""
-    try:
-        import akshare as ak
-        df = ak.stock_zh_a_spot()
-        if df is None or df.empty:
-            return {}
-        up = (df["涨跌幅"] > 0).sum()
-        down = (df["涨跌幅"] < 0).sum()
-        flat = (df["涨跌幅"] == 0).sum()
-        total = len(df)
-        return {
-            "上涨": int(up),
-            "下跌": int(down),
-            "平盘": int(flat),
-            "总数": total,
-            "上涨比例": round(up / total * 100, 1) if total else 0,
-        }
-    except Exception:
+    import akshare as ak
+    df = ak.stock_zh_a_spot()
+    if df is None or df.empty:
         return {}
+    up = (df["涨跌幅"] > 0).sum()
+    down = (df["涨跌幅"] < 0).sum()
+    flat = (df["涨跌幅"] == 0).sum()
+    total = len(df)
+    return {
+        "上涨": int(up),
+        "下跌": int(down),
+        "平盘": int(flat),
+        "总数": total,
+        "上涨比例": round(up / total * 100, 1) if total else 0,
+    }
 
 
-@st.cache_data(ttl=3600, show_spinner="正在获取宏观数据...")
-def fetch_macro_snapshot() -> dict:
+def _fetch_macro_snapshot() -> dict:
     """获取关键宏观指标。"""
+    import akshare as ak
+    from datetime import timedelta
     result = {}
     today = date.today()
     start = (today - timedelta(days=90)).strftime("%Y%m%d")
     end = today.strftime("%Y%m%d")
 
     try:
-        import akshare as ak
-        # 离岸人民币
         usdcny = ak.currency_boc_sina(symbol="美元")
         if usdcny is not None and not usdcny.empty:
             last = usdcny.iloc[-1]
             result["美元/人民币"] = float(last.get("中行折算价", 0)) / 100 if "中行折算价" in last else None
 
-        # Shibor 隔夜
         shibor = ak.rate_interbank(market="上海银行间同业拆放利率", symbol="Shibor", indicator="隔夜")
         if shibor is not None and not shibor.empty:
             result["Shibor隔夜"] = float(shibor.iloc[-1].get("利率", 0)) if "利率" in shibor else None
@@ -113,13 +106,25 @@ def fetch_macro_snapshot() -> dict:
 # 页面渲染
 # ═══════════════════════════════════════════════
 
+from smcore.cache_daily import get_daily, force_refresh
+
 st.title("📊 市场看板")
 
-# --- 指数快照 ---
-st.subheader("主要指数")
-index_df = fetch_index_snapshot()
+# 强制刷新按钮
+col_refresh, col_date = st.columns([1, 4])
+with col_refresh:
+    if st.button("🔄 刷新数据", help="丢弃今天缓存，重新获取"):
+        force_refresh("index_snapshot")
+        force_refresh("market_breadth")
+        force_refresh("macro_snapshot")
+        st.rerun()
 
-if not index_df.empty:
+# --- 指数快照 ---
+index_df, index_date = get_daily("index_snapshot", _fetch_index_snapshot)
+
+st.subheader("主要指数")
+
+if index_df is not None and not index_df.empty:
     cols = st.columns(len(index_df))
     for i, (_, row) in enumerate(index_df.iterrows()):
         change = row["涨跌幅"]
@@ -140,15 +145,13 @@ st.markdown("---")
 col1, col2 = st.columns([1, 1])
 with col1:
     st.subheader("🔥 市场热度")
-    breadth = fetch_market_breadth()
+    breadth, breadth_date = get_daily("market_breadth", _fetch_market_breadth)
     if breadth:
         up_pct = breadth["上涨比例"]
         st.write(f"**上涨 {breadth['上涨']}** | **下跌 {breadth['下跌']}** | 平盘 {breadth['平盘']}")
 
-        # 热度条
         st.progress(up_pct / 100, text=f"上涨占比 {up_pct}%")
 
-        # 热度评价
         if up_pct >= 70:
             st.success("🟢 市场亢奋 — 注意追高风险")
         elif up_pct >= 45:
@@ -161,7 +164,7 @@ with col1:
 # --- 宏观指标 ---
 with col2:
     st.subheader("🌍 宏观速览")
-    macro = fetch_macro_snapshot()
+    macro, macro_date = get_daily("macro_snapshot", _fetch_macro_snapshot)
     if macro:
         for key, val in macro.items():
             st.metric(label=key, value=f"{val:.4f}" if val else "N/A")
@@ -180,7 +183,6 @@ if action_lists:
         df_al = pd.read_csv(latest, encoding="utf-8-sig")
         st.caption(f"来源：{latest.name} | {len(df_al)} 只候选股")
 
-        # 只显示关键列
         cols_show = [c for c in ["股票代码", "股票名称", "建议买入价", "综合评分", "建议仓位"]
                      if c in df_al.columns]
         if cols_show:
@@ -195,4 +197,21 @@ else:
     st.info("还没有操作清单。去「选股中心」跑一次选股吧 👉")
 
 st.markdown("---")
-st.caption(f"数据更新时间：{date.today()} | 数据来源：新浪财经")
+
+# 数据日期标注
+dates_used = [d for d in [index_date, breadth_date, macro_date] if d]
+if dates_used:
+    unique_dates = sorted(set(dates_used))
+    if len(unique_dates) == 1:
+        st.caption(f"📊 数据日期：{unique_dates[0]} | 数据来源：新浪财经 | 点「刷新数据」可重新获取")
+    else:
+        parts = []
+        if index_date:
+            parts.append(f"指数 {index_date}")
+        if breadth_date:
+            parts.append(f"热度 {breadth_date}")
+        if macro_date:
+            parts.append(f"宏观 {macro_date}")
+        st.caption(f"📊 数据日期：{' / '.join(parts)} | 数据来源：新浪财经")
+else:
+    st.caption("数据来源：新浪财经")

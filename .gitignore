@@ -37,6 +37,7 @@ stock_data/archive/
 stock_data/plots/
 stock_data/tasks/
 stock_data/ui_uploads/
+stock_data/daily_cache/
 stock_data/*.csv
 
 # Secrets (Supabase keys etc.)
