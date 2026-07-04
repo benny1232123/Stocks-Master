@@ -23,7 +23,7 @@ from datetime import date
 st.set_page_config(page_title="首页看板", page_icon="📊", layout="wide")
 
 # ═══════════════════════════════════════════════
-# 数据获取函数（无缓存，被 get_daily 调用）
+# 数据获取函数（新浪 API 优先 + akshare 兜底 + st.cache_data 会话缓存）
 # ═══════════════════════════════════════════════
 
 INDEX_MAP = {
@@ -35,7 +35,8 @@ INDEX_MAP = {
 }
 
 
-def _fetch_index_snapshot() -> pd.DataFrame:
+@st.cache_data(ttl=300)  # 5 分钟会话缓存，避免每次交互重新获取
+def _get_index_snapshot():
     """获取主要指数最新行情（新浪HTTP源）。"""
     from smcore.data.quote_sina import fetch_sina_index_quotes
     quotes = fetch_sina_index_quotes(INDEX_MAP.values())
@@ -59,29 +60,36 @@ def _fetch_index_snapshot() -> pd.DataFrame:
     return pd.DataFrame(rows)
 
 
-def _fetch_market_breadth() -> dict:
-    """获取全市场涨跌家数（新浪源）。"""
+@st.cache_data(ttl=300)
+def _get_market_breadth():
+    """获取全市场涨跌家数（优先新浪指数扩展字段，兜底 akshare）。"""
+    # 方案 1：新浪上证综指扩展字段（单次 HTTP，秒级返回）
+    from smcore.data.quote_sina import fetch_sina_market_breadth
+    result = fetch_sina_market_breadth()
+    if result:
+        return result
+
+    # 方案 2：akshare 全市场快照（较慢，从海外可能超时）
     try:
         import akshare as ak
         df = ak.stock_zh_a_spot()
-        if df is None or df.empty:
-            return None
-        up = (df["涨跌幅"] > 0).sum()
-        down = (df["涨跌幅"] < 0).sum()
-        flat = (df["涨跌幅"] == 0).sum()
-        total = len(df)
-        return {
-            "上涨": int(up),
-            "下跌": int(down),
-            "平盘": int(flat),
-            "总数": total,
-            "上涨比例": round(up / total * 100, 1) if total else 0,
-        }
+        if df is not None and not df.empty:
+            up = (df["涨跌幅"] > 0).sum()
+            down = (df["涨跌幅"] < 0).sum()
+            flat = (df["涨跌幅"] == 0).sum()
+            total = len(df)
+            return {
+                "上涨": int(up), "下跌": int(down), "平盘": int(flat),
+                "总数": total,
+                "上涨比例": round(up / total * 100, 1) if total else 0,
+            }
     except Exception:
-        return None
+        pass
+    return None
 
 
-def _fetch_macro_snapshot() -> dict:
+@st.cache_data(ttl=300)
+def _get_macro_snapshot():
     """获取关键宏观指标。"""
     try:
         import akshare as ak
@@ -111,11 +119,47 @@ def _fetch_macro_snapshot() -> dict:
         return None
 
 
+from smcore.cache_daily import get_daily, force_refresh
+from concurrent.futures import ThreadPoolExecutor, TimeoutError as FuturesTimeout
+
+
+def _clear_st_cache():
+    """清除 st.cache_data 会话缓存。"""
+    _get_index_snapshot.clear()
+    _get_market_breadth.clear()
+    _get_macro_snapshot.clear()
+
+
+def _fetch_all_parallel():
+    """并行获取三组数据，返回 (index_df, breadth, macro, index_date, breadth_date, macro_date)。"""
+    def _idx():
+        return get_daily("index_snapshot", _get_index_snapshot)
+    def _brd():
+        return get_daily("market_breadth", _get_market_breadth)
+    def _mac():
+        return get_daily("macro_snapshot", _get_macro_snapshot)
+
+    with ThreadPoolExecutor(max_workers=3) as pool:
+        f_idx, f_brd, f_mac = pool.submit(_idx), pool.submit(_brd), pool.submit(_mac)
+        try:
+            index_df, index_date = f_idx.result(timeout=30)
+        except Exception:
+            index_df, index_date = pd.DataFrame(), None
+        try:
+            breadth, breadth_date = f_brd.result(timeout=30)
+        except Exception:
+            breadth, breadth_date = None, None
+        try:
+            macro, macro_date = f_mac.result(timeout=30)
+        except Exception:
+            macro, macro_date = None, None
+
+    return index_df, breadth, macro, index_date, breadth_date, macro_date
+
+
 # ═══════════════════════════════════════════════
 # 页面渲染
 # ═══════════════════════════════════════════════
-
-from smcore.cache_daily import get_daily, force_refresh
 
 st.title("📊 市场看板")
 
@@ -126,11 +170,13 @@ with col_refresh:
         force_refresh("index_snapshot")
         force_refresh("market_breadth")
         force_refresh("macro_snapshot")
+        _clear_st_cache()
         st.rerun()
 
-# --- 指数快照 ---
-index_df, index_date = get_daily("index_snapshot", _fetch_index_snapshot)
+# 并行获取所有数据（三个请求同时发出，总耗时 ≈ 最慢的一个，而非三者之和）
+index_df, breadth, macro, index_date, breadth_date, macro_date = _fetch_all_parallel()
 
+# --- 指数快照 ---
 st.subheader("主要指数")
 
 if index_df is not None and not index_df.empty:
@@ -150,11 +196,10 @@ else:
 
 st.markdown("---")
 
-# --- 市场热度 ---
+# --- 市场热度 & 宏观指标 ---
 col1, col2 = st.columns([1, 1])
 with col1:
     st.subheader("🔥 市场热度")
-    breadth, breadth_date = get_daily("market_breadth", _fetch_market_breadth)
     if breadth:
         up_pct = breadth["上涨比例"]
         st.write(f"**上涨 {breadth['上涨']}** | **下跌 {breadth['下跌']}** | 平盘 {breadth['平盘']}")
@@ -177,7 +222,6 @@ with col1:
 # --- 宏观指标 ---
 with col2:
     st.subheader("🌍 宏观速览")
-    macro, macro_date = get_daily("macro_snapshot", _fetch_macro_snapshot)
     if macro:
         for key, val in macro.items():
             st.metric(label=key, value=f"{val:.4f}" if val else "N/A")

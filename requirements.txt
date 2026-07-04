@@ -4,3 +4,4 @@ pandas
 akshare
 matplotlib
 pillow
+requests

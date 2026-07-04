@@ -80,10 +80,13 @@ def scan_boll_batch(
 
 
 def _fetch_candidate_codes(price_min: float, price_max: float) -> list[str]:
-    """从新浪源获取 A 股列表并按价格筛选（被 get_daily 调用）。"""
+    """从新浪源获取 A 股列表并按价格筛选（每日缓存，一天只拉一次）。"""
     import akshare as ak
     from smcore.utils.code import format_stock_code
-    spot = ak.stock_zh_a_spot()
+    try:
+        spot = ak.stock_zh_a_spot()
+    except Exception:
+        return []
     if spot is None or spot.empty:
         return []
     spot = spot[(spot["最新价"] >= price_min) & (spot["最新价"] <= price_max)]
@@ -210,8 +213,7 @@ with tab2:
 
                     if meta:
                         with st.expander("📊 选股统计"):
-                            for k, v in meta.items():
-                                st.metric(label=k, value=str(v))
+                            st.markdown(meta)
 
                     st.dataframe(df, use_container_width=True, height=600)
 
