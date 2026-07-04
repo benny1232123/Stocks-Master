@@ -10,6 +10,8 @@ from datetime import date, datetime
 from pathlib import Path
 from typing import Any, Callable, Optional, Tuple
 
+import pandas as pd
+
 CACHE_DIR = Path("stock_data/daily_cache")
 
 
@@ -50,10 +52,17 @@ def get_daily(
     # 2. 今天没跑过 → 尝试跑一次
     try:
         data = fetch_func(*args, **kwargs)
+        # 空值（None / 空 dict / 空 list）不缓存，避免整天显示空白
         if data is not None:
-            with open(today_file, "wb") as f:
-                pickle.dump(data, f)
-            return data, today
+            is_empty = (
+                (isinstance(data, dict) and not data)
+                or (isinstance(data, list) and not data)
+                or (isinstance(data, pd.DataFrame) and data.empty)
+            )
+            if not is_empty:
+                with open(today_file, "wb") as f:
+                    pickle.dump(data, f)
+                return data, today
     except Exception:
         pass
 

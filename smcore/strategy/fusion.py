@@ -23,7 +23,7 @@ from typing import Optional
 import pandas as pd
 
 from smcore.config.defaults import DEFAULT_K, DEFAULT_WINDOW, STOCK_DATA_DIR
-from smcore.data import ensure_logout, fetch_daily_k, session
+from smcore.data import fetch_daily_k
 from smcore.indicators import calc_bollinger
 from smcore.strategy import build_strategy_allocation
 from smcore.utils.code import format_stock_code
@@ -189,80 +189,77 @@ def fuse_signals(
     weights = alloc["final_weights"]
 
     rows = []
-    with session() as ok:
-        for code in all_codes:
-            hit_strategies = []
-            score = 0
-            name = ""
-            buy_price = None
+    for code in all_codes:
+        hit_strategies = []
+        score = 0
+        name = ""
+        buy_price = None
 
-            if code in boll:
-                hit_strategies.append("Boll")
-                score += STRATEGY_BASE_SCORE["boll"]
-                name = boll[code]["name"] or name
-                buy_price = boll[code].get("buy_price")
-            if code in relativity:
-                hit_strategies.append("Relativity")
-                score += STRATEGY_BASE_SCORE["relativity"]
-                name = relativity[code]["name"] or name
-            if code in theme:
-                hit_strategies.append("Theme")
-                score += STRATEGY_BASE_SCORE["theme"]
-                name = theme[code]["name"] or name
-                # Theme 综合分作为额外加权（综合分 0-100，按 10% 加）
-                theme_score = theme[code].get("score") or 0
-                score += min(theme_score * 0.1, 10)
-            if code in cctv:
-                hit_strategies.append("CCTV")
-                score += STRATEGY_BASE_SCORE["cctv"]
-                name = cctv[code]["name"] or name
+        if code in boll:
+            hit_strategies.append("Boll")
+            score += STRATEGY_BASE_SCORE["boll"]
+            name = boll[code]["name"] or name
+            buy_price = boll[code].get("buy_price")
+        if code in relativity:
+            hit_strategies.append("Relativity")
+            score += STRATEGY_BASE_SCORE["relativity"]
+            name = relativity[code]["name"] or name
+        if code in theme:
+            hit_strategies.append("Theme")
+            score += STRATEGY_BASE_SCORE["theme"]
+            name = theme[code]["name"] or name
+            # Theme 综合分作为额外加权（综合分 0-100，按 10% 加）
+            theme_score = theme[code].get("score") or 0
+            score += min(theme_score * 0.1, 10)
+        if code in cctv:
+            hit_strategies.append("CCTV")
+            score += STRATEGY_BASE_SCORE["cctv"]
+            name = cctv[code]["name"] or name
 
-            # 多策略命中加分
-            if len(hit_strategies) > 1:
-                score += (len(hit_strategies) - 1) * MULTI_HIT_BONUS
+        # 多策略命中加分
+        if len(hit_strategies) > 1:
+            score += (len(hit_strategies) - 1) * MULTI_HIT_BONUS
 
-            # 仓位分配：按命中策略中权重最大的那个分配，单票取该策略权重的 1/N（N=该策略候选数）
-            # 避免大池子策略（如 CCTV 673只）把仓位稀释到 0
-            strategy_pick_counts = {
-                "boll": len(boll),
-                "relativity": len(relativity),
-                "theme": len(theme),
-                "cctv": len(cctv),
-            }
-            # 取命中策略中权重最高者
-            best_weight = 0
-            for s in hit_strategies:
-                skey = s.lower()
-                w = weights.get(skey, 0)
-                cnt = max(strategy_pick_counts.get(skey, 1), 1)
-                share = w / cnt  # 该策略仓位均分到每只票
-                if share > best_weight:
-                    best_weight = share
-            position_pct = min(best_weight / 100.0, 0.3)  # 单票上限 30%
-            position_amount = total_capital * position_pct
+        # 仓位分配：按命中策略中权重最大的那个分配，单票取该策略权重的 1/N（N=该策略候选数）
+        # 避免大池子策略（如 CCTV 673只）把仓位稀释到 0
+        strategy_pick_counts = {
+            "boll": len(boll),
+            "relativity": len(relativity),
+            "theme": len(theme),
+            "cctv": len(cctv),
+        }
+        # 取命中策略中权重最高者
+        best_weight = 0
+        for s in hit_strategies:
+            skey = s.lower()
+            w = weights.get(skey, 0)
+            cnt = max(strategy_pick_counts.get(skey, 1), 1)
+            share = w / cnt  # 该策略仓位均分到每只票
+            if share > best_weight:
+                best_weight = share
+        position_pct = min(best_weight / 100.0, 0.3)  # 单票上限 30%
+        position_amount = total_capital * position_pct
 
-            row = {
-                "股票代码": code,
-                "股票名称": name,
-                "命中策略数": len(hit_strategies),
-                "来源策略": "/".join(hit_strategies),
-                "综合评分": round(score, 1),
-                "建议买入价": buy_price,
-                "建议仓位%": round(position_pct * 100, 1),
-                "建议金额": round(position_amount, 0),
-            }
+        row = {
+            "股票代码": code,
+            "股票名称": name,
+            "命中策略数": len(hit_strategies),
+            "来源策略": "/".join(hit_strategies),
+            "综合评分": round(score, 1),
+            "建议买入价": buy_price,
+            "建议仓位%": round(position_pct * 100, 1),
+            "建议金额": round(position_amount, 0),
+        }
 
-            if fetch_levels and ok:
-                levels = _compute_boll_levels(code)
-                if levels:
-                    row["最新价"] = levels.get("close")
-                    row["止损价(下轨)"] = levels.get("lower")
-                    row["止盈价(上轨)"] = levels.get("upper")
-                    row["MA20"] = levels.get("ma20")
+        if fetch_levels:
+            levels = _compute_boll_levels(code)
+            if levels:
+                row["最新价"] = levels.get("close")
+                row["止损价(下轨)"] = levels.get("lower")
+                row["止盈价(上轨)"] = levels.get("upper")
+                row["MA20"] = levels.get("ma20")
 
-            rows.append(row)
-
-    ensure_logout()
+        rows.append(row)
 
     df = pd.DataFrame(rows).sort_values("综合评分", ascending=False).reset_index(drop=True)
     df = df.head(max_picks)

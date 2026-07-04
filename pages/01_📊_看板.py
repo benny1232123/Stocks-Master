@@ -61,45 +61,54 @@ def _fetch_index_snapshot() -> pd.DataFrame:
 
 def _fetch_market_breadth() -> dict:
     """获取全市场涨跌家数（新浪源）。"""
-    import akshare as ak
-    df = ak.stock_zh_a_spot()
-    if df is None or df.empty:
-        return {}
-    up = (df["涨跌幅"] > 0).sum()
-    down = (df["涨跌幅"] < 0).sum()
-    flat = (df["涨跌幅"] == 0).sum()
-    total = len(df)
-    return {
-        "上涨": int(up),
-        "下跌": int(down),
-        "平盘": int(flat),
-        "总数": total,
-        "上涨比例": round(up / total * 100, 1) if total else 0,
-    }
+    try:
+        import akshare as ak
+        df = ak.stock_zh_a_spot()
+        if df is None or df.empty:
+            return None
+        up = (df["涨跌幅"] > 0).sum()
+        down = (df["涨跌幅"] < 0).sum()
+        flat = (df["涨跌幅"] == 0).sum()
+        total = len(df)
+        return {
+            "上涨": int(up),
+            "下跌": int(down),
+            "平盘": int(flat),
+            "总数": total,
+            "上涨比例": round(up / total * 100, 1) if total else 0,
+        }
+    except Exception:
+        return None
 
 
 def _fetch_macro_snapshot() -> dict:
     """获取关键宏观指标。"""
-    import akshare as ak
-    from datetime import timedelta
-    result = {}
-    today = date.today()
-    start = (today - timedelta(days=90)).strftime("%Y%m%d")
-    end = today.strftime("%Y%m%d")
-
     try:
-        usdcny = ak.currency_boc_sina(symbol="美元")
-        if usdcny is not None and not usdcny.empty:
-            last = usdcny.iloc[-1]
-            result["美元/人民币"] = float(last.get("中行折算价", 0)) / 100 if "中行折算价" in last else None
+        import akshare as ak
+        from datetime import timedelta
+        result = {}
+        today = date.today()
+        start = (today - timedelta(days=90)).strftime("%Y%m%d")
+        end = today.strftime("%Y%m%d")
 
-        shibor = ak.rate_interbank(market="上海银行间同业拆放利率", symbol="Shibor", indicator="隔夜")
-        if shibor is not None and not shibor.empty:
-            result["Shibor隔夜"] = float(shibor.iloc[-1].get("利率", 0)) if "利率" in shibor else None
+        try:
+            usdcny = ak.currency_boc_sina(symbol="美元")
+            if usdcny is not None and not usdcny.empty:
+                last = usdcny.iloc[-1]
+                result["美元/人民币"] = float(last.get("中行折算价", 0)) / 100 if "中行折算价" in last else None
+        except Exception:
+            pass
+
+        try:
+            shibor = ak.rate_interbank(market="上海银行间同业拆放利率", symbol="Shibor", indicator="隔夜")
+            if shibor is not None and not shibor.empty:
+                result["Shibor隔夜"] = float(shibor.iloc[-1].get("利率", 0)) if "利率" in shibor else None
+        except Exception:
+            pass
+
+        return result if result else None
     except Exception:
-        pass
-
-    return result
+        return None
 
 
 # ═══════════════════════════════════════════════
@@ -160,6 +169,10 @@ with col1:
             st.warning("🟠 偏冷 — 观望为主")
         else:
             st.error("🔴 极度冷淡 — 恐慌中孕育机会")
+    elif breadth_date:
+        st.caption(f"暂无今日数据（上次有效：{breadth_date}），请刷新重试")
+    else:
+        st.caption("市场热度数据获取失败，请刷新重试")
 
 # --- 宏观指标 ---
 with col2:
@@ -168,8 +181,10 @@ with col2:
     if macro:
         for key, val in macro.items():
             st.metric(label=key, value=f"{val:.4f}" if val else "N/A")
+    elif macro_date:
+        st.caption(f"暂无今日数据（上次有效：{macro_date}），请刷新重试")
     else:
-        st.caption("暂无宏观数据")
+        st.caption("宏观数据获取失败，请刷新重试")
 
 st.markdown("---")
 
