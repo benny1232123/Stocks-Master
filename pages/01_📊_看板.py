@@ -167,7 +167,8 @@ with col_refresh:
         st.rerun()
 
 # 并行获取所有数据（三个请求同时发出，总耗时 ≈ 最慢的一个，而非三者之和）
-index_df, breadth, macro, index_date, breadth_date, macro_date = _fetch_all_parallel()
+with st.spinner("📡 正在加载市场数据（首次约 25 秒，后续秒开）..."):
+    index_df, breadth, macro, index_date, breadth_date, macro_date = _fetch_all_parallel()
 
 # --- 指数快照 ---
 st.subheader("主要指数")

@@ -93,3 +93,24 @@ jobs:
             stock_data/Daily-Action-List-*.csv
             stock_data/auto_logs/
           retention-days: 30
+
+      - name: 预热看板数据 + 提交缓存
+        env:
+          KLINE_BACKEND: akshare
+          PYTHONUNBUFFERED: "1"
+          PYTHONIOENCODING: utf-8
+        run: |
+          python scripts/prewarm_dashboard.py
+
+      - name: 提交缓存到仓库
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add stock_data/daily_cache/
+          git add stock_data/Daily-Action-List-*.csv
+          if git diff --cached --quiet; then
+            echo "无变更，跳过提交"
+          else
+            git commit -m "chore: 预热看板缓存 $(date +%Y-%m-%d)"
+            git push
+          fi
