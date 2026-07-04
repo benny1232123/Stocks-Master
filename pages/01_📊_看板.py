@@ -62,14 +62,7 @@ def _get_index_snapshot():
 
 @st.cache_data(ttl=300)
 def _get_market_breadth():
-    """获取全市场涨跌家数（优先新浪指数扩展字段，兜底 akshare）。"""
-    # 方案 1：新浪上证综指扩展字段（单次 HTTP，秒级返回）
-    from smcore.data.quote_sina import fetch_sina_market_breadth
-    result = fetch_sina_market_breadth()
-    if result:
-        return result
-
-    # 方案 2：akshare 全市场快照（较慢，从海外可能超时）
+    """获取全市场涨跌家数（akshare 新浪源，~25s 首次，后续走缓存）。"""
     try:
         import akshare as ak
         df = ak.stock_zh_a_spot()

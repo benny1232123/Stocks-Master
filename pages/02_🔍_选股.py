@@ -37,39 +37,62 @@ def scan_boll_batch(
     near_ratio: float = 1.015,
     days_back: int = 180,
 ) -> pd.DataFrame:
-    """扫描一批股票的布林带信号。"""
+    """扫描一批股票的布林带信号，实时显示详细进度。"""
+    import time
     from smcore.data.kline import fetch_daily_k
     from smcore.indicators.boll import calc_bollinger, evaluate_boll_signal
 
     results = []
     total = len(codes)
-    progress = st.progress(0, text=f"扫描中 0/{total}")
-    status = st.empty()
+    skipped = 0
+    start_time = time.monotonic()
+
+    progress_bar = st.progress(0, text=f"扫描中 0/{total}")
+    detail = st.empty()
 
     for i, code in enumerate(codes):
+        elapsed = time.monotonic() - start_time
+        avg_per_stock = elapsed / max(i, 1)
+        eta_secs = avg_per_stock * (total - i - 1)
+        eta_min, eta_sec = divmod(int(eta_secs), 60)
+
         try:
             kdf = fetch_daily_k(code, days_back=days_back)
             if kdf.empty or len(kdf) < window:
+                skipped += 1
                 continue
             kdf = calc_bollinger(kdf, window=window, k=k)
             sig = evaluate_boll_signal(kdf, window=window, k=k, near_ratio=near_ratio)
 
+            signal_text = sig.get("signal", "无")
             results.append({
                 "代码": code,
                 "最新价": sig.get("price"),
                 "中轨": sig.get("middle"),
                 "下轨": sig.get("lower"),
                 "上轨": sig.get("upper"),
-                "信号": sig.get("signal", "无"),
+                "信号": signal_text,
                 "距下轨%": sig.get("dist_to_lower_pct"),
                 "距上轨%": sig.get("dist_to_upper_pct"),
             })
-        except Exception:
-            pass
-        progress.progress((i + 1) / total, text=f"扫描中 {i+1}/{total}")
 
-    progress.empty()
-    status.empty()
+            status_icon = "🔴" if "上轨" in signal_text else ("🟢" if "下轨" in signal_text else "⚪")
+            detail.markdown(
+                f"**{code}** {status_icon} {signal_text} | "
+                f"已发现 **{len(results)}** 条信号 | "
+                f"跳过 {skipped} | "
+                f"剩余 {eta_min}:{eta_sec:02d}"
+            )
+        except Exception:
+            skipped += 1
+
+        progress_bar.progress(
+            (i + 1) / total,
+            text=f"扫描中 {i+1}/{total} — 已用 {int(elapsed)}s"
+        )
+
+    progress_bar.empty()
+    detail.empty()
 
     if not results:
         return pd.DataFrame()
