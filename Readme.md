@@ -102,25 +102,26 @@ Stocks-Master/
 
 ## 可视化界面
 
-新的可视化前端改为 React + FastAPI：
+新的可视化前端改为 React + FastAPI，Render 上可以只部署一个 Web 服务：
 
 ```bash
-# 启动后端
+# 本地开发：后端
 E:/Anaconda/python.exe app.py
 
-# 启动前端
+# 本地开发：前端
 cd frontend
 npm install
 npm run dev
+
+# 单服务生产构建后，前端静态包由 FastAPI 托管
 ```
 
-访问 `http://localhost:5173`，当前已接入：
+访问 `http://localhost:5173`（开发态）或部署后的 Web 服务地址，当前已接入：
 
 - **看板**：指数、市场热度、宏观指标
 - **信息架构**：选股 / 分析 / 持仓 / 回测都已接到独立 API
 - **操作能力**：支持布林扫描、策略融合、交易录入、最新回测触发
-- **API**：前端通过 `/api/dashboard`、`/api/selection/*`、`/api/portfolio`、`/api/backtests/*` 获取数据
-- **启动**：Windows 下可直接运行根目录的 `stocks-master.bat`
+- **部署模式**：生产环境可用 `render.yaml` 直接构建一个 Web 服务
 
 ---
 
@@ -203,7 +204,7 @@ python Frequently-Used-Program/backtest_tradebook.py \
 ## 常见问题
 
 **Q：可视化打不开？**
-A：先确认后端 `E:/Anaconda/python.exe app.py` 已启动，再检查前端 `npm run dev` 是否在 `http://localhost:5173` 运行。
+A：开发时先确认后端 `E:/Anaconda/python.exe app.py` 已启动，再检查前端 `npm run dev` 是否在 `http://localhost:5173` 运行；生产环境则确认 `frontend/dist` 已被构建并由 FastAPI 托管。
 
 **Q：选股结果不可信？**
 A：检查是否统一用前复权（`qfq`）。本项目已统一，若发现不一致请提 issue。

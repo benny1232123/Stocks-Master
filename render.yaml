@@ -1,0 +1,10 @@
+services:
+  - type: web
+    name: stocks-master
+    env: python
+    plan: free
+    buildCommand: cd frontend && npm install && npm run build && cd .. && pip install -r requirements.txt
+    startCommand: uvicorn backend.main:app --host 0.0.0.0 --port $PORT
+    envVars:
+      - key: KLINE_BACKEND
+        value: akshare

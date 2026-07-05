@@ -7,9 +7,13 @@ from pathlib import Path
 
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import FileResponse
+from fastapi.staticfiles import StaticFiles
 
 ROOT = Path(__file__).resolve().parent.parent
+FRONTEND_DIST = ROOT / "frontend" / "dist"
 VIZ_SRC = ROOT / "Frequently-Used-Program" / "boll-visualizer" / "src"
+
 for candidate in [str(ROOT), str(VIZ_SRC)]:
     if candidate not in sys.path:
         sys.path.insert(0, candidate)
@@ -33,9 +37,18 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+if FRONTEND_DIST.exists():
+    assets_dir = FRONTEND_DIST / "assets"
+    if assets_dir.exists():
+        app.mount("/assets", StaticFiles(directory=assets_dir), name="assets")
+
 
 @app.get("/")
-def root() -> dict[str, str]:
+def root():
+    if FRONTEND_DIST.exists():
+        index_file = FRONTEND_DIST / "index.html"
+        if index_file.exists():
+            return FileResponse(index_file)
     return {"message": "Stocks-Master API", "status": "ok"}
 
 
@@ -147,6 +160,15 @@ def selection_boll_scan(payload: dict) -> dict:
     k = float(payload.get("k", 1.645))
     near_ratio = float(payload.get("near_ratio", 1.015))
     days_back = int(payload.get("days_back", 180))
+
+
+    @app.get("/{path:path}")
+    def spa_fallback(path: str) -> FileResponse:
+        if FRONTEND_DIST.exists():
+            index_file = FRONTEND_DIST / "index.html"
+            if index_file.exists():
+                return FileResponse(index_file)
+        return FileResponse(ROOT / "Readme.md")
     result = scan_boll_batch(codes, window=window, k=k, near_ratio=near_ratio, days_back=days_back)
     return {"count": int(len(result)), "rows": result.to_dict(orient="records")}
 
