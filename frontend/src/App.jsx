@@ -53,9 +53,6 @@ function App() {
   const [selectionParams, setSelectionParams] = useState({
     priceMin: 5,
     priceMax: 30,
-    window: 20,
-    k: 1.645,
-    nearRatio: 1.015,
   })
   const [selectionScan, setSelectionScan] = useState(null)
   const [fusionResult, setFusionResult] = useState(null)
@@ -257,7 +254,7 @@ function App() {
         <section className="dashboard-grid workspace-grid single-col">
           <SectionCard title="策略融合选股" subtitle="先设条件，再统一生成候选并计算融合结果" className="wide accent-card">
             <p className="section-copy">
-              这里不是单独跑布林信号，而是先生成候选池，再做策略融合和排序。你要调的是价格区间、窗口和阈值，最后看的是融合后的结果。
+              这里不再单独跑布林信号，只保留策略融合流程。设置价格区间后，系统会自动生成候选池并计算融合结果。
             </p>
             <div className="selection-form">
               <Field label="最低价" hint="过滤太低价标的">
@@ -266,44 +263,35 @@ function App() {
               <Field label="最高价" hint="控制候选池价格上限">
                 <input value={selectionParams.priceMax} type="number" min="1" step="1" onChange={(event) => setSelectionParams((prev) => ({ ...prev, priceMax: Number(event.target.value) }))} />
               </Field>
-              <Field label="回看窗口" hint="越大越稳，越小越敏感">
-                <input value={selectionParams.window} type="number" min="10" step="1" onChange={(event) => setSelectionParams((prev) => ({ ...prev, window: Number(event.target.value) }))} />
-              </Field>
-              <Field label="标准差系数" hint="影响融合时的波动判定">
-                <input value={selectionParams.k} type="number" min="1" step="0.001" onChange={(event) => setSelectionParams((prev) => ({ ...prev, k: Number(event.target.value) }))} />
-              </Field>
-              <Field label="贴近阈值" hint="越接近说明越靠近触发区">
-                <input value={selectionParams.nearRatio} type="number" min="1" step="0.001" onChange={(event) => setSelectionParams((prev) => ({ ...prev, nearRatio: Number(event.target.value) }))} />
-              </Field>
               <button
                 type="button"
                 onClick={async () => {
-                  const taskId = createTask('策略融合', '正在获取候选池')
+                  const taskId = createTask('策略融合', '正在生成候选池并计算融合结果')
                   const params = new URLSearchParams({
                     price_min: String(selectionParams.priceMin),
                     price_max: String(selectionParams.priceMax),
                   })
                   const candidateResponse = await fetch(`/api/selection/candidates?${params.toString()}`)
                   if (!candidateResponse.ok) {
-                    updateTask(taskId, { status: 'failed', detail: '候选池获取失败' })
+                    updateTask(taskId, { status: 'failed', detail: '候选池生成失败' })
                     return
                   }
                   const candidateData = await candidateResponse.json()
                   const codes = candidateData.codes ?? []
                   setCandidateCodes(codes)
-                  updateTask(taskId, { detail: `候选池已生成，数量 ${codes.length}` })
+                  updateTask(taskId, { detail: `候选池已生成，数量 ${codes.length}，正在计算融合结果` })
                   const scanResponse = await fetch('/api/selection/boll-scan', {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify({
                       codes,
-                      window: selectionParams.window,
-                      k: selectionParams.k,
-                      near_ratio: selectionParams.nearRatio,
+                      window: 20,
+                      k: 1.645,
+                      near_ratio: 1.015,
                     }),
                   })
                   if (!scanResponse.ok) {
-                    updateTask(taskId, { status: 'failed', detail: '策略融合计算失败' })
+                    updateTask(taskId, { status: 'failed', detail: '融合结果计算失败' })
                     return
                   }
                   setSelectionScan(await scanResponse.json())
@@ -349,7 +337,7 @@ function App() {
                   </div>
                 ))
               ) : (
-                <div className="empty-state">没有任务时，这里会显示正在跑的进程和最近一次执行结果。</div>
+                <div className="empty-state">没有任务时，这里会显示正在运行的策略融合步骤和最近一次执行结果。</div>
               )}
             </div>
 
@@ -364,7 +352,7 @@ function App() {
                 ))}
               </div>
             ) : (
-              <div className="empty-state">先选参数，再点「扫描布林信号」</div>
+              <div className="empty-state">先选参数，再点「开始策略融合」</div>
             )}
 
             {fusionRows.length > 0 ? (

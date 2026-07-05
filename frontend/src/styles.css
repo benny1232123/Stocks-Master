@@ -192,9 +192,14 @@ select {
 }
 
 .section-copy {
-  margin: 0 0 16px;
+  margin: 0 0 18px;
+  padding: 14px 18px;
+  border-radius: 12px;
+  background: rgba(126, 240, 197, 0.06);
+  border-left: 3px solid var(--accent);
   color: var(--muted);
   line-height: 1.7;
+  font-size: 0.95rem;
 }
 
 .section-intro h2 {
@@ -218,17 +223,20 @@ select {
 .tab-pill {
   border: 1px solid rgba(255, 255, 255, 0.08);
   border-radius: 999px;
-  padding: 10px 16px;
+  padding: 10px 18px;
   background: rgba(255, 255, 255, 0.04);
   color: var(--muted);
   cursor: pointer;
-  transition: transform 0.2s ease, background 0.2s ease, color 0.2s ease, border-color 0.2s ease;
+  transition: all 0.3s ease;
+  font-size: 0.95rem;
+  font-weight: 500;
 }
 
 .tab-pill:hover {
   transform: translateY(-1px);
   color: var(--text);
   border-color: rgba(255, 255, 255, 0.18);
+  background: rgba(255, 255, 255, 0.06);
 }
 
 .tab-pill.active {
@@ -257,7 +265,13 @@ select {
 
 .dashboard-card {
   border-radius: 24px;
-  padding: 22px;
+  padding: 24px;
+  transition: all 0.3s ease;
+}
+
+.dashboard-card:hover {
+  transform: translateY(-2px);
+  box-shadow: 0 20px 60px rgba(0, 0, 0, 0.3);
 }
 
 .dashboard-card.wide {
@@ -266,6 +280,21 @@ select {
 
 .dashboard-card.accent-card {
   border-color: var(--card-border-strong);
+  position: relative;
+}
+
+.dashboard-card.accent-card::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  border-radius: 24px;
+  padding: 1px;
+  background: linear-gradient(135deg, rgba(126, 240, 197, 0.3), rgba(130, 177, 255, 0.3), rgba(240, 198, 126, 0.2));
+  mask: linear-gradient(#fff 0 0) content-box, linear-gradient(#fff 0 0);
+  -webkit-mask: linear-gradient(#fff 0 0) content-box, linear-gradient(#fff 0 0);
+  -webkit-mask-composite: xor;
+  mask-composite: exclude;
+  pointer-events: none;
 }
 
 .dashboard-card.soft-card {
@@ -277,7 +306,9 @@ select {
   justify-content: space-between;
   gap: 12px;
   align-items: baseline;
-  margin-bottom: 16px;
+  margin-bottom: 18px;
+  padding-bottom: 14px;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.08);
 }
 
 .dashboard-card h3 {
@@ -297,10 +328,16 @@ select {
   grid-template-columns: 1.2fr 1fr 0.8fr;
   gap: 12px;
   align-items: center;
-  padding: 14px 16px;
+  padding: 16px 18px;
   border-radius: 16px;
   background: rgba(255, 255, 255, 0.04);
-  border: 1px solid rgba(255, 255, 255, 0.04);
+  border: 1px solid rgba(255, 255, 255, 0.06);
+  transition: all 0.3s ease;
+}
+
+.index-row:hover {
+  background: rgba(255, 255, 255, 0.07);
+  border-color: rgba(126, 240, 197, 0.2);
 }
 
 .index-row.compact {
@@ -316,10 +353,17 @@ select {
 
 .artifact-box,
 .stat-card {
-  padding: 14px 16px;
+  padding: 18px 20px;
   border-radius: 16px;
-  background: rgba(255, 255, 255, 0.05);
-  border: 1px solid rgba(255, 255, 255, 0.04);
+  background: linear-gradient(135deg, rgba(130, 177, 255, 0.08), rgba(240, 198, 126, 0.06));
+  border: 1px solid rgba(130, 177, 255, 0.15);
+  transition: all 0.3s ease;
+}
+
+.artifact-box:hover,
+.stat-card:hover {
+  border-color: rgba(130, 177, 255, 0.3);
+  box-shadow: 0 4px 20px rgba(130, 177, 255, 0.1);
 }
 
 .artifact-box {
@@ -367,10 +411,16 @@ select {
 .field-card {
   display: grid;
   gap: 8px;
-  padding: 14px;
+  padding: 16px 18px;
   border-radius: 16px;
-  background: rgba(255, 255, 255, 0.035);
-  border: 1px solid rgba(255, 255, 255, 0.05);
+  background: linear-gradient(135deg, rgba(126, 240, 197, 0.08), rgba(130, 177, 255, 0.06));
+  border: 1px solid rgba(126, 240, 197, 0.15);
+  transition: all 0.3s ease;
+}
+
+.field-card:hover {
+  border-color: rgba(126, 240, 197, 0.3);
+  box-shadow: 0 4px 20px rgba(126, 240, 197, 0.1);
 }
 
 .field-label {
@@ -390,7 +440,8 @@ select {
 }
 
 .selection-form {
-  grid-template-columns: repeat(5, minmax(0, 1fr)) auto auto;
+  grid-template-columns: repeat(2, minmax(0, 1fr)) auto;
+  gap: 12px;
 }
 
 .trade-form {
@@ -407,8 +458,18 @@ select {
   background: rgba(7, 14, 26, 0.78);
   color: var(--text);
   border-radius: 14px;
-  padding: 12px 14px;
+  padding: 14px 16px;
   outline: none;
+  transition: all 0.3s ease;
+}
+
+.analysis-form input:focus,
+.selection-form input:focus,
+.trade-form input:focus,
+.trade-form select:focus,
+.field-card input:focus {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 3px rgba(126, 240, 197, 0.15);
 }
 
 .analysis-form button,
@@ -417,12 +478,21 @@ select {
 .inline-action {
   border: 0;
   border-radius: 14px;
-  padding: 12px 18px;
+  padding: 14px 24px;
   background: linear-gradient(135deg, var(--accent), var(--accent-2) 55%, var(--accent-3));
   color: #06111f;
   font-weight: 700;
   cursor: pointer;
-  box-shadow: 0 12px 24px rgba(0, 0, 0, 0.18);
+  box-shadow: 0 8px 24px rgba(126, 240, 197, 0.25);
+  transition: all 0.3s ease;
+}
+
+.analysis-form button:hover,
+.selection-form button:hover,
+.trade-form button:hover,
+.inline-action:hover {
+  transform: translateY(-2px);
+  box-shadow: 0 12px 32px rgba(126, 240, 197, 0.35);
 }
 
 .inline-action {
@@ -451,10 +521,16 @@ select {
   display: grid;
   grid-template-columns: 1fr 1fr 1fr;
   gap: 12px;
-  padding: 12px 14px;
+  padding: 14px 16px;
   border-radius: 14px;
   background: rgba(255, 255, 255, 0.045);
-  border: 1px solid rgba(255, 255, 255, 0.04);
+  border: 1px solid rgba(255, 255, 255, 0.06);
+  transition: all 0.3s ease;
+}
+
+.table-row:hover {
+  background: rgba(255, 255, 255, 0.07);
+  border-color: rgba(130, 177, 255, 0.2);
 }
 
 .status-feed {
@@ -476,10 +552,15 @@ select {
   justify-content: space-between;
   align-items: center;
   gap: 16px;
-  padding: 12px 14px;
+  padding: 14px 18px;
   border-radius: 14px;
   background: rgba(255, 255, 255, 0.04);
-  border: 1px solid rgba(255, 255, 255, 0.04);
+  border: 1px solid rgba(255, 255, 255, 0.06);
+  transition: all 0.3s ease;
+}
+
+.status-item:hover {
+  background: rgba(255, 255, 255, 0.06);
 }
 
 .status-item strong {
@@ -512,10 +593,31 @@ select {
 
 .empty-state {
   line-height: 1.65;
+  padding: 16px;
+  border-radius: 12px;
+  background: rgba(255, 255, 255, 0.03);
+  border: 1px dashed rgba(255, 255, 255, 0.1);
+  color: var(--muted);
+  text-align: center;
 }
 
 .warning {
   color: var(--warn);
+}
+
+@keyframes fadeIn {
+  from {
+    opacity: 0;
+    transform: translateY(10px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+.dashboard-card {
+  animation: fadeIn 0.4s ease-out;
 }
 
 .footer {
@@ -531,6 +633,10 @@ select {
   .analysis-form,
   .selection-form,
   .trade-form {
+    grid-template-columns: 1fr;
+  }
+
+  .selection-form {
     grid-template-columns: 1fr;
   }
 
