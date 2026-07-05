@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 
 const QUICK_START = ['看概览', '跑选股', '查分析', '录交易', '看回测']
 
@@ -16,6 +16,16 @@ function StatCard({ label, value }) {
       <span>{label}</span>
       <strong>{value}</strong>
     </div>
+  )
+}
+
+function Field({ label, children, hint }) {
+  return (
+    <label className="field-card">
+      <span className="field-label">{label}</span>
+      {children}
+      {hint ? <span className="field-hint">{hint}</span> : null}
+    </label>
   )
 }
 
@@ -50,6 +60,7 @@ function App() {
   const [selectionScan, setSelectionScan] = useState(null)
   const [fusionResult, setFusionResult] = useState(null)
   const [backtestRun, setBacktestRun] = useState(null)
+  const [taskFeed, setTaskFeed] = useState([])
   const [tradeForm, setTradeForm] = useState({
     date: new Date().toISOString().slice(0, 10),
     code: '',
@@ -61,6 +72,27 @@ function App() {
     notes: '',
   })
   const [error, setError] = useState('')
+  const taskIdRef = useRef(0)
+
+  function createTask(label, detail) {
+    const id = taskIdRef.current + 1
+    taskIdRef.current = id
+    setTaskFeed((prev) => [
+      {
+        id,
+        label,
+        detail,
+        status: 'running',
+        startedAt: new Date().toLocaleTimeString('zh-CN', { hour12: false }),
+      },
+      ...prev,
+    ].slice(0, 5))
+    return id
+  }
+
+  function updateTask(id, patch) {
+    setTaskFeed((prev) => prev.map((item) => (item.id === id ? { ...item, ...patch } : item)))
+  }
 
   useEffect(() => {
     const controller = new AbortController()
@@ -120,6 +152,7 @@ function App() {
   const analysisLatest = analysis?.latest ?? null
   const selectionRows = selectionScan?.rows ?? []
   const fusionRows = fusionResult?.rows ?? []
+  const activeTasks = taskFeed.filter((item) => item.status === 'running')
 
   return (
     <div className="page-shell">
@@ -222,25 +255,43 @@ function App() {
 
       {activeView === 'selection' ? (
         <section className="dashboard-grid workspace-grid single-col">
-          <SectionCard title="选股扫描" className="wide accent-card">
+          <SectionCard title="策略融合选股" subtitle="先设条件，再统一生成候选并计算融合结果" className="wide accent-card">
+            <p className="section-copy">
+              这里不是单独跑布林信号，而是先生成候选池，再做策略融合和排序。你要调的是价格区间、窗口和阈值，最后看的是融合后的结果。
+            </p>
             <div className="selection-form">
-              <input value={selectionParams.priceMin} type="number" min="1" step="1" onChange={(event) => setSelectionParams((prev) => ({ ...prev, priceMin: Number(event.target.value) }))} placeholder="最低价" />
-              <input value={selectionParams.priceMax} type="number" min="1" step="1" onChange={(event) => setSelectionParams((prev) => ({ ...prev, priceMax: Number(event.target.value) }))} placeholder="最高价" />
-              <input value={selectionParams.window} type="number" min="10" step="1" onChange={(event) => setSelectionParams((prev) => ({ ...prev, window: Number(event.target.value) }))} placeholder="窗口" />
-              <input value={selectionParams.k} type="number" min="1" step="0.001" onChange={(event) => setSelectionParams((prev) => ({ ...prev, k: Number(event.target.value) }))} placeholder="K" />
-              <input value={selectionParams.nearRatio} type="number" min="1" step="0.001" onChange={(event) => setSelectionParams((prev) => ({ ...prev, nearRatio: Number(event.target.value) }))} placeholder="接近下轨阈值" />
+              <Field label="最低价" hint="过滤太低价标的">
+                <input value={selectionParams.priceMin} type="number" min="1" step="1" onChange={(event) => setSelectionParams((prev) => ({ ...prev, priceMin: Number(event.target.value) }))} />
+              </Field>
+              <Field label="最高价" hint="控制候选池价格上限">
+                <input value={selectionParams.priceMax} type="number" min="1" step="1" onChange={(event) => setSelectionParams((prev) => ({ ...prev, priceMax: Number(event.target.value) }))} />
+              </Field>
+              <Field label="回看窗口" hint="越大越稳，越小越敏感">
+                <input value={selectionParams.window} type="number" min="10" step="1" onChange={(event) => setSelectionParams((prev) => ({ ...prev, window: Number(event.target.value) }))} />
+              </Field>
+              <Field label="标准差系数" hint="影响融合时的波动判定">
+                <input value={selectionParams.k} type="number" min="1" step="0.001" onChange={(event) => setSelectionParams((prev) => ({ ...prev, k: Number(event.target.value) }))} />
+              </Field>
+              <Field label="贴近阈值" hint="越接近说明越靠近触发区">
+                <input value={selectionParams.nearRatio} type="number" min="1" step="0.001" onChange={(event) => setSelectionParams((prev) => ({ ...prev, nearRatio: Number(event.target.value) }))} />
+              </Field>
               <button
                 type="button"
                 onClick={async () => {
+                  const taskId = createTask('策略融合', '正在获取候选池')
                   const params = new URLSearchParams({
                     price_min: String(selectionParams.priceMin),
                     price_max: String(selectionParams.priceMax),
                   })
                   const candidateResponse = await fetch(`/api/selection/candidates?${params.toString()}`)
-                  if (!candidateResponse.ok) return
+                  if (!candidateResponse.ok) {
+                    updateTask(taskId, { status: 'failed', detail: '候选池获取失败' })
+                    return
+                  }
                   const candidateData = await candidateResponse.json()
                   const codes = candidateData.codes ?? []
                   setCandidateCodes(codes)
+                  updateTask(taskId, { detail: `候选池已生成，数量 ${codes.length}` })
                   const scanResponse = await fetch('/api/selection/boll-scan', {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
@@ -251,24 +302,55 @@ function App() {
                       near_ratio: selectionParams.nearRatio,
                     }),
                   })
-                  if (scanResponse.ok) setSelectionScan(await scanResponse.json())
+                  if (!scanResponse.ok) {
+                    updateTask(taskId, { status: 'failed', detail: '策略融合计算失败' })
+                    return
+                  }
+                  setSelectionScan(await scanResponse.json())
+                  updateTask(taskId, { status: 'done', detail: '策略融合已完成' })
                 }}
               >
-                扫描布林信号
+                开始策略融合
               </button>
               <button
                 type="button"
                 onClick={async () => {
+                  const taskId = createTask('策略融合', '正在运行融合排序')
                   const response = await fetch('/api/selection/fusion', {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify({ total_capital: 100000, max_picks: 15 }),
                   })
-                  if (response.ok) setFusionResult(await response.json())
+                  if (!response.ok) {
+                    updateTask(taskId, { status: 'failed', detail: '融合排序失败' })
+                    return
+                  }
+                  setFusionResult(await response.json())
+                  updateTask(taskId, { status: 'done', detail: '融合排序已完成' })
                 }}
               >
-                运行策略融合
+                仅运行融合排序
               </button>
+            </div>
+
+            <div className="status-feed">
+              <div className="section-head feed-head">
+                <h3>运行中进程</h3>
+                <span>{activeTasks.length > 0 ? `当前 ${activeTasks.length} 个任务在处理` : '当前没有运行中的任务'}</span>
+              </div>
+              {taskFeed.length > 0 ? (
+                taskFeed.map((item) => (
+                  <div key={item.id} className={`status-item status-${item.status}`}>
+                    <div>
+                      <strong>{item.label}</strong>
+                      <span>{item.detail}</span>
+                    </div>
+                    <em>{item.status === 'running' ? '运行中' : item.status === 'done' ? '已完成' : '失败'}</em>
+                  </div>
+                ))
+              ) : (
+                <div className="empty-state">没有任务时，这里会显示正在跑的进程和最近一次执行结果。</div>
+              )}
             </div>
 
             {selectionRows.length > 0 ? (
