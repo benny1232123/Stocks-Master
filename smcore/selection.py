@@ -41,16 +41,20 @@ def scan_boll_batch(
     near_ratio: float = 1.015,
     days_back: int = 180,
     on_progress=None,
+    is_cancelled=None,
 ) -> pd.DataFrame:
     """Scan a batch of stocks for Bollinger signals.
 
     Args:
         on_progress: optional callback(index, total, code, status_msg) called per stock.
+        is_cancelled: optional callable() -> bool; if returns True the scan stops early.
     """
     results: list[dict[str, Any]] = []
     total = len(codes)
 
     for i, code in enumerate(codes):
+        if is_cancelled and is_cancelled():
+            break
         try:
             end_date = date.today()
             start_date = end_date - timedelta(days=days_back)

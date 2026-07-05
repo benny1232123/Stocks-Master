@@ -158,18 +158,25 @@ function App() {
   })
   const [error, setError] = useState('')
   const [scanLogs, setScanLogs] = useState([])
-  const [scanTaskId, setScanTaskId] = useState(null)
-  const [scanTaskStatus, setScanTaskStatus] = useState(null)
-  const [scanning, setScanning] = useState(false)
   const logContainerRef = useRef(null)
+
+  // Phase: null | 'candidates' | 'boll' | 'backtest' | 'fusion'
+  const [scanPhase, setScanPhase] = useState(null)
+  const [bollTaskId, setBollTaskId] = useState(null)
+  const [fusionTaskId, setFusionTaskId] = useState(null)
   const [btTaskId, setBtTaskId] = useState(null)
-  const [btTaskStatus, setBtTaskStatus] = useState(null)
-  const [btRunning, setBtRunning] = useState(false)
+  const [scanProgress, setScanProgress] = useState({ current: 0, total: 0 })
+
+  const isRunning = scanPhase !== null
+
+  async function cancelTask(taskId) {
+    if (!taskId) return
+    try { await fetch(`/api/selection/cancel-task/${taskId}`, { method: 'POST' }) } catch {}
+  }
 
   async function startBacktest(codes) {
     if (!codes || codes.length === 0) return
-    setBtRunning(true)
-    setBtTaskStatus('running')
+    setScanPhase('backtest')
     setScanLogs((prev) => [...prev, `选股完成，开始自动回测 ${codes.length} 只股票...`])
     try {
       const resp = await fetch('/api/backtests/run', {
@@ -177,41 +184,72 @@ function App() {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ codes, hold_days: 5, initial_capital: 100000, max_positions: 10 }),
       })
-      if (!resp.ok) { setBtRunning(false); setBtTaskStatus('error'); return }
+      if (!resp.ok) { setScanPhase(null); return }
       const { task_id } = await resp.json()
       setBtTaskId(task_id)
-    } catch { setBtRunning(false); setBtTaskStatus('error') }
+    } catch { setScanPhase(null) }
   }
 
+  // Poll boll-scan task
   useEffect(() => {
-    if (!scanTaskId || scanTaskStatus === 'done' || scanTaskStatus === 'error' || scanTaskStatus === 'not_found') return
+    if (!bollTaskId) return
+    let done = false
     const timer = setInterval(async () => {
       try {
-        const resp = await fetch(`/api/selection/task-logs/${scanTaskId}`)
+        const resp = await fetch(`/api/selection/task-logs/${bollTaskId}`)
         if (!resp.ok) return
         const data = await resp.json()
         setScanLogs(data.logs || [])
-        setScanTaskStatus(data.status)
-        if (data.status === 'done' || data.status === 'error') {
-          if (data.result) {
-            if (data.result.rows) {
+        // Parse progress from last log line
+        const last = (data.logs || []).slice(-1)[0] || ''
+        const m = last.match(/\[(\d+)\/(\d+)\]/)
+        if (m) setScanProgress({ current: Number(m[1]), total: Number(m[2]) })
+        if (data.status === 'done' || data.status === 'error' || data.status === 'cancelled') {
+          if (!done) {
+            done = true
+            if (data.status === 'done' && data.result?.rows) {
               setSelectionScan(data.result)
               const codes = data.result.rows.map((r) => r['代码']).filter(Boolean)
               if (codes.length > 0) startBacktest(codes)
+              else setScanPhase(null)
             } else {
-              setFusionResult(data.result)
+              setScanPhase(null)
             }
+            clearInterval(timer)
           }
-          setScanning(false)
-          clearInterval(timer)
         }
       } catch {}
     }, 500)
-    return () => clearInterval(timer)
-  }, [scanTaskId, scanTaskStatus])
+    return () => { done = true; clearInterval(timer) }
+  }, [bollTaskId])
 
+  // Poll fusion task
   useEffect(() => {
-    if (!btTaskId || btTaskStatus === 'done' || btTaskStatus === 'error' || btTaskStatus === 'not_found') return
+    if (!fusionTaskId) return
+    let done = false
+    const timer = setInterval(async () => {
+      try {
+        const resp = await fetch(`/api/selection/task-logs/${fusionTaskId}`)
+        if (!resp.ok) return
+        const data = await resp.json()
+        setScanLogs(data.logs || [])
+        if (data.status === 'done' || data.status === 'error' || data.status === 'cancelled') {
+          if (!done) {
+            done = true
+            if (data.status === 'done' && data.result) setFusionResult(data.result)
+            setScanPhase(null)
+            clearInterval(timer)
+          }
+        }
+      } catch {}
+    }, 500)
+    return () => { done = true; clearInterval(timer) }
+  }, [fusionTaskId])
+
+  // Poll backtest task
+  useEffect(() => {
+    if (!btTaskId) return
+    let done = false
     const timer = setInterval(async () => {
       try {
         const resp = await fetch(`/api/selection/task-logs/${btTaskId}`)
@@ -223,16 +261,18 @@ function App() {
             return newLogs.length > 0 ? [...prev, ...newLogs] : prev
           })
         }
-        setBtTaskStatus(data.status)
-        if (data.status === 'done' || data.status === 'error') {
-          if (data.result) { setBacktestRun(data.result); setScanLogs((prev) => [...prev, '回测完成，权益曲线已更新']) }
-          setBtRunning(false)
-          clearInterval(timer)
+        if (data.status === 'done' || data.status === 'error' || data.status === 'cancelled') {
+          if (!done) {
+            done = true
+            if (data.result) { setBacktestRun(data.result); setScanLogs((prev) => [...prev, '回测完成，权益曲线已更新']) }
+            setScanPhase(null)
+            clearInterval(timer)
+          }
         }
       } catch {}
     }, 500)
-    return () => clearInterval(timer)
-  }, [btTaskId, btTaskStatus])
+    return () => { done = true; clearInterval(timer) }
+  }, [btTaskId])
 
   useEffect(() => {
     if (logContainerRef.current) logContainerRef.current.scrollTop = logContainerRef.current.scrollHeight
@@ -383,33 +423,66 @@ function App() {
                     <input value={selectionParams.priceMax} type="number" min="1" step="1"
                       onChange={(e) => setSelectionParams((p) => ({ ...p, priceMax: Number(e.target.value) }))} />
                   </Field>
-                  <Button disabled={scanning} onClick={async () => {
-                    setScanning(true); setScanLogs([]); setSelectionScan(null); setFusionResult(null); setBacktestRun(null); setScanTaskStatus('running')
-                    const c = await fetch(`/api/selection/candidates?price_min=${selectionParams.priceMin}&price_max=${selectionParams.priceMax}`)
-                    if (!c.ok) { setScanning(false); return }
-                    const codes = (await c.json()).codes ?? []
-                    setCandidateCodes(codes)
-                    setScanLogs([`候选池 ${codes.length} 只，开始布林扫描...`])
-                    const s = await fetch('/api/selection/boll-scan', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ codes, window: 20, k: 1.645, near_ratio: 1.015 }) })
-                    if (!s.ok) { setScanning(false); return }
-                    setScanTaskId((await s.json()).task_id)
-                  }}>
-                    {scanning ? '扫描中...' : '开始策略融合'}
-                  </Button>
-                  <Button variant="secondary" disabled={scanning} onClick={async () => {
-                    setScanning(true); setScanLogs(['开始策略融合排序...']); setSelectionScan(null); setFusionResult(null); setBacktestRun(null); setScanTaskStatus('running')
-                    const r = await fetch('/api/selection/fusion', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ total_capital: 100000, max_picks: 15 }) })
-                    if (!r.ok) { setScanning(false); return }
-                    setScanTaskId((await r.json()).task_id)
-                  }}>
-                    {scanning ? '融合中...' : '仅运行融合排序'}
-                  </Button>
+
+                  <div className="button-row">
+                    <Button disabled={isRunning} onClick={async () => {
+                      setScanPhase('candidates'); setScanLogs([]); setSelectionScan(null); setFusionResult(null); setBacktestRun(null); setScanProgress({ current: 0, total: 0 })
+                      const c = await fetch(`/api/selection/candidates?price_min=${selectionParams.priceMin}&price_max=${selectionParams.priceMax}`)
+                      if (!c.ok) { setScanPhase(null); return }
+                      const codes = (await c.json()).codes ?? []
+                      setCandidateCodes(codes)
+                      setScanLogs([`候选池 ${codes.length} 只，开始布林扫描...`])
+                      setScanPhase('boll')
+                      const s = await fetch('/api/selection/boll-scan', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ codes, window: 20, k: 1.645, near_ratio: 1.015 }) })
+                      if (!s.ok) { setScanPhase(null); return }
+                      setBollTaskId((await s.json()).task_id)
+                    }}>
+                      {scanPhase === 'boll' || scanPhase === 'backtest' ? '扫描进行中...' : '开始扫描 + 回测'}
+                    </Button>
+                    {scanPhase === 'boll' ? (
+                      <Button variant="destructive" onClick={() => cancelTask(bollTaskId)}>停止</Button>
+                    ) : null}
+                  </div>
+
+                  <div className="button-row">
+                    <Button variant="secondary" disabled={isRunning} onClick={async () => {
+                      setScanPhase('fusion'); setScanLogs(['开始策略融合排序...']); setSelectionScan(null); setFusionResult(null); setBacktestRun(null); setScanProgress({ current: 0, total: 0 })
+                      const r = await fetch('/api/selection/fusion', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ total_capital: 100000, max_picks: 15 }) })
+                      if (!r.ok) { setScanPhase(null); return }
+                      setFusionTaskId((await r.json()).task_id)
+                    }}>
+                      {scanPhase === 'fusion' ? '融合进行中...' : '仅运行融合排序'}
+                    </Button>
+                    {scanPhase === 'fusion' ? (
+                      <Button variant="destructive" onClick={() => cancelTask(fusionTaskId)}>停止</Button>
+                    ) : null}
+                  </div>
                 </div>
+
+                {scanPhase && scanProgress.total > 0 ? (
+                  <div className="progress-bar-wrap">
+                    <div className="progress-bar-track">
+                      <div className="progress-bar-fill" style={{ width: `${(scanProgress.current / scanProgress.total) * 100}%` }} />
+                    </div>
+                    <span className="progress-bar-text">{scanProgress.current} / {scanProgress.total}</span>
+                  </div>
+                ) : null}
 
                 <div className="log-panel">
                   <div className="section-head log-head">
                     <h3>运行日志</h3>
-                    <span>{scanning ? '运行中' : btRunning ? '回测中' : scanTaskStatus === 'done' ? '已完成' : scanTaskStatus === 'error' ? '出错' : '等待执行'}</span>
+                    <span className={cn(
+                      'log-status',
+                      scanPhase === 'boll' && 'running',
+                      scanPhase === 'fusion' && 'running',
+                      scanPhase === 'backtest' && 'running',
+                    )}>
+                      {scanPhase === 'boll' ? '布林扫描中' :
+                       scanPhase === 'fusion' ? '策略融合中' :
+                       scanPhase === 'backtest' ? '回测中' :
+                       scanPhase === 'candidates' ? '获取候选...' :
+                       '等待执行'}
+                    </span>
                   </div>
                   <div className="log-body" ref={logContainerRef}>
                     {scanLogs.length > 0 ? scanLogs.map((line, idx) => (
@@ -417,7 +490,7 @@ function App() {
                         <span className="log-idx">{idx + 1}</span>
                         <span className="log-text">{line}</span>
                       </div>
-                    )) : <div className="empty-state">点击按钮后实时显示扫描进度</div>}
+                    )) : <div className="empty-state">点击按钮后实时显示运行进度</div>}
                   </div>
                 </div>
 
@@ -449,10 +522,24 @@ function App() {
               </SectionCard>
 
               <SectionCard title="候选池" className="glass-card">
-                <div className="artifact-box">
-                  <div className="artifact-name">候选数量 {candidateCodes.length}</div>
-                  <div className="artifact-path">展示前 20 个</div>
-                  <div className="artifact-count">{candidateCodes.slice(0, 20).join(' · ') || '暂无候选'}</div>
+                <div className="candidate-pool">
+                  <div className="candidate-count">
+                    <span className="candidate-count-num">{candidateCodes.length}</span>
+                    <span className="candidate-count-label">只股票</span>
+                  </div>
+                  {candidateCodes.length > 0 ? (
+                    <div className="candidate-tags">
+                      {candidateCodes.slice(0, 20).map((code) => (
+                        <span key={code} className="candidate-tag">{code}</span>
+                      ))}
+                      {candidateCodes.length > 20 && (
+                        <span className="candidate-tag candidate-tag-more">+{candidateCodes.length - 20}</span>
+                      )}
+                    </div>
+                  ) : (
+                    <div className="empty-state">暂无候选</div>
+                  )}
+                  <div className="candidate-footer">展示前 20 个</div>
                 </div>
               </SectionCard>
             </div>
@@ -594,7 +681,7 @@ function App() {
                 </>
               ) : (
                 <div className="empty-state">
-                  {btRunning ? '正在回测中...' : '在「选股」页点击开始后，回测将自动运行并显示在此处'}
+                  {scanPhase === 'backtest' ? '正在回测中...' : '在「选股」页点击开始后，回测将自动运行并显示在此处'}
                 </div>
               )}
             </SectionCard>

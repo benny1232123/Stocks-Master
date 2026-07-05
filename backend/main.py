@@ -59,9 +59,16 @@ def _new_task(task_type: str) -> str:
             "status": "running",
             "logs": [],
             "result": None,
+            "cancelled": False,
             "started_at": time.time(),
         }
     return task_id
+
+
+def _is_cancelled(task_id: str) -> bool:
+    with _tasks_lock:
+        t = _tasks.get(task_id)
+        return t is not None and t.get("cancelled", False)
 
 
 def _append_log(task_id: str, msg: str) -> None:
@@ -255,11 +262,18 @@ def selection_boll_scan(payload: dict) -> dict:
         def on_progress(idx, total, code, msg):
             _append_log(task_id, f"[{idx}/{total}] {code} {msg}")
         try:
-            result = scan_boll_batch(codes, window=window, k=k, near_ratio=near_ratio, days_back=days_back, on_progress=on_progress)
+            result = scan_boll_batch(
+                codes, window=window, k=k, near_ratio=near_ratio,
+                days_back=days_back, on_progress=on_progress,
+                is_cancelled=lambda: _is_cancelled(task_id),
+            )
+            if _is_cancelled(task_id):
+                return
             _append_log(task_id, f"扫描完成，命中 {len(result)} 只")
             _finish_task(task_id, result={"count": int(len(result)), "rows": result.to_dict(orient="records")})
         except Exception as e:
-            _finish_task(task_id, error=str(e))
+            if not _is_cancelled(task_id):
+                _finish_task(task_id, error=str(e))
 
     threading.Thread(target=_run, daemon=True).start()
     return {"task_id": task_id}
@@ -272,6 +286,20 @@ def selection_task_logs(task_id: str) -> dict:
     if t is None:
         return {"status": "not_found", "logs": [], "result": None}
     return {"status": t["status"], "logs": t["logs"], "result": t.get("result")}
+
+
+@app.post("/api/selection/cancel-task/{task_id}")
+def selection_cancel_task(task_id: str) -> dict:
+    with _tasks_lock:
+        t = _tasks.get(task_id)
+        if t is None:
+            return {"ok": False, "error": "task not found"}
+        if t["status"] != "running":
+            return {"ok": False, "error": f"task already {t['status']}"}
+        t["cancelled"] = True
+        t["status"] = "cancelled"
+        t["logs"].append("[系统] 用户取消任务")
+    return {"ok": True}
 
 
 @app.post("/api/selection/fusion")

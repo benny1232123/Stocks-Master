@@ -374,15 +374,140 @@
   font-size: 0.85rem;
 }
 
+/* ---- Field card (label wrapper) ---- */
+.field-card {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 14px 16px;
+  border-radius: 12px;
+  background: hsl(var(--card) / 0.45);
+  border: 1px solid hsl(var(--border));
+  transition: all 0.2s;
+}
+
+.field-card:hover {
+  background: hsl(var(--card) / 0.6);
+  border-color: hsl(var(--primary) / 0.25);
+}
+
+.field-card:focus-within {
+  border-color: hsl(var(--primary) / 0.5);
+  box-shadow: 0 0 0 2px hsl(var(--primary) / 0.1);
+}
+
+.field-label {
+  font-size: 0.78rem;
+  font-weight: 500;
+  color: hsl(var(--muted));
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+.field-card input,
+.field-card select {
+  width: 100%;
+  height: 38px;
+  padding: 0 12px;
+  border-radius: 8px;
+  border: 1px solid hsl(var(--border));
+  background: hsl(var(--background) / 0.6);
+  color: hsl(var(--foreground));
+  font-size: 0.92rem;
+  transition: all 0.2s;
+}
+
+.field-card input:focus,
+.field-card select:focus {
+  outline: none;
+  border-color: hsl(var(--primary) / 0.5);
+  box-shadow: 0 0 0 2px hsl(var(--primary) / 0.1);
+  background: hsl(var(--background) / 0.8);
+}
+
+.field-card input::placeholder {
+  color: hsl(var(--muted-foreground));
+}
+
+.field-hint {
+  font-size: 0.72rem;
+  color: hsl(var(--muted-foreground));
+}
+
 /* ---- Selection form ---- */
 .selection-form {
   display: grid;
-  grid-template-columns: repeat(2, 1fr);
+  grid-template-columns: 1fr 1fr;
   gap: 12px;
 }
 
-.selection-form button {
-  grid-column: 1 / -1;
+.button-row {
+  display: flex;
+  gap: 8px;
+}
+
+.button-row button {
+  flex: 1;
+  height: 42px;
+  font-size: 0.92rem;
+}
+
+.button-row button:last-child:not(:first-child) {
+  flex: 0 0 auto;
+  min-width: 72px;
+}
+
+/* ---- Progress bar ---- */
+.progress-bar-wrap {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin: 14px 0 4px;
+}
+
+.progress-bar-track {
+  flex: 1;
+  height: 6px;
+  border-radius: 3px;
+  background: hsl(var(--background) / 0.6);
+  border: 1px solid hsl(var(--border));
+  overflow: hidden;
+}
+
+.progress-bar-fill {
+  height: 100%;
+  border-radius: 3px;
+  background: linear-gradient(90deg, hsl(var(--primary) / 0.7), hsl(var(--primary)));
+  transition: width 0.3s ease;
+}
+
+.progress-bar-text {
+  font-size: 0.78rem;
+  font-family: "Cascadia Code", "Fira Code", monospace;
+  color: hsl(var(--muted));
+  white-space: nowrap;
+  min-width: 60px;
+  text-align: right;
+}
+
+/* ---- Log status badge ---- */
+.log-status {
+  font-size: 0.78rem;
+  padding: 2px 8px;
+  border-radius: 6px;
+  background: hsl(var(--card) / 0.5);
+  color: hsl(var(--muted));
+}
+
+.log-status.running {
+  background: hsl(var(--primary) / 0.12);
+  color: hsl(var(--primary));
+  animation: pulse 1.5s ease-in-out infinite;
+}
+
+@keyframes pulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.6; }
 }
 
 /* ---- Trade form ---- */
@@ -518,6 +643,69 @@
   gap: 10px;
   flex-wrap: wrap;
   margin-top: 12px;
+}
+
+/* ---- Candidate pool ---- */
+.candidate-pool {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+
+.candidate-count {
+  display: flex;
+  align-items: baseline;
+  gap: 6px;
+}
+
+.candidate-count-num {
+  font-size: 2rem;
+  font-weight: 700;
+  color: hsl(var(--primary));
+  line-height: 1;
+}
+
+.candidate-count-label {
+  font-size: 0.85rem;
+  color: hsl(var(--muted));
+}
+
+.candidate-tags {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.candidate-tag {
+  display: inline-block;
+  padding: 4px 10px;
+  border-radius: 6px;
+  background: hsl(var(--card) / 0.5);
+  border: 1px solid hsl(var(--border));
+  font-size: 0.78rem;
+  font-family: "Cascadia Code", "Fira Code", monospace;
+  color: hsl(var(--muted));
+  transition: all 0.15s;
+}
+
+.candidate-tag:hover {
+  background: hsl(var(--primary) / 0.12);
+  border-color: hsl(var(--primary) / 0.3);
+  color: hsl(var(--primary));
+}
+
+.candidate-tag-more {
+  background: hsl(var(--primary) / 0.08);
+  border-color: hsl(var(--primary) / 0.2);
+  color: hsl(var(--primary));
+  font-weight: 500;
+}
+
+.candidate-footer {
+  font-size: 0.72rem;
+  color: hsl(var(--muted-foreground));
+  padding-top: 8px;
+  border-top: 1px solid hsl(var(--border));
 }
 
 /* ---- Inline action ---- */
