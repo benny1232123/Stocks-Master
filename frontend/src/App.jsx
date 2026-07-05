@@ -1,26 +1,10 @@
 import { useEffect, useState } from 'react'
 
-const FEATURE_CARDS = [
-  {
-    title: '看板',
-    desc: '指数、涨跌家数、宏观指标统一展示',
-  },
-  {
-    title: '选股',
-    desc: '后续接入布林带扫描与多策略融合',
-  },
-  {
-    title: '分析',
-    desc: '后续接入个股 K 线、指标和信号面板',
-  },
-  {
-    title: '持仓',
-    desc: '后续接入交易录入与 FIFO 盈亏追踪',
-  },
-  {
-    title: '回测',
-    desc: '后续接入历史信号回测与绩效摘要',
-  },
+const QUICK_START = [
+  '1. 先看看板和最新日报',
+  '2. 再跑选股扫描或策略融合',
+  '3. 用代码进入个股分析',
+  '4. 录入交易后看持仓与回测',
 ]
 
 function StatCard({ label, value }) {
@@ -138,25 +122,24 @@ function App() {
       <header className="hero">
         <div className="hero-copy">
           <p className="eyebrow">Stocks-Master</p>
-          <h1>更快的 A 股选股与持仓工作台</h1>
-          <p className="hero-text">
-            这是 React + FastAPI 的新前端骨架，先替换 Streamlit 的重型会话模型，再逐步接回策略、分析和回测能力。
-          </p>
+          <h1>选股、分析、持仓、回测，放在一页里</h1>
+          <p className="hero-text">这是一个单服务 React + FastAPI 工作台。左边看结果，右边做操作；先用看板和最新日报定位方向，再进入选股、分析、持仓和回测。</p>
+          <div className="quick-start">
+            {QUICK_START.map((item) => (
+              <span key={item}>{item}</span>
+            ))}
+          </div>
         </div>
         <div className="hero-panel">
-          <div className="panel-title">API 状态</div>
+          <div className="panel-title">当前状态</div>
           <div className="panel-value">{error ? '连接失败' : '已连接'}</div>
-          <div className="panel-meta">{dashboard ? `生成于 ${dashboard.generated_at}` : '等待数据加载'}</div>
+          <div className="panel-meta">{dashboard ? `更新时间 ${dashboard.generated_at}` : '等待数据加载'}</div>
         </div>
       </header>
 
-      <section className="feature-grid">
-        {FEATURE_CARDS.map((card) => (
-          <article key={card.title} className="feature-card">
-            <h2>{card.title}</h2>
-            <p>{card.desc}</p>
-          </article>
-        ))}
+      <section className="section-intro">
+        <h2>首页概览</h2>
+        <p>页面上的空状态表示“当前还没跑出结果”，不是功能缺失。先跑选股或录入交易，下面的结果卡片会自动变成有内容。</p>
       </section>
 
       <section className="dashboard-grid">
@@ -175,7 +158,7 @@ function App() {
                 </div>
               ))
             ) : (
-              <div className="empty-state">暂无指数数据</div>
+              <div className="empty-state">暂无指数数据，可能是缓存未预热或行情接口暂时不可用</div>
             )}
           </div>
         </div>
@@ -191,7 +174,7 @@ function App() {
               <div className="artifact-count">预览行数 {actionPreview.length}</div>
             </div>
           ) : (
-            <div className="empty-state">暂无日报文件</div>
+            <div className="empty-state">暂无日报文件，先跑一次选股或检查 stock_data 目录</div>
           )}
         </div>
 
@@ -221,7 +204,7 @@ function App() {
               ))}
             </div>
           ) : (
-            <div className="empty-state">暂无持仓记录</div>
+            <div className="empty-state">还没有持仓记录，先在左侧录入一笔交易</div>
           )}
         </div>
 
@@ -363,7 +346,7 @@ function App() {
               <StatCard label="距下轨%" value={analysis?.metrics?.dist_to_lower_pct ?? '--'} />
             </div>
           ) : (
-            <div className="empty-state">暂无分析数据</div>
+            <div className="empty-state">输入股票代码后点击「加载分析」</div>
           )}
         </div>
 
@@ -471,7 +454,7 @@ function App() {
               ))}
             </div>
           ) : (
-            <div className="empty-state">暂无扫描结果</div>
+            <div className="empty-state">先选参数，再点「扫描布林信号」</div>
           )}
 
           {fusionRows.length > 0 ? (
