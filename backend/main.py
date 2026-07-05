@@ -4,11 +4,14 @@ from __future__ import annotations
 import os
 import sys
 import threading
+import time
+import uuid
+from datetime import date
 from pathlib import Path
 
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -42,6 +45,40 @@ if FRONTEND_DIST.exists():
     assets_dir = FRONTEND_DIST / "assets"
     if assets_dir.exists():
         app.mount("/assets", StaticFiles(directory=assets_dir), name="assets")
+
+
+_tasks_lock = threading.Lock()
+_tasks: dict[str, dict] = {}
+
+
+def _new_task(task_type: str) -> str:
+    task_id = uuid.uuid4().hex[:12]
+    with _tasks_lock:
+        _tasks[task_id] = {
+            "type": task_type,
+            "status": "running",
+            "logs": [],
+            "result": None,
+            "started_at": time.time(),
+        }
+    return task_id
+
+
+def _append_log(task_id: str, msg: str) -> None:
+    with _tasks_lock:
+        t = _tasks.get(task_id)
+        if t is not None:
+            t["logs"].append(msg)
+
+
+def _finish_task(task_id: str, result=None, error: str | None = None) -> None:
+    with _tasks_lock:
+        t = _tasks.get(task_id)
+        if t is not None:
+            t["status"] = "error" if error else "done"
+            t["result"] = result
+            if error:
+                t["logs"].append(f"[错误] {error}")
 
 
 @app.get("/")
@@ -152,6 +189,44 @@ def run_latest_backtest(payload: dict | None = None) -> dict:
     }
 
 
+@app.post("/api/backtests/run")
+def run_backtest(payload: dict) -> dict:
+    codes = payload.get("codes") or []
+    signal_date = payload.get("date") or date.today().strftime("%Y%m%d")
+    if isinstance(codes, str):
+        codes = [c.strip() for c in codes.replace("\n", ",").split(",") if c.strip()]
+    if not codes:
+        return {"summary": {"error": "未提供股票代码"}}
+
+    import pandas as pd
+    signals = pd.DataFrame({"日期": [signal_date] * len(codes), "代码": codes})
+
+    task_id = _new_task("backtest")
+    _append_log(task_id, f"开始回测，共 {len(codes)} 只股票")
+
+    def _run():
+        try:
+            _append_log(task_id, "正在拉取K线并模拟交易...")
+            result = run_signal_backtest(
+                signals,
+                hold_days=int(payload.get("hold_days", 5)),
+                initial_capital=float(payload.get("initial_capital", 100000)),
+                max_positions=int(payload.get("max_positions", 10)),
+                slippage=float(payload.get("slippage", 0.001)),
+            )
+            _append_log(task_id, f"回测完成：{result.summary.get('num_trades', 0)} 笔交易")
+            _finish_task(task_id, result={
+                "summary": result.summary,
+                "equity": result.equity.to_dict(orient="records"),
+                "trades": result.trades.to_dict(orient="records"),
+            })
+        except Exception as e:
+            _finish_task(task_id, error=str(e))
+
+    threading.Thread(target=_run, daemon=True).start()
+    return {"task_id": task_id}
+
+
 @app.get("/api/analysis/{code}")
 def analysis(code: str, window: int = 20, k: float = 1.645, days_back: int = 180) -> dict:
     return build_stock_analysis(code, window=window, k=k, days_back=days_back)
@@ -173,25 +248,61 @@ def selection_boll_scan(payload: dict) -> dict:
     near_ratio = float(payload.get("near_ratio", 1.015))
     days_back = int(payload.get("days_back", 180))
 
+    task_id = _new_task("boll-scan")
+    _append_log(task_id, f"开始布林扫描，共 {len(codes)} 只股票")
 
-    @app.get("/{path:path}")
-    def spa_fallback(path: str) -> FileResponse:
-        if FRONTEND_DIST.exists():
-            index_file = FRONTEND_DIST / "index.html"
-            if index_file.exists():
-                return FileResponse(index_file)
-        return FileResponse(ROOT / "Readme.md")
-    result = scan_boll_batch(codes, window=window, k=k, near_ratio=near_ratio, days_back=days_back)
-    return {"count": int(len(result)), "rows": result.to_dict(orient="records")}
+    def _run():
+        def on_progress(idx, total, code, msg):
+            _append_log(task_id, f"[{idx}/{total}] {code} {msg}")
+        try:
+            result = scan_boll_batch(codes, window=window, k=k, near_ratio=near_ratio, days_back=days_back, on_progress=on_progress)
+            _append_log(task_id, f"扫描完成，命中 {len(result)} 只")
+            _finish_task(task_id, result={"count": int(len(result)), "rows": result.to_dict(orient="records")})
+        except Exception as e:
+            _finish_task(task_id, error=str(e))
+
+    threading.Thread(target=_run, daemon=True).start()
+    return {"task_id": task_id}
+
+
+@app.get("/api/selection/task-logs/{task_id}")
+def selection_task_logs(task_id: str) -> dict:
+    with _tasks_lock:
+        t = _tasks.get(task_id)
+    if t is None:
+        return {"status": "not_found", "logs": [], "result": None}
+    return {"status": t["status"], "logs": t["logs"], "result": t.get("result")}
 
 
 @app.post("/api/selection/fusion")
 def selection_fusion(payload: dict) -> dict:
-    return run_strategy_fusion(
-        date_yyyymmdd=payload.get("date"),
-        total_capital=float(payload.get("total_capital", 100000.0)),
-        max_picks=int(payload.get("max_picks", 15)),
-    )
+    task_id = _new_task("fusion")
+    _append_log(task_id, "开始策略融合")
+
+    def _run():
+        try:
+            _append_log(task_id, "加载四策略 CSV ...")
+            result = run_strategy_fusion(
+                date_yyyymmdd=payload.get("date"),
+                total_capital=float(payload.get("total_capital", 100000.0)),
+                max_picks=int(payload.get("max_picks", 15)),
+            )
+            _append_log(task_id, f"融合完成，命中 {result.get('count', 0)} 只")
+            _finish_task(task_id, result=result)
+        except Exception as e:
+            _finish_task(task_id, error=str(e))
+
+    threading.Thread(target=_run, daemon=True).start()
+    return {"task_id": task_id}
+
+
+@app.get("/{path:path}")
+def spa_fallback(path: str) -> FileResponse:
+    if FRONTEND_DIST.exists():
+        index_file = FRONTEND_DIST / "index.html"
+        if index_file.exists():
+            return FileResponse(index_file)
+    return FileResponse(ROOT / "Readme.md")
 
 
 if __name__ == "__main__":

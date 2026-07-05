@@ -40,19 +40,30 @@ def scan_boll_batch(
     k: float = 1.645,
     near_ratio: float = 1.015,
     days_back: int = 180,
+    on_progress=None,
 ) -> pd.DataFrame:
-    """Scan a batch of stocks for Bollinger signals."""
-    results: list[dict[str, Any]] = []
+    """Scan a batch of stocks for Bollinger signals.
 
-    for code in codes:
+    Args:
+        on_progress: optional callback(index, total, code, status_msg) called per stock.
+    """
+    results: list[dict[str, Any]] = []
+    total = len(codes)
+
+    for i, code in enumerate(codes):
         try:
             end_date = date.today()
             start_date = end_date - timedelta(days=days_back)
             kdf = fetch_daily_k(code, start_date, end_date)
             if kdf.empty or len(kdf) < window:
+                if on_progress:
+                    on_progress(i + 1, total, code, "数据不足，跳过")
                 continue
             kdf = calc_bollinger(kdf, window=window, k=k)
             sig = evaluate_boll_signal(kdf, near_ratio=near_ratio)
+            signal_type = sig.get("signal_type", "neutral")
+            if on_progress:
+                on_progress(i + 1, total, code, f"信号: {signal_type}")
             results.append(
                 {
                     "代码": code,
@@ -66,6 +77,8 @@ def scan_boll_batch(
                 }
             )
         except Exception:
+            if on_progress:
+                on_progress(i + 1, total, code, "异常跳过")
             continue
 
     if not results:
