@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import os
 import sys
+import threading
 from pathlib import Path
 
 from fastapi import FastAPI
@@ -55,6 +56,17 @@ def root():
 @app.get("/health")
 def health() -> dict[str, str]:
     return {"status": "ok"}
+
+
+@app.on_event("startup")
+def warm_dashboard_cache() -> None:
+    def _worker() -> None:
+        try:
+            prewarm_dashboard_cache()
+        except Exception:
+            pass
+
+    threading.Thread(target=_worker, daemon=True).start()
 
 
 @app.get("/api/dashboard")

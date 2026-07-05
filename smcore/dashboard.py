@@ -26,6 +26,19 @@ def configure_runtime() -> None:
     os.environ.setdefault("KLINE_BACKEND", "akshare")
 
 
+def _load_cache(key: str) -> Any:
+    """Load a dated cache file if it exists."""
+    today = date.today().strftime("%Y-%m-%d")
+    path = CACHE_DIR / f"{key}_{today}.pkl"
+    if not path.exists():
+        return None
+    try:
+        with open(path, "rb") as file_handle:
+            return pickle.load(file_handle)
+    except Exception:
+        return None
+
+
 def fetch_index_snapshot() -> pd.DataFrame:
     """Fetch the latest index snapshot from the Sina HTTP source."""
     from smcore.data.quote_sina import fetch_sina_index_quotes
@@ -105,14 +118,17 @@ def build_dashboard_payload() -> dict[str, Any]:
     """Build a JSON-friendly dashboard payload for the frontend."""
     payload: dict[str, Any] = {"generated_at": datetime.now().isoformat(timespec="seconds")}
 
-    index_snapshot = fetch_index_snapshot()
-    if not index_snapshot.empty:
-        payload["index_snapshot"] = index_snapshot.to_dict(orient="records")
+    cached_index = _load_cache("index_snapshot")
+    if isinstance(cached_index, pd.DataFrame) and not cached_index.empty:
+        payload["index_snapshot"] = cached_index.to_dict(orient="records")
     else:
         payload["index_snapshot"] = []
 
-    payload["market_breadth"] = fetch_market_breadth() or {}
-    payload["macro_snapshot"] = fetch_macro_snapshot() or {}
+    cached_breadth = _load_cache("market_breadth")
+    payload["market_breadth"] = cached_breadth if isinstance(cached_breadth, dict) else {}
+
+    cached_macro = _load_cache("macro_snapshot")
+    payload["macro_snapshot"] = cached_macro if isinstance(cached_macro, dict) else {}
     return payload
 
 
