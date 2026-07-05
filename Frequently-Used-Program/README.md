@@ -25,7 +25,7 @@
 - cleanup_stock_data.py：清理 stock_data 历史文件
 - compress_stock_data.py：把 auto_logs / plots / ui_uploads / checkpoints 打成 zip 并删除旧文件
 - test_cctv_sectors_strategy.py：CCTV 策略测试脚本
-- boll-visualizer/：可选 Streamlit 可视化界面
+- boll-visualizer/：旧的 Streamlit 可视化界面，已被根目录 React + FastAPI 前端替代，当前仅保留历史参考
 - update：更新辅助脚本
 - strategy_common.py：共享工具层（代码标准化、检查点读写、结果合并）
 
