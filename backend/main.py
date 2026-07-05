@@ -6,21 +6,20 @@ import sys
 import threading
 import time
 import uuid
+from contextlib import asynccontextmanager
 from datetime import date
 from pathlib import Path
 
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import FileResponse, StreamingResponse
+from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 
 ROOT = Path(__file__).resolve().parent.parent
 FRONTEND_DIST = ROOT / "frontend" / "dist"
-VIZ_SRC = ROOT / "Frequently-Used-Program" / "boll-visualizer" / "src"
 
-for candidate in [str(ROOT), str(VIZ_SRC)]:
-    if candidate not in sys.path:
-        sys.path.insert(0, candidate)
+if str(ROOT) not in sys.path:
+    sys.path.insert(0, str(ROOT))
 
 os.environ.setdefault("KLINE_BACKEND", "akshare")
 
@@ -31,7 +30,14 @@ from smcore.dashboard import build_dashboard_payload, prewarm_dashboard_cache
 from smcore.holdings import add_trade, clear_trades, portfolio_snapshot
 from smcore.selection import get_candidate_codes, run_strategy_fusion, scan_boll_batch
 
-app = FastAPI(title="Stocks-Master API", version="0.1.0")
+@asynccontextmanager
+async def lifespan(_app: FastAPI):
+    threading.Thread(target=prewarm_dashboard_cache, daemon=True).start()
+    threading.Thread(target=_periodic_sweep, daemon=True).start()
+    yield
+
+
+app = FastAPI(title="Stocks-Master API", version="0.1.0", lifespan=lifespan)
 
 app.add_middleware(
     CORSMiddleware,
@@ -49,6 +55,29 @@ if FRONTEND_DIST.exists():
 
 _tasks_lock = threading.Lock()
 _tasks: dict[str, dict] = {}
+_TASK_TTL = 1800  # 30 minutes
+
+
+def _sweep_tasks() -> None:
+    """Remove completed tasks older than _TASK_TTL to prevent memory leak."""
+    now = time.time()
+    with _tasks_lock:
+        expired = [
+            tid for tid, t in _tasks.items()
+            if t["status"] != "running" and (now - t.get("started_at", now)) > _TASK_TTL
+        ]
+        for tid in expired:
+            del _tasks[tid]
+
+
+def _periodic_sweep() -> None:
+    """Background thread that sweeps stale tasks every 5 minutes."""
+    while True:
+        time.sleep(300)
+        try:
+            _sweep_tasks()
+        except Exception:
+            pass
 
 
 def _new_task(task_type: str) -> str:
@@ -102,17 +131,6 @@ def health() -> dict[str, str]:
     return {"status": "ok"}
 
 
-@app.on_event("startup")
-def warm_dashboard_cache() -> None:
-    def _worker() -> None:
-        try:
-            prewarm_dashboard_cache()
-        except Exception:
-            pass
-
-    threading.Thread(target=_worker, daemon=True).start()
-
-
 @app.get("/api/dashboard")
 def dashboard() -> dict:
     return build_dashboard_payload()
@@ -139,14 +157,28 @@ def portfolio() -> dict:
 
 @app.post("/api/trades")
 def create_trade(payload: dict) -> dict:
+    code = str(payload.get("code", "")).strip()
+    if not code:
+        return JSONResponse({"error": "股票代码不能为空"}, status_code=400)
+    try:
+        price = float(payload.get("price", 0))
+        qty = int(payload.get("qty", 0))
+        fee = float(payload.get("fee", 0))
+    except (TypeError, ValueError):
+        return JSONResponse({"error": "价格/数量/手续费格式无效"}, status_code=400)
+    if price < 0 or qty <= 0 or fee < 0:
+        return JSONResponse({"error": "价格不能为负，数量必须大于0"}, status_code=400)
+    side = payload.get("side", "buy")
+    if side not in ("buy", "sell"):
+        side = "buy"
     trade = {
-        "date": payload.get("date"),
-        "code": str(payload.get("code", "")).strip(),
-        "name": str(payload.get("name", "")).strip() or str(payload.get("code", "")).strip(),
-        "side": payload.get("side", "buy"),
-        "price": float(payload.get("price", 0)),
-        "qty": int(payload.get("qty", 0)),
-        "fee": float(payload.get("fee", 0)),
+        "date": payload.get("date") or date.today().isoformat(),
+        "code": code,
+        "name": str(payload.get("name", "")).strip() or code,
+        "side": side,
+        "price": price,
+        "qty": qty,
+        "fee": fee,
         "notes": str(payload.get("notes", "")),
     }
     trades = add_trade(trade)
@@ -204,6 +236,7 @@ def run_backtest(payload: dict) -> dict:
         codes = [c.strip() for c in codes.replace("\n", ",").split(",") if c.strip()]
     if not codes:
         return {"summary": {"error": "未提供股票代码"}}
+    codes = codes[:3000]
 
     import pandas as pd
     signals = pd.DataFrame({"日期": [signal_date] * len(codes), "代码": codes})
@@ -250,6 +283,7 @@ def selection_boll_scan(payload: dict) -> dict:
     codes = payload.get("codes") or []
     if isinstance(codes, str):
         codes = [item.strip() for item in codes.replace("\n", ",").replace(" ", ",").split(",") if item.strip()]
+    codes = codes[:3000]
     window = int(payload.get("window", 20))
     k = float(payload.get("k", 1.645))
     near_ratio = float(payload.get("near_ratio", 1.015))
@@ -283,9 +317,10 @@ def selection_boll_scan(payload: dict) -> dict:
 def selection_task_logs(task_id: str) -> dict:
     with _tasks_lock:
         t = _tasks.get(task_id)
-    if t is None:
-        return {"status": "not_found", "logs": [], "result": None}
-    return {"status": t["status"], "logs": t["logs"], "result": t.get("result")}
+        if t is None:
+            return {"status": "not_found", "logs": [], "result": None}
+        snapshot = {"status": t["status"], "logs": list(t["logs"]), "result": t.get("result")}
+    return snapshot
 
 
 @app.post("/api/selection/cancel-task/{task_id}")
@@ -325,12 +360,12 @@ def selection_fusion(payload: dict) -> dict:
 
 
 @app.get("/{path:path}")
-def spa_fallback(path: str) -> FileResponse:
+def spa_fallback(path: str):
     if FRONTEND_DIST.exists():
         index_file = FRONTEND_DIST / "index.html"
         if index_file.exists():
             return FileResponse(index_file)
-    return FileResponse(ROOT / "Readme.md")
+    return JSONResponse({"error": "not found"}, status_code=404)
 
 
 if __name__ == "__main__":

@@ -550,10 +550,6 @@
   gap: 8px;
 }
 
-.metric-stack.top-gap {
-  margin-top: 16px;
-}
-
 /* ---- Artifact box ---- */
 .artifact-box {
   padding: 14px;
@@ -606,23 +602,6 @@
   color: hsl(var(--muted));
 }
 
-/* ---- Section copy ---- */
-.section-copy {
-  margin: 0 0 14px;
-  font-size: 0.85rem;
-  color: hsl(var(--muted));
-  padding-left: 12px;
-  border-left: 3px solid hsl(var(--primary) / 0.3);
-}
-
-/* ---- Compact grid ---- */
-.compact-grid {
-  display: grid;
-  grid-template-columns: repeat(3, 1fr);
-  gap: 10px;
-  margin-top: 14px;
-}
-
 /* ---- Analysis grid ---- */
 .analysis-grid {
   display: grid;
@@ -635,14 +614,6 @@
 .analysis-form {
   display: flex;
   gap: 10px;
-}
-
-/* ---- Hero panel (overview header stats) ---- */
-.hero-stats {
-  display: flex;
-  gap: 10px;
-  flex-wrap: wrap;
-  margin-top: 12px;
 }
 
 /* ---- Candidate pool ---- */
@@ -708,11 +679,6 @@
   border-top: 1px solid hsl(var(--border));
 }
 
-/* ---- Inline action ---- */
-.inline-action {
-  margin-top: 12px;
-}
-
 /* ---- Responsive ---- */
 @media (max-width: 900px) {
   .sidebar {
@@ -738,10 +704,6 @@
 
   .selection-form,
   .trade-form {
-    grid-template-columns: 1fr;
-  }
-
-  .compact-grid {
     grid-template-columns: 1fr;
   }
 

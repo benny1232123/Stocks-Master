@@ -5,9 +5,6 @@ import {
   LineChart,
   Briefcase,
   FlaskConical,
-  Activity,
-  TrendingUp,
-  TrendingDown,
   ArrowUpRight,
   ArrowDownRight,
 } from 'lucide-react'
@@ -171,7 +168,10 @@ function App() {
 
   async function cancelTask(taskId) {
     if (!taskId) return
-    try { await fetch(`/api/selection/cancel-task/${taskId}`, { method: 'POST' }) } catch {}
+    try {
+      const r = await fetch(`/api/selection/cancel-task/${taskId}`, { method: 'POST' })
+      if (!r.ok) setError('取消任务失败')
+    } catch { setError('取消请求失败') }
   }
 
   async function startBacktest(codes) {
@@ -184,23 +184,24 @@ function App() {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ codes, hold_days: 5, initial_capital: 100000, max_positions: 10 }),
       })
-      if (!resp.ok) { setScanPhase(null); return }
+      if (!resp.ok) { setScanPhase(null); setError('回测请求失败'); return }
       const { task_id } = await resp.json()
       setBtTaskId(task_id)
-    } catch { setScanPhase(null) }
+    } catch { setScanPhase(null); setError('回测启动失败') }
   }
 
   // Poll boll-scan task
   useEffect(() => {
     if (!bollTaskId) return
     let done = false
+    const controller = new AbortController()
     const timer = setInterval(async () => {
+      if (done) return
       try {
-        const resp = await fetch(`/api/selection/task-logs/${bollTaskId}`)
+        const resp = await fetch(`/api/selection/task-logs/${bollTaskId}`, { signal: controller.signal })
         if (!resp.ok) return
         const data = await resp.json()
         setScanLogs(data.logs || [])
-        // Parse progress from last log line
         const last = (data.logs || []).slice(-1)[0] || ''
         const m = last.match(/\[(\d+)\/(\d+)\]/)
         if (m) setScanProgress({ current: Number(m[1]), total: Number(m[2]) })
@@ -218,18 +219,27 @@ function App() {
             clearInterval(timer)
           }
         }
-      } catch {}
+      } catch (e) {
+        if (!done && e.name !== 'AbortError') {
+          done = true
+          setScanPhase(null)
+          setError('布林扫描轮询失败')
+          clearInterval(timer)
+        }
+      }
     }, 500)
-    return () => { done = true; clearInterval(timer) }
+    return () => { done = true; controller.abort(); clearInterval(timer) }
   }, [bollTaskId])
 
   // Poll fusion task
   useEffect(() => {
     if (!fusionTaskId) return
     let done = false
+    const controller = new AbortController()
     const timer = setInterval(async () => {
+      if (done) return
       try {
-        const resp = await fetch(`/api/selection/task-logs/${fusionTaskId}`)
+        const resp = await fetch(`/api/selection/task-logs/${fusionTaskId}`, { signal: controller.signal })
         if (!resp.ok) return
         const data = await resp.json()
         setScanLogs(data.logs || [])
@@ -241,18 +251,27 @@ function App() {
             clearInterval(timer)
           }
         }
-      } catch {}
+      } catch (e) {
+        if (!done && e.name !== 'AbortError') {
+          done = true
+          setScanPhase(null)
+          setError('融合轮询失败')
+          clearInterval(timer)
+        }
+      }
     }, 500)
-    return () => { done = true; clearInterval(timer) }
+    return () => { done = true; controller.abort(); clearInterval(timer) }
   }, [fusionTaskId])
 
   // Poll backtest task
   useEffect(() => {
     if (!btTaskId) return
     let done = false
+    const controller = new AbortController()
     const timer = setInterval(async () => {
+      if (done) return
       try {
-        const resp = await fetch(`/api/selection/task-logs/${btTaskId}`)
+        const resp = await fetch(`/api/selection/task-logs/${btTaskId}`, { signal: controller.signal })
         if (!resp.ok) return
         const data = await resp.json()
         if (data.logs) {
@@ -269,14 +288,27 @@ function App() {
             clearInterval(timer)
           }
         }
-      } catch {}
+      } catch (e) {
+        if (!done && e.name !== 'AbortError') {
+          done = true
+          setScanPhase(null)
+          setError('回测轮询失败')
+          clearInterval(timer)
+        }
+      }
     }, 500)
-    return () => { done = true; clearInterval(timer) }
+    return () => { done = true; controller.abort(); clearInterval(timer) }
   }, [btTaskId])
 
   useEffect(() => {
     if (logContainerRef.current) logContainerRef.current.scrollTop = logContainerRef.current.scrollHeight
   }, [scanLogs])
+
+  useEffect(() => {
+    if (!error) return
+    const timer = setTimeout(() => setError(''), 5000)
+    return () => clearTimeout(timer)
+  }, [error])
 
   useEffect(() => {
     const controller = new AbortController()
@@ -428,13 +460,13 @@ function App() {
                     <Button disabled={isRunning} onClick={async () => {
                       setScanPhase('candidates'); setScanLogs([]); setSelectionScan(null); setFusionResult(null); setBacktestRun(null); setScanProgress({ current: 0, total: 0 })
                       const c = await fetch(`/api/selection/candidates?price_min=${selectionParams.priceMin}&price_max=${selectionParams.priceMax}`)
-                      if (!c.ok) { setScanPhase(null); return }
+                      if (!c.ok) { setScanPhase(null); setError('获取候选池失败'); return }
                       const codes = (await c.json()).codes ?? []
                       setCandidateCodes(codes)
                       setScanLogs([`候选池 ${codes.length} 只，开始布林扫描...`])
                       setScanPhase('boll')
                       const s = await fetch('/api/selection/boll-scan', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ codes, window: 20, k: 1.645, near_ratio: 1.015 }) })
-                      if (!s.ok) { setScanPhase(null); return }
+                      if (!s.ok) { setScanPhase(null); setError('布林扫描启动失败'); return }
                       setBollTaskId((await s.json()).task_id)
                     }}>
                       {scanPhase === 'boll' || scanPhase === 'backtest' ? '扫描进行中...' : '开始扫描 + 回测'}
@@ -448,7 +480,7 @@ function App() {
                     <Button variant="secondary" disabled={isRunning} onClick={async () => {
                       setScanPhase('fusion'); setScanLogs(['开始策略融合排序...']); setSelectionScan(null); setFusionResult(null); setBacktestRun(null); setScanProgress({ current: 0, total: 0 })
                       const r = await fetch('/api/selection/fusion', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ total_capital: 100000, max_picks: 15 }) })
-                      if (!r.ok) { setScanPhase(null); return }
+                      if (!r.ok) { setScanPhase(null); setError('融合排序启动失败'); return }
                       setFusionTaskId((await r.json()).task_id)
                     }}>
                       {scanPhase === 'fusion' ? '融合进行中...' : '仅运行融合排序'}
@@ -621,6 +653,7 @@ function App() {
                     if (r.ok) { const p = await fetch('/api/portfolio'); if (p.ok) setPortfolio(await p.json()) }
                   }}>保存交易</Button>
                   <Button variant="destructive" onClick={async () => {
+                    if (!window.confirm('确定要清空所有交易记录吗？此操作不可撤销。')) return
                     const r = await fetch('/api/trades', { method: 'DELETE' })
                     if (r.ok) { const p = await fetch('/api/portfolio'); if (p.ok) setPortfolio(await p.json()) }
                   }}>清空</Button>
@@ -689,7 +722,12 @@ function App() {
         ) : null}
       </main>
 
-      {error ? <div className="fixed bottom-4 right-4 px-4 py-2 rounded-lg bg-destructive/15 text-destructive text-sm border border-destructive/30">{error}</div> : null}
+      {error ? (
+        <div className="fixed bottom-4 right-4 px-4 py-2 rounded-lg bg-destructive/15 text-destructive text-sm border border-destructive/30 flex items-center gap-2">
+          <span>{error}</span>
+          <button onClick={() => setError('')} className="ml-2 text-destructive/60 hover:text-destructive text-xs">&times;</button>
+        </div>
+      ) : null}
     </div>
   )
 }
