@@ -14,7 +14,10 @@ from smcore.utils.code import format_stock_code
 
 
 def fetch_candidate_codes(price_min: float, price_max: float) -> list[str]:
-    """Fetch and filter A-share codes by latest price."""
+    """Fetch and filter A-share codes by latest price.
+
+    Excludes 北交所 (920xxx), 三板/退市 (4xxx/8xxx) stocks that lack kline data.
+    """
     import akshare as ak
 
     try:
@@ -24,7 +27,16 @@ def fetch_candidate_codes(price_min: float, price_max: float) -> list[str]:
     if spot is None or spot.empty:
         return []
     spot = spot[(spot["最新价"] >= price_min) & (spot["最新价"] <= price_max)]
-    return [format_stock_code(code) for code in spot["代码"].tolist() if format_stock_code(code)]
+    codes = []
+    for raw_code in spot["代码"].tolist():
+        code = format_stock_code(raw_code)
+        if not code:
+            continue
+        # Skip 北交所 (920xxx), 三板/退市 (4xxx/8xxx), 科创板 (688xxx optional)
+        if code.startswith("920") or code.startswith("4") or code.startswith("8"):
+            continue
+        codes.append(code)
+    return codes
 
 
 def get_candidate_codes(price_min: float, price_max: float) -> tuple[list[str], str | None]:
