@@ -38,6 +38,10 @@ stock_data/plots/
 stock_data/tasks/
 stock_data/ui_uploads/
 stock_data/*.csv
+!stock_data/Daily-Action-List-*.csv
+
+# 看板缓存（GitHub Actions 预热后提交回仓库）
+!stock_data/daily_cache/
 
 # Secrets (Supabase keys etc.)
 .streamlit/secrets.toml
