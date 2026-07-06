@@ -331,12 +331,19 @@ function App() {
         if (c.ok) setCandidateCodes((await c.json()).codes ?? [])
         const an = await fetch(`/api/analysis/${analysisCode}`, { signal: controller.signal })
         if (an.ok) setAnalysis(await an.json())
-        const stResp = await fetch('/api/status', { signal: controller.signal })
-        if (stResp.ok) setDbStatus(await stResp.json())
       } catch (err) { if (err.name !== 'AbortError') setError('后端未启动或接口不可用') }
     }
     loadDashboard()
     return () => controller.abort()
+  }, [])
+
+  useEffect(() => {
+    const c = new AbortController()
+    fetch('/api/status', { signal: c.signal })
+      .then(r => r.ok ? r.json() : null)
+      .then(data => { if (data) setDbStatus(data) })
+      .catch(() => {})
+    return () => c.abort()
   }, [])
 
   const indexSnapshot = dashboard?.index_snapshot ?? []
