@@ -338,12 +338,24 @@ function App() {
   }, [])
 
   useEffect(() => {
-    const c = new AbortController()
-    fetch('/api/status', { signal: c.signal })
-      .then(r => r.ok ? r.json() : null)
-      .then(data => { if (data) setDbStatus(data) })
-      .catch(() => {})
-    return () => c.abort()
+    let alive = true
+    let retryTimer = null
+    async function poll() {
+      for (let attempt = 0; attempt < 10; attempt++) {
+        if (!alive) return
+        try {
+          const r = await fetch('/api/status', { cache: 'no-store' })
+          if (r.ok && alive) {
+            const data = await r.json()
+            setDbStatus(data)
+            return
+          }
+        } catch {}
+        await new Promise(res => { retryTimer = setTimeout(res, 3000) })
+      }
+    }
+    poll()
+    return () => { alive = false; clearTimeout(retryTimer) }
   }, [])
 
   const indexSnapshot = dashboard?.index_snapshot ?? []
@@ -402,7 +414,7 @@ function App() {
               <span className={`status-dot ${dbStatus?.storage_backend === 'supabase' ? 'online' : 'offline'}`} style={{
                 width: 5, height: 5, borderRadius: '50%', display: 'inline-block',
               }} />
-              <span>DB: {dbStatus?.storage_backend === 'supabase' ? 'Supabase' : '本地 JSON'}</span>
+              <span>DB: {dbStatus == null ? '检测中...' : dbStatus.storage_backend === 'supabase' ? 'Supabase' : '本地 JSON'}</span>
             </div>
             {dbStatus?.supabase_configured && (
               <div style={{ marginTop: 2, color: 'hsl(152, 60%, 42%)' }}>
@@ -428,7 +440,7 @@ function App() {
                 width: 5, height: 5, borderRadius: '50%', display: 'inline-block',
               }} />
               <span style={{ fontSize: 11 }}>
-                DB: {dbStatus?.storage_backend === 'supabase' ? 'Supabase' : '本地'}
+                DB: {dbStatus == null ? '...' : dbStatus.storage_backend === 'supabase' ? 'Supabase' : '本地'}
               </span>
             </div>
             <span className={`status-dot ${error ? 'offline' : 'online'}`} style={{
