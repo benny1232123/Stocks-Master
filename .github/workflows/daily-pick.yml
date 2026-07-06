@@ -26,38 +26,66 @@ jobs:
       - name: 安装依赖
         run: |
           pip install --upgrade pip
-          pip install akshare pandas requests baostock matplotlib cos-python-sdk-v5
+          pip install akshare pandas requests baostock matplotlib cos-python-sdk-v5 supabase
 
       - name: 策略1 Boll 扫描
+        id: boll
         continue-on-error: true
         timeout-minutes: 15
         env:
           KLINE_BACKEND: akshare
           ENABLE_VISUALIZATION: "0"
-        run: python Frequently-Used-Program/Stock-Selection-Boll.py
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_KEY: ${{ secrets.SUPABASE_KEY }}
+        run: |
+          TODAY=$(date +%Y%m%d)
+          python scripts/strategy_cache.py pull boll $TODAY && echo "skip=true" >> $GITHUB_OUTPUT && exit 0
+          python Frequently-Used-Program/Stock-Selection-Boll.py
+          python scripts/strategy_cache.py push boll $TODAY
 
       - name: 策略2 题材热度
+        id: theme
         continue-on-error: true
         timeout-minutes: 10
         env:
           KLINE_BACKEND: akshare
-        run: python Frequently-Used-Program/Stock-Selection-Ashare-Theme-Turnover.py
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_KEY: ${{ secrets.SUPABASE_KEY }}
+        run: |
+          TODAY=$(date +%Y%m%d)
+          python scripts/strategy_cache.py pull theme $TODAY && echo "skip=true" >> $GITHUB_OUTPUT && exit 0
+          python Frequently-Used-Program/Stock-Selection-Ashare-Theme-Turnover.py
+          python scripts/strategy_cache.py push theme $TODAY
 
       - name: 策略3 CCTV 板块
+        id: cctv
         continue-on-error: true
         timeout-minutes: 10
         env:
           KLINE_BACKEND: akshare
-        run: python Frequently-Used-Program/Stock-Selection-CCTV-Sectors.py
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_KEY: ${{ secrets.SUPABASE_KEY }}
+        run: |
+          TODAY=$(date +%Y%m%d)
+          python scripts/strategy_cache.py pull cctv $TODAY && echo "skip=true" >> $GITHUB_OUTPUT && exit 0
+          python Frequently-Used-Program/Stock-Selection-CCTV-Sectors.py
+          python scripts/strategy_cache.py push cctv $TODAY
 
       - name: 策略4 相对强弱
+        id: relativity
         continue-on-error: true
         timeout-minutes: 20
         env:
           KLINE_BACKEND: akshare
           RELATIVITY_MAX_WORKERS: "1"
           RELATIVITY_SLEEP_SECONDS: "0.3"
-        run: python Frequently-Used-Program/Stock-Selection-Relativity.py --max-workers 1
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_KEY: ${{ secrets.SUPABASE_KEY }}
+        run: |
+          TODAY=$(date +%Y%m%d)
+          python scripts/strategy_cache.py pull relativity $TODAY && echo "skip=true" >> $GITHUB_OUTPUT && exit 0
+          python Frequently-Used-Program/Stock-Selection-Relativity.py --max-workers 1
+          python scripts/strategy_cache.py push relativity $TODAY
 
       - name: 生成操作清单 + 上传 COS
         env:
