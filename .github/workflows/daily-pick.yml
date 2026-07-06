@@ -27,7 +27,7 @@ jobs:
           # cos-python-sdk-v5: 腾讯云 COS SDK，上传操作清单供 SCF 预警用
 
       - name: 运行选股主流程（巨石，可选）
-        timeout-minutes: 25
+        continue-on-error: true
         env:
           KLINE_BACKEND: akshare          # K 线走 akshare（东财 HTTP，全球可达）
           PYTHONUNBUFFERED: "1"
