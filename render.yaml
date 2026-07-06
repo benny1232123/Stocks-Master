@@ -8,3 +8,9 @@ services:
     envVars:
       - key: KLINE_BACKEND
         value: akshare
+      - key: TRADES_BACKEND
+        value: auto
+      - key: SUPABASE_URL
+        sync: false
+      - key: SUPABASE_KEY
+        sync: false
