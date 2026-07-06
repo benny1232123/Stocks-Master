@@ -7,4 +7,5 @@ baostock
 matplotlib
 pillow
 requests
+python-dotenv>=1.0
 supabase>=2.0  # optional: cloud trade sync (TRADES_BACKEND=supabase)

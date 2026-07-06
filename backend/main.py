@@ -10,6 +10,7 @@ from contextlib import asynccontextmanager
 from datetime import date
 from pathlib import Path
 
+from dotenv import load_dotenv
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, JSONResponse
@@ -17,6 +18,8 @@ from fastapi.staticfiles import StaticFiles
 
 ROOT = Path(__file__).resolve().parent.parent
 FRONTEND_DIST = ROOT / "frontend" / "dist"
+
+load_dotenv(ROOT / ".env")
 
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
