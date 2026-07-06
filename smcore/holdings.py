@@ -1,41 +1,70 @@
 """Shared helpers for trade history, FIFO holdings, and portfolio summaries."""
 from __future__ import annotations
 
-import json
-from pathlib import Path
 from typing import Any
 
 import pandas as pd
 
-PROJECT_ROOT = Path(__file__).resolve().parent.parent
-TRADES_FILE = PROJECT_ROOT / "stock_data" / "trades.json"
+from smcore.storage.trades_repo import get_trade_repository
+from smcore.utils.code import format_stock_code
+
+
+def trades_backend_name() -> str:
+    """Return active trade storage backend name (json | supabase)."""
+    return get_trade_repository().backend_name
 
 
 def load_trades() -> list[dict[str, Any]]:
-    """Load persisted trades from stock_data/trades.json."""
-    if TRADES_FILE.exists():
-        try:
-            with open(TRADES_FILE, "r", encoding="utf-8") as file_handle:
-                data = json.load(file_handle)
-                return data if isinstance(data, list) else []
-        except Exception:
-            return []
-    return []
+    """Load persisted trades from configured backend."""
+    return get_trade_repository().load_all()
 
 
 def save_trades(trades: list[dict[str, Any]]) -> None:
-    """Persist trades to stock_data/trades.json."""
-    TRADES_FILE.parent.mkdir(parents=True, exist_ok=True)
-    with open(TRADES_FILE, "w", encoding="utf-8") as file_handle:
-        json.dump(trades, file_handle, ensure_ascii=False, indent=2)
+    """Replace all trades in configured backend."""
+    get_trade_repository().replace_all(trades)
+
+
+def validate_trade(trade: dict[str, Any], trades: list[dict[str, Any]]) -> str | None:
+    """Validate a trade before persisting. Returns error message or None."""
+    side = str(trade.get("side", "buy")).lower()
+    if side != "sell":
+        return None
+
+    try:
+        sell_qty = int(trade.get("qty", 0))
+    except (TypeError, ValueError):
+        return "卖出数量格式无效"
+    if sell_qty <= 0:
+        return "卖出数量必须大于 0"
+
+    code = format_stock_code(str(trade.get("code", "")))
+    if not code:
+        return "股票代码无效"
+
+    pos_df, _ = compute_fifo_positions(trades)
+    if pos_df.empty:
+        return f"无 {code} 持仓，无法卖出"
+
+    held_rows = pos_df[pos_df["代码"].astype(str).map(format_stock_code) == code]
+    if held_rows.empty:
+        return f"无 {code} 持仓，无法卖出"
+
+    held_qty = float(held_rows["数量"].sum())
+    if sell_qty > held_qty:
+        return f"卖出数量({sell_qty})超过持仓({int(held_qty)})"
+    return None
 
 
 def add_trade(trade: dict[str, Any]) -> list[dict[str, Any]]:
     """Append a trade and persist it."""
+    trade = dict(trade)
+    trade["code"] = format_stock_code(str(trade.get("code", ""))) or str(trade.get("code", "")).strip()
     trades = load_trades()
-    trades.append(trade)
-    save_trades(trades)
-    return trades
+    error = validate_trade(trade, trades)
+    if error:
+        raise ValueError(error)
+    get_trade_repository().append(trade)
+    return load_trades()
 
 
 def clear_trades() -> None:
@@ -152,6 +181,7 @@ def compute_fifo_positions(trades: list[dict[str, Any]]) -> tuple[pd.DataFrame, 
 
 def portfolio_snapshot() -> dict[str, Any]:
     """Return a JSON-friendly portfolio snapshot for the frontend."""
+    repo = get_trade_repository()
     trades = load_trades()
     trades_df = trades_to_df(trades)
     pos_df, closed_df = compute_fifo_positions(trades)
@@ -205,6 +235,7 @@ def portfolio_snapshot() -> dict[str, Any]:
         pnl_summary["total_pnl"] = pnl_summary["holding_value"] - pnl_summary["holding_cost"]
 
     snapshot: dict[str, Any] = {
+        "storage_backend": repo.backend_name,
         "trades_count": len(trades),
         "trades_preview": trades_df.head(25).to_dict(orient="records"),
         "open_positions": [],

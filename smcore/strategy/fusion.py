@@ -16,7 +16,7 @@
 from __future__ import annotations
 
 import csv
-from datetime import date, datetime
+from datetime import date, datetime, timedelta
 from pathlib import Path
 from typing import Optional
 
@@ -39,30 +39,60 @@ STRATEGY_BASE_SCORE = {
 MULTI_HIT_BONUS = 5  # 每多命中一个策略额外 +5
 
 
-def _find_strategy_csv(pattern: str, date_yyyymmdd: str) -> Optional[Path]:
-    """按日期找策略结果 CSV，找不到则回退最近一期。"""
-    # 优先当天根目录
-    preferred = STOCK_DATA_DIR / f"{pattern}-{date_yyyymmdd}.csv"
-    if preferred.exists():
-        return preferred
-    # 根目录最近
-    candidates = sorted(STOCK_DATA_DIR.glob(f"{pattern}-*.csv"), key=lambda p: p.name, reverse=True)
-    if candidates:
-        return candidates[0]
-    # archive 最近
-    archive = STOCK_DATA_DIR / "archive"
-    if archive.exists():
-        candidates = sorted(archive.rglob(f"{pattern}-*.csv"), key=lambda p: p.name, reverse=True)
-        if candidates:
-            return candidates[0]
+def _extract_date_from_filename(path: Path) -> Optional[str]:
+    """从文件名末尾提取 YYYYMMDD，例如 Stock-Selection-Boll-20260704.csv。"""
+    suffix = path.stem.rsplit("-", 1)[-1]
+    if len(suffix) == 8 and suffix.isdigit():
+        return suffix
     return None
 
 
-def _load_boll_picks(date_yyyymmdd: str) -> dict:
-    """读取 Boll 选股结果，返回 {code: {name, buy_price}}。"""
-    path = _find_strategy_csv("Stock-Selection-Boll", date_yyyymmdd)
-    if not path:
-        return {}
+def _find_strategy_csv(
+    pattern: str,
+    date_yyyymmdd: str,
+    *,
+    max_stale_days: int = 3,
+) -> Optional[tuple[Path, str]]:
+    """按日期找策略结果 CSV，仅在 max_stale_days 内回退到最近一期。
+
+    此前各策略独立回退到“各自最新文件”，可能把不同日期的信号混在一起，
+    导致操作清单基于过期/错日数据。现在统一限制回退窗口并返回实际日期。
+    """
+    preferred = STOCK_DATA_DIR / f"{pattern}-{date_yyyymmdd}.csv"
+    if preferred.exists():
+        return preferred, date_yyyymmdd
+
+    requested = datetime.strptime(date_yyyymmdd, "%Y%m%d").date()
+    best: Optional[tuple[Path, str]] = None
+
+    def _consider(paths: list[Path]) -> None:
+        nonlocal best
+        for path in paths:
+            actual_date = _extract_date_from_filename(path)
+            if not actual_date:
+                continue
+            actual = datetime.strptime(actual_date, "%Y%m%d").date()
+            stale_days = (requested - actual).days
+            if stale_days < 0 or stale_days > max_stale_days:
+                continue
+            if best is None or actual_date > best[1]:
+                best = (path, actual_date)
+
+    _consider(sorted(STOCK_DATA_DIR.glob(f"{pattern}-*.csv"), key=lambda p: p.name, reverse=True))
+
+    archive = STOCK_DATA_DIR / "archive"
+    if archive.exists():
+        _consider(sorted(archive.rglob(f"{pattern}-*.csv"), key=lambda p: p.name, reverse=True))
+
+    return best
+
+
+def _load_boll_picks(date_yyyymmdd: str, *, max_stale_days: int = 3) -> tuple[dict, Optional[str]]:
+    """读取 Boll 选股结果，返回 ({code: {...}}, 实际数据日期)。"""
+    found = _find_strategy_csv("Stock-Selection-Boll", date_yyyymmdd, max_stale_days=max_stale_days)
+    if not found:
+        return {}, None
+    path, actual_date = found
     picks = {}
     with path.open("r", encoding="utf-8-sig", newline="") as f:
         for row in csv.DictReader(f):
@@ -73,14 +103,15 @@ def _load_boll_picks(date_yyyymmdd: str) -> dict:
                 "name": (row.get("股票名称") or "").strip(),
                 "buy_price": to_float(row.get("建议买入价")),
             }
-    return picks
+    return picks, actual_date
 
 
-def _load_relativity_picks(date_yyyymmdd: str) -> dict:
-    """读取相对强弱结果，返回 {code: {name, up_ratio, down_ratio}}。"""
-    path = _find_strategy_csv("Stock-Selection-Relativity", date_yyyymmdd)
-    if not path:
-        return {}
+def _load_relativity_picks(date_yyyymmdd: str, *, max_stale_days: int = 3) -> tuple[dict, Optional[str]]:
+    """读取相对强弱结果，返回 ({code: {...}}, 实际数据日期)。"""
+    found = _find_strategy_csv("Stock-Selection-Relativity", date_yyyymmdd, max_stale_days=max_stale_days)
+    if not found:
+        return {}, None
+    path, actual_date = found
     picks = {}
     with path.open("r", encoding="utf-8-sig", newline="") as f:
         for row in csv.DictReader(f):
@@ -92,14 +123,15 @@ def _load_relativity_picks(date_yyyymmdd: str) -> dict:
                 "up_ratio": to_float(row.get("上涨满足率")),
                 "down_ratio": to_float(row.get("抗跌满足率")),
             }
-    return picks
+    return picks, actual_date
 
 
-def _load_theme_picks(date_yyyymmdd: str) -> dict:
-    """读取题材策略结果，返回 {code: {name, score, theme}}。"""
-    path = _find_strategy_csv("Stock-Selection-Ashare-Theme-Turnover", date_yyyymmdd)
-    if not path:
-        return {}
+def _load_theme_picks(date_yyyymmdd: str, *, max_stale_days: int = 3) -> tuple[dict, Optional[str]]:
+    """读取题材策略结果，返回 ({code: {...}}, 实际数据日期)。"""
+    found = _find_strategy_csv("Stock-Selection-Ashare-Theme-Turnover", date_yyyymmdd, max_stale_days=max_stale_days)
+    if not found:
+        return {}, None
+    path, actual_date = found
     picks = {}
     with path.open("r", encoding="utf-8-sig", newline="") as f:
         for row in csv.DictReader(f):
@@ -111,14 +143,15 @@ def _load_theme_picks(date_yyyymmdd: str) -> dict:
                 "score": to_float(row.get("综合分")),
                 "theme": (row.get("题材标签") or "").strip(),
             }
-    return picks
+    return picks, actual_date
 
 
-def _load_cctv_picks(date_yyyymmdd: str) -> dict:
-    """读取 CCTV 股票池，返回 {code: {name, sector, heat}}。"""
-    path = _find_strategy_csv("CCTV-Sector-Stock-Pool", date_yyyymmdd)
-    if not path:
-        return {}
+def _load_cctv_picks(date_yyyymmdd: str, *, max_stale_days: int = 3) -> tuple[dict, Optional[str]]:
+    """读取 CCTV 股票池，返回 ({code: {...}}, 实际数据日期)。"""
+    found = _find_strategy_csv("CCTV-Sector-Stock-Pool", date_yyyymmdd, max_stale_days=max_stale_days)
+    if not found:
+        return {}, None
+    path, actual_date = found
     picks = {}
     with path.open("r", encoding="utf-8-sig", newline="") as f:
         for row in csv.DictReader(f):
@@ -130,13 +163,13 @@ def _load_cctv_picks(date_yyyymmdd: str) -> dict:
                 "sector": (row.get("板块") or "").strip(),
                 "heat": to_float(row.get("热度分")),
             }
-    return picks
+    return picks, actual_date
 
 
 def _compute_boll_levels(code: str) -> dict:
     """拉前复权 K 线算 Boll 水位（止损=下轨，止盈=上轨）。"""
     end = date.today()
-    start = end.fromordinal(end.toordinal() - 120)  # 120 天前
+    start = end - timedelta(days=120)  # 120 天前
     df = fetch_daily_k(code, start, end, adjust="qfq")
     if len(df) < DEFAULT_WINDOW:
         return {}
@@ -156,6 +189,7 @@ def fuse_signals(
     total_capital: float = 100000.0,
     max_picks: int = 15,
     fetch_levels: bool = True,
+    max_stale_days: int = 3,
 ) -> tuple[pd.DataFrame, str]:
     """融合四策略信号，输出今日操作清单。
 
@@ -164,14 +198,22 @@ def fuse_signals(
         total_capital: 总资金（元），用于算每只票建议仓位金额
         max_picks: 最多输出几只票
         fetch_levels: 是否拉 K 线算止损止盈（批量调用网络较慢，可关闭只出清单）
+        max_stale_days: 允许回退的历史策略文件最大天数（默认 3 天）
 
     Returns:
         (result_df, report_text)
     """
-    boll = _load_boll_picks(date_yyyymmdd)
-    relativity = _load_relativity_picks(date_yyyymmdd)
-    theme = _load_theme_picks(date_yyyymmdd)
-    cctv = _load_cctv_picks(date_yyyymmdd)
+    boll, boll_date = _load_boll_picks(date_yyyymmdd, max_stale_days=max_stale_days)
+    relativity, rel_date = _load_relativity_picks(date_yyyymmdd, max_stale_days=max_stale_days)
+    theme, theme_date = _load_theme_picks(date_yyyymmdd, max_stale_days=max_stale_days)
+    cctv, cctv_date = _load_cctv_picks(date_yyyymmdd, max_stale_days=max_stale_days)
+
+    source_dates = {
+        "Boll": boll_date,
+        "Relativity": rel_date,
+        "Theme": theme_date,
+        "CCTV": cctv_date,
+    }
 
     # 合并所有代码
     all_codes = set(boll) | set(relativity) | set(theme) | set(cctv)
@@ -265,7 +307,16 @@ def fuse_signals(
     df = df.head(max_picks)
 
     # 生成日报段落
-    report = _build_report_text(df, date_yyyymmdd, len(boll), len(relativity), len(theme), len(cctv))
+    report = _build_report_text(
+        df,
+        date_yyyymmdd,
+        len(boll),
+        len(relativity),
+        len(theme),
+        len(cctv),
+        source_dates=source_dates,
+        max_stale_days=max_stale_days,
+    )
     return df, report
 
 
@@ -276,19 +327,30 @@ def _build_report_text(
     n_relativity: int,
     n_theme: int,
     n_cctv: int,
+    *,
+    source_dates: dict[str, Optional[str]] | None = None,
+    max_stale_days: int = 3,
 ) -> str:
     """生成日报段落。"""
     if df.empty:
+        stale_notes = _format_source_date_notes(date_yyyymmdd, source_dates or {}, max_stale_days=max_stale_days)
+        if stale_notes:
+            return "\n## 今日操作清单\n- 无候选\n" + stale_notes
         return "\n## 今日操作清单\n- 无候选"
 
     lines = [
         f"\n## 今日操作清单（{date_yyyymmdd}）",
         f"- 信号来源: Boll {n_boll} | Relativity {n_relativity} | Theme {n_theme} | CCTV {n_cctv}",
         f"- 融合后候选: {len(df)} 只（按综合评分排序）",
+    ]
+    stale_notes = _format_source_date_notes(date_yyyymmdd, source_dates or {}, max_stale_days=max_stale_days)
+    if stale_notes:
+        lines.append(stale_notes)
+    lines.extend([
         "",
         "| 代码 | 名称 | 命中 | 评分 | 仓位% | 止损 | 止盈 |",
         "|------|------|------|------|-------|------|------|",
-    ]
+    ])
     for _, r in df.iterrows():
         stop = fmt_num(r.get("止损价(下轨)"), digits=2, na="-")
         take = fmt_num(r.get("止盈价(上轨)"), digits=2, na="-")
@@ -298,6 +360,25 @@ def _build_report_text(
     lines.append("")
     lines.append("- 止损=Boll下轨，止盈=Boll上轨（前复权）；仓位为建议上限，单票不超过 30%。")
     return "\n".join(lines)
+
+
+def _format_source_date_notes(
+    date_yyyymmdd: str,
+    source_dates: dict[str, Optional[str]],
+    *,
+    max_stale_days: int,
+) -> str:
+    """标注各策略实际使用的数据日期，过期数据显式警告。"""
+    notes: list[str] = []
+    for name, actual in source_dates.items():
+        if not actual:
+            notes.append(f"- ⚠️ {name}: 无可用数据（{max_stale_days} 天内未找到）")
+            continue
+        if actual != date_yyyymmdd:
+            notes.append(f"- ⚠️ {name}: 使用 {actual} 的数据（非当日 {date_yyyymmdd}）")
+    if not notes:
+        return ""
+    return "\n".join(["", "**数据日期说明**", *notes])
 
 
 def save_action_list(df: pd.DataFrame, date_yyyymmdd: str) -> Optional[Path]:

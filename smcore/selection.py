@@ -102,10 +102,20 @@ def scan_boll_batch(
     return pd.DataFrame(results).sort_values("距下轨%", ascending=True)
 
 
-def run_strategy_fusion(date_yyyymmdd: str | None = None, total_capital: float = 100000.0, max_picks: int = 15) -> dict[str, Any]:
+def run_strategy_fusion(
+    date_yyyymmdd: str | None = None,
+    total_capital: float = 100000.0,
+    max_picks: int = 15,
+    max_stale_days: int = 3,
+) -> dict[str, Any]:
     """Run strategy fusion and persist the generated action list."""
     date_yyyymmdd = date_yyyymmdd or date.today().strftime("%Y%m%d")
-    df, meta = fuse_signals(date_yyyymmdd, total_capital=total_capital, max_picks=max_picks)
+    df, meta = fuse_signals(
+        date_yyyymmdd,
+        total_capital=total_capital,
+        max_picks=max_picks,
+        max_stale_days=max_stale_days,
+    )
     path = save_action_list(df, date_yyyymmdd) if not df.empty else None
     return {
         "date": date_yyyymmdd,

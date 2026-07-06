@@ -155,6 +155,7 @@ function App() {
   })
   const [error, setError] = useState('')
   const [scanLogs, setScanLogs] = useState([])
+  const [dbStatus, setDbStatus] = useState(null)
   const logContainerRef = useRef(null)
 
   // Phase: null | 'candidates' | 'boll' | 'backtest' | 'fusion'
@@ -330,6 +331,8 @@ function App() {
         if (c.ok) setCandidateCodes((await c.json()).codes ?? [])
         const an = await fetch(`/api/analysis/${analysisCode}`, { signal: controller.signal })
         if (an.ok) setAnalysis(await an.json())
+        const stResp = await fetch('/api/status', { signal: controller.signal })
+        if (stResp.ok) setDbStatus(await stResp.json())
       } catch (err) { if (err.name !== 'AbortError') setError('后端未启动或接口不可用') }
     }
     loadDashboard()
@@ -387,6 +390,19 @@ function App() {
               <span>已连接</span>
             </>
           )}
+          <div style={{ marginTop: 8, fontSize: 11, opacity: 0.7 }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
+              <span className={`status-dot ${dbStatus?.storage_backend === 'supabase' ? 'online' : 'offline'}`} style={{
+                width: 5, height: 5, borderRadius: '50%', display: 'inline-block',
+              }} />
+              <span>DB: {dbStatus?.storage_backend === 'supabase' ? 'Supabase' : '本地 JSON'}</span>
+            </div>
+            {dbStatus?.supabase_configured && (
+              <div style={{ marginTop: 2, color: 'hsl(152, 60%, 42%)' }}>
+                Supabase 已配置
+              </div>
+            )}
+          </div>
         </div>
       </aside>
 
@@ -399,7 +415,15 @@ function App() {
               {TABS.find((t) => t.id === activeView)?.label ?? ''}
             </span>
           </div>
-          <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
+              <span className={`status-dot ${dbStatus?.storage_backend === 'supabase' ? 'online' : 'offline'}`} style={{
+                width: 5, height: 5, borderRadius: '50%', display: 'inline-block',
+              }} />
+              <span style={{ fontSize: 11 }}>
+                DB: {dbStatus?.storage_backend === 'supabase' ? 'Supabase' : '本地'}
+              </span>
+            </div>
             <span className={`status-dot ${error ? 'offline' : 'online'}`} style={{
               width: 6, height: 6, borderRadius: '50%', display: 'inline-block',
               background: error ? 'hsl(152, 60%, 42%)' : 'hsl(0, 72%, 51%)',

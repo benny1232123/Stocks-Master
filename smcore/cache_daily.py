@@ -12,7 +12,9 @@ from typing import Any, Callable, Optional, Tuple
 
 import pandas as pd
 
-CACHE_DIR = Path("stock_data/daily_cache")
+from smcore.config.defaults import STOCK_DATA_DIR
+
+CACHE_DIR = STOCK_DATA_DIR / "daily_cache"
 
 
 def get_daily(

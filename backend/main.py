@@ -27,7 +27,7 @@ from smcore.artifacts import find_latest_file, find_latest_file_any, preview_csv
 from smcore.analysis import build_stock_analysis
 from smcore.backtest import run_signal_backtest
 from smcore.dashboard import build_dashboard_payload, prewarm_dashboard_cache
-from smcore.holdings import add_trade, clear_trades, portfolio_snapshot
+from smcore.holdings import add_trade, clear_trades, portfolio_snapshot, trades_backend_name
 from smcore.selection import get_candidate_codes, run_strategy_fusion, scan_boll_batch
 
 @asynccontextmanager
@@ -42,7 +42,7 @@ app = FastAPI(title="Stocks-Master API", version="0.1.0", lifespan=lifespan)
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
-    allow_credentials=True,
+    allow_credentials=False,
     allow_methods=["*"],
     allow_headers=["*"],
 )
@@ -131,6 +131,17 @@ def health() -> dict[str, str]:
     return {"status": "ok"}
 
 
+@app.get("/api/status")
+def app_status() -> dict:
+    backend = trades_backend_name()
+    supabase_configured = bool(os.getenv("SUPABASE_URL", "").strip() and os.getenv("SUPABASE_KEY", "").strip())
+    return {
+        "storage_backend": backend,
+        "supabase_configured": supabase_configured,
+        "supabase_url": os.getenv("SUPABASE_URL", "")[:30] + "..." if os.getenv("SUPABASE_URL", "") else "",
+    }
+
+
 @app.get("/api/dashboard")
 def dashboard() -> dict:
     return build_dashboard_payload()
@@ -181,7 +192,10 @@ def create_trade(payload: dict) -> dict:
         "fee": fee,
         "notes": str(payload.get("notes", "")),
     }
-    trades = add_trade(trade)
+    try:
+        trades = add_trade(trade)
+    except ValueError as exc:
+        return JSONResponse({"error": str(exc)}, status_code=400)
     return {"count": len(trades), "latest": trade}
 
 
