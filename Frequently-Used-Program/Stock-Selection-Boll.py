@@ -20,7 +20,7 @@ CURRENT_YEAR = datetime.now().year
 LAST_YEAR = CURRENT_YEAR - 1
 
 # 可视化配置
-ENABLE_VISUALIZATION = True
+ENABLE_VISUALIZATION = os.getenv("ENABLE_VISUALIZATION", "1") != "0"
 PLOT_ONLY_SELECTED = True          # True: 只画命中策略的票；False: 所有候选都画
 PLOT_MAX_COUNT = 50                # 最多保存多少张图（避免太多）
 PLOT_SAVE_DIR = "stock_data/plots" # 输出目录
