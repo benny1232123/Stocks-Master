@@ -45,7 +45,7 @@ jobs:
           COS_REGION: ${{ secrets.COS_REGION }}
           # 策略开关
           ENABLE_THEME_STRATEGY: "1"
-          ENABLE_RELATIVITY_STRATEGY: "0"  # 相对强弱较慢，云端可关
+          ENABLE_RELATIVITY_STRATEGY: "1"
           FAST_MODE: "1"
         run: |
           python Frequently-Used-Program/auto_notify_boll.py || true
