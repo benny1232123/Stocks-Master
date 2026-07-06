@@ -84,7 +84,7 @@ function EquityChart({ equity, initialCapital }) {
   const xTicks = equity.filter((_, i) => i % Math.max(1, Math.floor(equity.length / 6)) === 0 || i === equity.length - 1)
 
   const lastVal = values[values.length - 1]
-  const curveColor = lastVal >= initialCapital ? 'hsl(160, 60%, 65%)' : 'hsl(0, 70%, 60%)'
+  const curveColor = lastVal >= initialCapital ? 'hsl(0, 72%, 51%)' : 'hsl(152, 60%, 42%)'
   const ddValues = equity.map((d) => d.drawdown ?? 0)
   const ddMin = Math.min(...ddValues)
   const ddH = 50
@@ -95,15 +95,15 @@ function EquityChart({ equity, initialCapital }) {
       <svg viewBox={`0 0 ${W} ${H}`} className="equity-svg">
         {yTicks.map((t, i) => (
           <g key={i}>
-            <line x1={PAD.left} y1={t.y} x2={W - PAD.right} y2={t.y} stroke="hsl(215, 30%, 15%)" />
-            <text x={PAD.left - 8} y={t.y + 4} textAnchor="end" fill="hsl(215, 25%, 35%)" fontSize="10">
+            <line x1={PAD.left} y1={t.y} x2={W - PAD.right} y2={t.y} stroke="hsl(220, 25%, 15%)" />
+            <text x={PAD.left - 8} y={t.y + 4} textAnchor="end" fill="hsl(220, 16%, 48%)" fontSize="10">
               {t.label}
             </text>
           </g>
         ))}
 
-        <line x1={PAD.left} y1={baselineY} x2={W - PAD.right} y2={baselineY} stroke="hsl(38, 75%, 55%)" strokeDasharray="4 3" opacity="0.4" />
-        <text x={W - PAD.right + 4} y={baselineY + 4} fill="hsl(38, 75%, 55%)" opacity="0.5" fontSize="9">
+        <line x1={PAD.left} y1={baselineY} x2={W - PAD.right} y2={baselineY} stroke="hsl(38, 80%, 55%)" strokeDasharray="4 3" opacity="0.4" />
+        <text x={W - PAD.right + 4} y={baselineY + 4} fill="hsl(38, 80%, 55%)" opacity="0.5" fontSize="9">
           初始
         </text>
 
@@ -113,7 +113,7 @@ function EquityChart({ equity, initialCapital }) {
         {xTicks.map((d, i) => {
           const idx = equity.indexOf(d)
           return (
-            <text key={i} x={xScale(idx)} y={H - 8} textAnchor="middle" fill="hsl(215, 25%, 35%)" fontSize="9">
+            <text key={i} x={xScale(idx)} y={H - 8} textAnchor="middle" fill="hsl(220, 16%, 48%)" fontSize="9">
               {d.date.slice(5)}
             </text>
           )
@@ -127,7 +127,7 @@ function EquityChart({ equity, initialCapital }) {
             {equity.map((d, i) => {
               const v = d.drawdown ?? 0
               if (v === 0) return null
-              return <rect key={i} x={xScale(i) - 2} y={0} width="4" height={ddYScale(v)} fill="hsl(0, 70%, 60%)" opacity="0.35" rx="1" />
+              return <rect key={i} x={xScale(i) - 2} y={0} width="4" height={ddYScale(v)} fill="hsl(0, 72%, 51%)" opacity="0.35" rx="1" />
             })}
           </svg>
         </div>
@@ -377,14 +377,38 @@ function App() {
         </nav>
         <div className="sidebar-footer">
           {error ? (
-            <span className="text-destructive">连接失败</span>
+            <>
+              <span className="status-dot offline" />
+              <span>离线</span>
+            </>
           ) : (
-            <span className="text-primary">已连接</span>
+            <>
+              <span className="status-dot online" />
+              <span>已连接</span>
+            </>
           )}
         </div>
       </aside>
 
       <main className="main-content">
+        <div className="top-bar">
+          <div className="breadcrumb">
+            <span>Stocks Master</span>
+            <span>/</span>
+            <span className="current">
+              {TABS.find((t) => t.id === activeView)?.label ?? ''}
+            </span>
+          </div>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+            <span className={`status-dot ${error ? 'offline' : 'online'}`} style={{
+              width: 6, height: 6, borderRadius: '50%', display: 'inline-block',
+              background: error ? 'hsl(152, 60%, 42%)' : 'hsl(0, 72%, 51%)',
+              boxShadow: error ? '0 0 6px hsla(152, 60%, 42%, 0.5)' : '0 0 6px hsla(0, 72%, 51%, 0.5)',
+            }} />
+            <span>{error ? '离线' : '在线'}</span>
+          </div>
+        </div>
+
         {activeView === 'overview' ? (
           <>
             <div className="page-header">
@@ -723,9 +747,9 @@ function App() {
       </main>
 
       {error ? (
-        <div className="fixed bottom-4 right-4 px-4 py-2 rounded-lg bg-destructive/15 text-destructive text-sm border border-destructive/30 flex items-center gap-2">
+        <div className="fixed bottom-4 right-4 px-4 py-2 rounded-lg bg-primary/10 text-primary text-sm border border-primary/25 flex items-center gap-2 shadow-lg">
           <span>{error}</span>
-          <button onClick={() => setError('')} className="ml-2 text-destructive/60 hover:text-destructive text-xs">&times;</button>
+          <button onClick={() => setError('')} className="ml-2 text-primary/60 hover:text-primary text-xs">&times;</button>
         </div>
       ) : null}
     </div>

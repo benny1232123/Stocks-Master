@@ -4,6 +4,11 @@ export default {
   content: ['./index.html', './src/**/*.{js,jsx}'],
   theme: {
     extend: {
+      fontFamily: {
+        sans: ['"PingFang SC"', '"Microsoft YaHei"', '"Helvetica Neue"', 'system-ui', 'sans-serif'],
+        mono: ['"JetBrains Mono"', '"Cascadia Code"', '"Fira Code"', '"Consolas"', 'monospace'],
+        num: ['"DIN Alternate"', '"JetBrains Mono"', '"Cascadia Code"', '"SF Mono"', 'monospace'],
+      },
       colors: {
         border: 'hsl(var(--border))',
         input: 'hsl(var(--input))',
@@ -34,6 +39,8 @@ export default {
           DEFAULT: 'hsl(var(--card))',
           foreground: 'hsl(var(--card-foreground))',
         },
+        info: 'hsl(var(--info))',
+        warn: 'hsl(var(--warn))',
       },
       borderRadius: {
         lg: 'var(--radius)',
@@ -45,9 +52,19 @@ export default {
           from: { opacity: '0', transform: 'translateY(8px)' },
           to: { opacity: '1', transform: 'translateY(0)' },
         },
+        'slide-in': {
+          from: { transform: 'scaleY(0)' },
+          to: { transform: 'scaleY(1)' },
+        },
+        'shimmer': {
+          '0%': { transform: 'translateX(-100%)' },
+          '100%': { transform: 'translateX(100%)' },
+        },
       },
       animation: {
         'fade-in': 'fade-in 0.35s ease-out',
+        'slide-in': 'slide-in 0.2s ease-out',
+        'shimmer': 'shimmer 1.5s ease-in-out infinite',
       },
     },
   },
