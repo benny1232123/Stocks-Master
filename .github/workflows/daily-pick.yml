@@ -8,7 +8,7 @@ on:
 jobs:
   daily-pick:
     runs-on: ubuntu-latest
-    timeout-minutes: 45
+    timeout-minutes: 90
     permissions:
       contents: write
     steps:
@@ -33,7 +33,7 @@ jobs:
       - name: 策略1 Boll 扫描
         id: boll
         continue-on-error: true
-        timeout-minutes: 15
+        timeout-minutes: 25
         env:
           KLINE_BACKEND: akshare
           ENABLE_VISUALIZATION: "0"
@@ -48,7 +48,7 @@ jobs:
       - name: 策略2 题材热度
         id: theme
         continue-on-error: true
-        timeout-minutes: 10
+        timeout-minutes: 20
         env:
           KLINE_BACKEND: akshare
           SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
@@ -62,7 +62,7 @@ jobs:
       - name: 策略3 CCTV 板块
         id: cctv
         continue-on-error: true
-        timeout-minutes: 10
+        timeout-minutes: 20
         env:
           KLINE_BACKEND: akshare
           SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
