@@ -45,6 +45,8 @@ stock_data/*.csv
 
 # Secrets (Supabase keys etc.)
 .streamlit/secrets.toml
+.env
+.env.*
 
 # Misc
 *.log
