@@ -47,6 +47,8 @@ git push -u origin main
 | SMTP_USER | 你的邮箱 | |
 | SMTP_PASS | 邮箱授权码 | |
 | SMTP_TO | 收件邮箱 | |
+| SUPABASE_URL | https://xxxx.supabase.co | Supabase 缓存层（选股结果跨环境复用） |
+| SUPABASE_KEY | eyJ... | Supabase anon/service key |
 | COS_SECRET_ID | 腾讯云 API SecretId | COS 用 |
 | COS_SECRET_KEY | 腾讯云 API SecretKey | |
 | COS_BUCKET | stocks-master-1250000000 | |

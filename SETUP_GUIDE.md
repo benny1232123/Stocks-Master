@@ -132,6 +132,8 @@ git config --global user.name "你的名字"
 | `SMTP_USER` | 你的邮箱@qq.com | |
 | `SMTP_PASS` | QQ邮箱授权码 | |
 | `SMTP_TO` | 收件邮箱 | |
+| `SUPABASE_URL` | https://xxxx.supabase.co | Supabase 缓存层（选股结果跨环境复用） |
+| `SUPABASE_KEY` | eyJ... | Supabase anon/service key |
 | `COS_SECRET_ID` | AKIDxxx | 第2.3步 |
 | `COS_SECRET_KEY` | xxx | |
 | `COS_BUCKET` | stocks-master-1250000000 | 第2.2步 |

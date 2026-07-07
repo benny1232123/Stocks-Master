@@ -1,8 +1,10 @@
 """Dashboard data helpers shared by the API and cache prewarm script."""
 from __future__ import annotations
 
+import concurrent.futures
 import os
 import pickle
+import threading
 from datetime import date, datetime
 from pathlib import Path
 from typing import Any
@@ -26,6 +28,39 @@ def configure_runtime() -> None:
     os.environ.setdefault("KLINE_BACKEND", "akshare")
 
 
+# 看板数据拉取超时（秒）。超时即视为失败并跳过该数据源，避免单接口卡死拖垮预热。
+DASHBOARD_API_TIMEOUT = float(os.getenv("DASHBOARD_API_TIMEOUT", "30"))
+
+
+def _call_with_timeout(func, timeout_seconds):
+    """单任务超时包装：daemon 线程执行，超时抛 TimeoutError。非并发，不增加接口压力；daemon 线程超时后不阻塞进程退出。"""
+    box: dict[str, Any] = {}
+
+    def _run() -> None:
+        try:
+            box["result"] = func()
+        except BaseException as err:  # noqa: BLE001 - 透传异常到主线程
+            box["error"] = err
+
+    worker = threading.Thread(target=_run, daemon=True)
+    worker.start()
+    worker.join(timeout=timeout_seconds)
+    if worker.is_alive():
+        raise concurrent.futures.TimeoutError(f"调用超时（>{timeout_seconds}s）")
+    if "error" in box:
+        raise box["error"]
+    return box.get("result")
+
+
+def _safe_fetch(func, timeout_seconds, label, default):
+    """超时 + 容错：失败/超时返回 default，不抛异常。"""
+    try:
+        return _call_with_timeout(func, timeout_seconds)
+    except Exception as exc:
+        print(f"[dashboard] {label} 获取失败（已跳过）: {exc}")
+        return default
+
+
 def _load_cache(key: str) -> Any:
     """Load a dated cache file if it exists."""
     today = date.today().strftime("%Y-%m-%d")
@@ -43,7 +78,11 @@ def fetch_index_snapshot() -> pd.DataFrame:
     """Fetch the latest index snapshot from the Sina HTTP source."""
     from smcore.data.quote_sina import fetch_sina_index_quotes
 
-    quotes = fetch_sina_index_quotes(INDEX_MAP.values())
+    try:
+        quotes = fetch_sina_index_quotes(INDEX_MAP.values())
+    except Exception as exc:
+        print(f"[dashboard] 指数快照获取失败（已跳过）: {exc}")
+        return pd.DataFrame()
     if not quotes:
         return pd.DataFrame()
 
@@ -71,8 +110,8 @@ def fetch_market_breadth() -> dict[str, Any] | None:
     """Fetch the market breadth snapshot."""
     import akshare as ak
 
-    df = ak.stock_zh_a_spot()
-    if df is None or df.empty:
+    df = _safe_fetch(lambda: ak.stock_zh_a_spot(), DASHBOARD_API_TIMEOUT, "市场宽度", None)
+    if df is None or not isinstance(df, pd.DataFrame) or df.empty:
         return None
 
     up = (df["涨跌幅"] > 0).sum()
@@ -95,7 +134,7 @@ def fetch_macro_snapshot() -> dict[str, Any] | None:
     result: dict[str, Any] = {}
 
     try:
-        usdcny = ak.currency_boc_sina(symbol="美元")
+        usdcny = _call_with_timeout(lambda: ak.currency_boc_sina(symbol="美元"), DASHBOARD_API_TIMEOUT)
         if usdcny is not None and not usdcny.empty:
             last = usdcny.iloc[-1]
             if "中行折算价" in last:
@@ -104,7 +143,10 @@ def fetch_macro_snapshot() -> dict[str, Any] | None:
         pass
 
     try:
-        shibor = ak.rate_interbank(market="上海银行间同业拆放利率", symbol="Shibor", indicator="隔夜")
+        shibor = _call_with_timeout(
+            lambda: ak.rate_interbank(market="上海银行间同业拆放利率", symbol="Shibor", indicator="隔夜"),
+            DASHBOARD_API_TIMEOUT,
+        )
         if shibor is not None and not shibor.empty:
             if "利率" in shibor.columns:
                 result["Shibor隔夜"] = float(shibor.iloc[-1].get("利率", 0))

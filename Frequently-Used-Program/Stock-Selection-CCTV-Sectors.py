@@ -14,6 +14,10 @@ MENTION_WEIGHT = 2
 PREVIEW_LEN = 120
 EMERGING_TOP_N = 40
 
+# akshare 主数据调用超时（秒）。超时即抛 TimeoutError，触发本地回退，
+# 避免单条请求卡死拖垮整个流程（API 无原生超时，挂起会一直等到 step 上限）。
+AK_API_TIMEOUT = float(os.getenv("AK_API_TIMEOUT", "30"))
+
 POSITIVE_WORDS = ["增长", "提升", "突破", "回暖", "提振", "改善", "加速", "扩产", "景气", "超预期", "利好"]
 NEGATIVE_WORDS = ["下滑", "下降", "承压", "收缩", "风险", "波动", "走弱", "放缓", "亏损", "违约", "不及预期"]
 NEUTRAL_WORDS = ["推进", "建设", "部署", "召开", "会议", "发布", "落实", "调研", "强调"]
@@ -605,7 +609,7 @@ def fetch_data_with_fallback(api_func, file_path, *args, **kwargs):
 
     try:
         try:
-            df_api = api_func(*args, **kwargs)
+            df_api = _call_with_timeout(lambda: api_func(*args, **kwargs), AK_API_TIMEOUT)
             if isinstance(df_api, pd.DataFrame) and not df_api.empty:
                 df_api.to_sql(table_name, conn, if_exists='replace', index=False)
                 print(f"API调用成功。数据已保存至数据库表: {table_name}")
@@ -717,7 +721,16 @@ def _next_day_return(code, signal_date):
     try:
         start = datetime.datetime.strptime(signal_date, "%Y%m%d")
         end = start + datetime.timedelta(days=20)
-        hist = ak.stock_zh_a_hist(symbol=str(code), period="daily", start_date=start.strftime("%Y%m%d"), end_date=end.strftime("%Y%m%d"), adjust="qfq")
+        hist = _call_with_timeout(
+            lambda: ak.stock_zh_a_hist(
+                symbol=str(code),
+                period="daily",
+                start_date=start.strftime("%Y%m%d"),
+                end_date=end.strftime("%Y%m%d"),
+                adjust="qfq",
+            ),
+            AK_API_TIMEOUT,
+        )
         if hist is None or len(hist) < 2:
             return None
         c0 = float(hist.iloc[0]["收盘"])

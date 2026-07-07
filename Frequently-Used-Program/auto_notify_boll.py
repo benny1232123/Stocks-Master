@@ -2000,6 +2000,7 @@ def main():
         cctv_extra_sources = os.getenv("CCTV_EXTRA_NEWS_SOURCES", "cls,sina").strip() or "cls,sina"
         cctv_extra_limit = os.getenv("CCTV_EXTRA_NEWS_LIMIT", "120").strip() or "120"
         cctv_extra_timeout = os.getenv("CCTV_EXTRA_NEWS_TIMEOUT", "8").strip() or "8"
+        cctv_idle_timeout = os.getenv("CCTV_IDLE_TIMEOUT", "900").strip() or "900"
 
         if cctv_disable_extra_news:
             cctv_cmd.append("--disable-extra-news")
@@ -2026,6 +2027,7 @@ def main():
             cwd=ROOT_DIR,
             step_index=2,
             stage_name="cctv",
+            idle_timeout_seconds=cctv_idle_timeout,
         )
         if cctv_returncode != 0 and cctv_tail:
             _append_log(log_lines, "--- CCTV output tail ---")

@@ -133,6 +133,7 @@ jobs:
           retention-days: 30
 
       - name: 预热看板数据
+        continue-on-error: true
         env:
           KLINE_BACKEND: akshare
         run: python scripts/prewarm_dashboard.py
