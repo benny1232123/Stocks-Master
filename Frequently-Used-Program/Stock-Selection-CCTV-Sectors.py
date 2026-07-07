@@ -1,6 +1,7 @@
 import argparse
 import datetime
 import re
+import sqlite3
 from concurrent.futures import ThreadPoolExecutor, TimeoutError
 from pathlib import Path
 
@@ -575,14 +576,65 @@ def _confidence_tier(heat_score, mention, sentiment):
     return "观察"
 
 
+def fetch_data_with_fallback(api_func, file_path, *args, **kwargs):
+    """
+    通用数据获取函数，优先调用 API，失败或空数据时回退到本地数据库。
+    数据库文件: stock_data/stocks_data.db
+
+    :param api_func: akshare的数据获取函数。
+    :param file_path: 原文件路径参数，用于生成唯一的数据库表名。
+    :param args, kwargs: 传递给api_func的参数。
+    :return: pandas DataFrame。
+    """
+    db_path = str(DATA_DIR / "stocks_data.db")
+
+    def sanitize_table_name(name: str) -> str:
+        name = str(name)
+        name = name.replace("stock_data/", "").replace(".csv", "").replace("-", "_")
+        name = re.sub(r"[^0-9a-zA-Z_]+", "_", name)
+        name = re.sub(r"_+", "_", name).strip("_")
+        if not name:
+            name = "table"
+        if name[0].isdigit():
+            name = f"t_{name}"
+        return name
+
+    table_name = sanitize_table_name(file_path)
+
+    conn = sqlite3.connect(db_path)
+
+    try:
+        try:
+            df_api = api_func(*args, **kwargs)
+            if isinstance(df_api, pd.DataFrame) and not df_api.empty:
+                df_api.to_sql(table_name, conn, if_exists='replace', index=False)
+                print(f"API调用成功。数据已保存至数据库表: {table_name}")
+                return df_api
+            print(f"API返回空数据: {table_name}，尝试回退本地数据库")
+        except Exception as api_exc:
+            print(f"API调用失败: {table_name} | {api_exc}，尝试回退本地数据库")
+
+        try:
+            df_local = pd.read_sql_query(f'SELECT * FROM "{table_name}"', conn)
+            if not df_local.empty:
+                print(f"回退成功，读取本地数据库表: {table_name}")
+                return df_local
+            print(f"本地数据库表为空: {table_name}")
+        except Exception:
+            print(f"本地数据库缺少表: {table_name}")
+
+        return pd.DataFrame()
+    finally:
+        conn.close()
+
+
 def build_sector_stock_pool(date_str, sector_df, stock_hints, sector_keywords, *, use_sw_industry=True):
     if sector_df.empty:
         return pd.DataFrame()
-    try:
-        base_df = ak.stock_info_a_code_name()
-    except Exception as exc:
-        print(f"获取A股代码名称失败，跳过个股池输出: {exc}")
-        return pd.DataFrame()
+    base_df = fetch_data_with_fallback(
+        ak.stock_info_a_code_name,
+        "stock_data/stock_info_a_code_name.csv",
+    )
     if base_df is None or base_df.empty or not {"code", "name"}.issubset(base_df.columns):
         return pd.DataFrame()
 

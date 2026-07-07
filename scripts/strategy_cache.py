@@ -42,8 +42,32 @@ CREATE POLICY "allow_all" ON strategy_cache FOR ALL USING (true) WITH CHECK (tru
 """
 
 
+def _load_env_file():
+    """手动加载项目根目录 .env 中的 SUPABASE 配置（无外部依赖）。
+    仅在对应环境变量尚未设置时填充，避免覆盖 GitHub Actions 注入的 secrets。"""
+    import os
+
+    env_path = ROOT / ".env"
+    if not env_path.exists():
+        return
+    try:
+        with open(env_path, encoding="utf-8") as f:
+            for line in f:
+                line = line.strip()
+                if not line or line.startswith("#") or "=" not in line:
+                    continue
+                key, val = line.split("=", 1)
+                key, val = key.strip(), val.strip().strip('"').strip("'")
+                if key in ("SUPABASE_URL", "SUPABASE_KEY") and not os.getenv(key):
+                    os.environ[key] = val
+    except Exception:
+        pass
+
+
 def _get_client():
     import os
+
+    _load_env_file()
     try:
         from supabase import create_client
     except ImportError:

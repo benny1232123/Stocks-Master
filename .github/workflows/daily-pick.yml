@@ -62,7 +62,7 @@ jobs:
       - name: 策略3 CCTV 板块
         id: cctv
         continue-on-error: true
-        timeout-minutes: 20
+        timeout-minutes: 25
         env:
           KLINE_BACKEND: akshare
           SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
