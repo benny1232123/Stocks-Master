@@ -6,12 +6,12 @@ const buttonVariants = cva(
   {
     variants: {
       variant: {
-        default: 'bg-primary text-primary-foreground hover:bg-primary/90 shadow-[0_2px_8px_hsla(0,72%,51%,0.3)]',
-        secondary: 'bg-card text-foreground border border-border hover:bg-card/80 hover:border-primary/20',
-        ghost: 'text-muted hover:bg-white/[0.04] hover:text-foreground',
-        outline: 'border border-border bg-transparent text-foreground hover:bg-white/[0.04]',
-        destructive: 'bg-destructive text-destructive-foreground hover:bg-destructive/90 shadow-[0_2px_8px_hsla(152,60%,42%,0.25)]',
-        gold: 'bg-accent text-accent-foreground hover:bg-accent/90 shadow-[0_2px_8px_hsla(38,80%,55%,0.3)]',
+        default: 'bg-primary text-primary-foreground hover:bg-primary/90 shadow-[0_4px_12px_rgba(0,0,0,0.08)]',
+        secondary: 'bg-white text-foreground border border-[rgba(0,0,0,0.1)] hover:bg-[#F5F5F5] hover:border-[rgba(0,0,0,0.18)]',
+        ghost: 'text-muted hover:bg-black/[0.04] hover:text-foreground',
+        outline: 'border border-[rgba(0,0,0,0.12)] bg-white text-foreground hover:border-[#1a1a1a]',
+        destructive: 'bg-destructive text-destructive-foreground hover:bg-destructive/90 shadow-[0_4px_12px_rgba(0,0,0,0.08)]',
+        gold: 'bg-primary text-primary-foreground hover:bg-primary/90',
       },
       size: {
         default: 'h-10 px-4 py-2',

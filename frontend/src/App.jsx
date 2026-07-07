@@ -22,10 +22,10 @@ const TABS = [
 function StatCard({ label, value, trend }) {
   return (
     <div className="stat-card">
-      <span>{label}</span>
-      <strong>{value}</strong>
+      <span className="label">{label}</span>
+      <span className="value">{value}</span>
       {trend != null ? (
-        <span className={cn('text-xs font-medium', trend >= 0 ? 'text-primary' : 'text-destructive')}>
+        <span className={cn('text-xs font-medium', trend >= 0 ? 'text-up' : 'text-down')}>
           {trend >= 0 ? <ArrowUpRight className="inline w-3 h-3" /> : <ArrowDownRight className="inline w-3 h-3" />}
           {Math.abs(trend)}%
         </span>
@@ -84,7 +84,7 @@ function EquityChart({ equity, initialCapital }) {
   const xTicks = equity.filter((_, i) => i % Math.max(1, Math.floor(equity.length / 6)) === 0 || i === equity.length - 1)
 
   const lastVal = values[values.length - 1]
-  const curveColor = lastVal >= initialCapital ? 'hsl(0, 72%, 51%)' : 'hsl(152, 60%, 42%)'
+  const curveColor = lastVal >= initialCapital ? '#E5484D' : '#30A46C'
   const ddValues = equity.map((d) => d.drawdown ?? 0)
   const ddMin = Math.min(...ddValues)
   const ddH = 50
@@ -95,15 +95,15 @@ function EquityChart({ equity, initialCapital }) {
       <svg viewBox={`0 0 ${W} ${H}`} className="equity-svg">
         {yTicks.map((t, i) => (
           <g key={i}>
-            <line x1={PAD.left} y1={t.y} x2={W - PAD.right} y2={t.y} stroke="hsl(220, 25%, 15%)" />
-            <text x={PAD.left - 8} y={t.y + 4} textAnchor="end" fill="hsl(220, 16%, 48%)" fontSize="10">
+            <line x1={PAD.left} y1={t.y} x2={W - PAD.right} y2={t.y} stroke="rgba(0,0,0,0.06)" />
+            <text x={PAD.left - 8} y={t.y + 4} textAnchor="end" fill="rgba(0,0,0,0.4)" fontSize="10">
               {t.label}
             </text>
           </g>
         ))}
 
-        <line x1={PAD.left} y1={baselineY} x2={W - PAD.right} y2={baselineY} stroke="hsl(38, 80%, 55%)" strokeDasharray="4 3" opacity="0.4" />
-        <text x={W - PAD.right + 4} y={baselineY + 4} fill="hsl(38, 80%, 55%)" opacity="0.5" fontSize="9">
+        <line x1={PAD.left} y1={baselineY} x2={W - PAD.right} y2={baselineY} stroke="rgba(0,0,0,0.25)" strokeDasharray="4 3" opacity="0.4" />
+        <text x={W - PAD.right + 4} y={baselineY + 4} fill="rgba(0,0,0,0.35)" opacity="0.5" fontSize="9">
           初始
         </text>
 
@@ -113,7 +113,7 @@ function EquityChart({ equity, initialCapital }) {
         {xTicks.map((d, i) => {
           const idx = equity.indexOf(d)
           return (
-            <text key={i} x={xScale(idx)} y={H - 8} textAnchor="middle" fill="hsl(220, 16%, 48%)" fontSize="9">
+            <text key={i} x={xScale(idx)} y={H - 8} textAnchor="middle" fill="rgba(0,0,0,0.4)" fontSize="9">
               {d.date.slice(5)}
             </text>
           )
@@ -127,7 +127,7 @@ function EquityChart({ equity, initialCapital }) {
             {equity.map((d, i) => {
               const v = d.drawdown ?? 0
               if (v === 0) return null
-              return <rect key={i} x={xScale(i) - 2} y={0} width="4" height={ddYScale(v)} fill="hsl(0, 72%, 51%)" opacity="0.35" rx="1" />
+              return <rect key={i} x={xScale(i) - 2} y={0} width="4" height={ddYScale(v)} fill="#E5484D" opacity="0.35" rx="1" />
             })}
           </svg>
         </div>
@@ -376,96 +376,116 @@ function App() {
   const fusionRows = fusionResult?.rows ?? []
 
   return (
-    <div className="flex min-h-screen">
-      <aside className="sidebar">
-        <div className="sidebar-brand">
-          <h1>Stocks Master</h1>
-          <p>策略选股工作台</p>
-        </div>
-        <nav className="sidebar-nav">
+    <>
+      {/* ── Icon rail ── */}
+      <aside className="rail">
+        <div className="rail-mark">S</div>
+        <nav className="rail-nav">
           {TABS.map((tab) => {
             const Icon = tab.icon
             return (
               <button
                 key={tab.id}
-                className={cn('sidebar-item', activeView === tab.id && 'active')}
+                className={cn('rail-item', activeView === tab.id && 'active')}
                 onClick={() => setActiveView(tab.id)}
+                aria-label={tab.label}
               >
                 <Icon />
-                <span>{tab.label}</span>
+                <span className="rail-tip">{tab.label}</span>
               </button>
             )
           })}
         </nav>
-        <div className="sidebar-footer">
-          {error ? (
-            <>
-              <span className="status-dot offline" />
-              <span>离线</span>
-            </>
-          ) : (
-            <>
-              <span className="status-dot online" />
-              <span>已连接</span>
-            </>
-          )}
-          <div style={{ marginTop: 8, fontSize: 11, opacity: 0.7 }}>
-            <div style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
-              <span className={`status-dot ${dbStatus?.storage_backend === 'supabase' ? 'online' : 'offline'}`} style={{
-                width: 5, height: 5, borderRadius: '50%', display: 'inline-block',
-              }} />
-              <span>DB: {dbStatus == null ? '检测中...' : dbStatus.storage_backend === 'supabase' ? 'Supabase' : '本地 JSON'}</span>
-            </div>
-            {dbStatus?.supabase_configured && (
-              <div style={{ marginTop: 2, color: 'hsl(152, 60%, 42%)' }}>
-                Supabase 已配置
-              </div>
-            )}
-          </div>
-        </div>
       </aside>
 
-      <main className="main-content">
-        <div className="top-bar">
-          <div className="breadcrumb">
-            <span>Stocks Master</span>
-            <span>/</span>
-            <span className="current">
-              {TABS.find((t) => t.id === activeView)?.label ?? ''}
-            </span>
-          </div>
-          <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-            <div style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
-              <span className={`status-dot ${dbStatus?.storage_backend === 'supabase' ? 'online' : 'offline'}`} style={{
-                width: 5, height: 5, borderRadius: '50%', display: 'inline-block',
-              }} />
-              <span style={{ fontSize: 11 }}>
-                DB: {dbStatus == null ? '...' : dbStatus.storage_backend === 'supabase' ? 'Supabase' : '本地'}
-              </span>
-            </div>
-            <span className={`status-dot ${error ? 'offline' : 'online'}`} style={{
-              width: 6, height: 6, borderRadius: '50%', display: 'inline-block',
-              background: error ? 'hsl(152, 60%, 42%)' : 'hsl(0, 72%, 51%)',
-              boxShadow: error ? '0 0 6px hsla(152, 60%, 42%, 0.5)' : '0 0 6px hsla(0, 72%, 51%, 0.5)',
-            }} />
-            <span>{error ? '离线' : '在线'}</span>
-          </div>
+      {/* ── Command bar ── */}
+      <div className="command">
+        <span className="command-wordmark">Stocks Master</span>
+        <div className="command-right">
+          <span className={cn('chip', error ? 'alert' : '')}>
+            <span className="dot" />
+            {error ? '离线' : '在线'}
+          </span>
+          <span className={cn('chip', 'supabase')}>
+            <span className="dot" />
+            {dbStatus == null ? 'DB…' : dbStatus.storage_backend === 'supabase' ? 'Supabase' : '本地'}
+          </span>
         </div>
+      </div>
 
+      {/* ── Content ── */}
+      <main className="content">
         {activeView === 'overview' ? (
           <>
-            <div className="page-header">
-              <h2>首页概览</h2>
-              <p>页面上的空状态表示"当前还没跑出结果"，不是功能缺失。</p>
+            {/* 签名元素：指数行情带 */}
+            {indexSnapshot.length > 0 ? (
+              <div className="ticker" aria-label="指数行情">
+                <div className="ticker-track">
+                  {[...indexSnapshot, ...indexSnapshot].map((item, i) => (
+                    <span className="ticker-item" key={i}>
+                      <span className="name">{item.指数}</span>
+                      <span className="val">{Number(item.最新价).toFixed(2)}</span>
+                      <span className={cn('chg', Number(item.涨跌幅) >= 0 ? 'text-up' : 'text-down')}>
+                        {Number(item.涨跌幅) >= 0 ? '+' : ''}{Number(item.涨跌幅).toFixed(2)}%
+                      </span>
+                    </span>
+                  ))}
+                </div>
+              </div>
+            ) : null}
+
+            {/* Hero：信号板 */}
+            <section className="hero animate-fade-in">
+              <div className="hero-card">
+                <div className="hero-eyebrow">今日信号 · Signal of the day</div>
+                <h1 className="hero-title">
+                  {latestActionList ? latestActionList.name.replace(/\.md$/, '') : '策略信号待生成'}
+                </h1>
+                <p className="hero-sub">
+                  {latestActionList
+                    ? `最新日报已就绪，预览 ${actionPreview.length} 行。运行选股流程可刷新融合排序与回测曲线。`
+                    : '还没跑出结果。去「选股」启动布林扫描 + 回测，信号会自动出现在这里。'}
+                </p>
+                <div className="hero-figure">
+                  <span className="num">{actionPreview.length || 0}</span>
+                  <span className="unit">行预览</span>
+                </div>
+              </div>
+              <div className="hero-side">
+                <div className="hero-stat">
+                  <div className="label">候选池</div>
+                  <div className="value">{candidateCodes.length}</div>
+                </div>
+                <div className="hero-stat">
+                  <div className="label">上涨 / 下跌</div>
+                  <div className="value">
+                    {marketBreadth.上涨 ?? '--'}
+                    <span style={{ color: 'hsl(var(--muted))', fontSize: '1rem', fontWeight: 400 }}> / {marketBreadth.下跌 ?? '--'}</span>
+                  </div>
+                </div>
+                <div className="hero-stat">
+                  <div className="label">美元 / 人民币</div>
+                  <div className="value">{macroSnapshot['美元/人民币'] ?? '--'}</div>
+                </div>
+              </div>
+            </section>
+
+            {/* 关键指标 */}
+            <div className="stat-grid animate-fade-in">
+              <StatCard label="上涨" value={marketBreadth.上涨 ?? '--'} />
+              <StatCard label="下跌" value={marketBreadth.下跌 ?? '--'} />
+              <StatCard label="上涨比例" value={marketBreadth.上涨比例 ?? '--'} />
+              <StatCard label="Shibor 隔夜" value={macroSnapshot['Shibor隔夜'] ?? '--'} />
             </div>
+
             <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
-              <SectionCard title="指数快照" subtitle="来自 /api/dashboard" className="glass-card-accent">
+              <SectionCard title="指数快照" subtitle="来自 /api/dashboard">
                 <div className="index-list">
                   {indexSnapshot.length > 0 ? indexSnapshot.map((item) => (
                     <div key={item.指数} className="index-row">
                       <span>{item.指数}</span>
                       <strong>{Number(item.最新价).toFixed(2)}</strong>
-                      <em className={cn(Number(item.涨跌幅) >= 0 ? 'text-primary' : 'text-destructive')}>
+                      <em className={cn(Number(item.涨跌幅) >= 0 ? 'text-up' : 'text-down')}>
                         {Number(item.涨跌幅) >= 0 ? '+' : ''}{Number(item.涨跌幅).toFixed(2)}%
                       </em>
                     </div>
@@ -475,32 +495,15 @@ function App() {
                 </div>
               </SectionCard>
 
-              <div className="grid grid-cols-1 gap-4">
-                <SectionCard title="最新日报" className="glass-card">
-                  {latestActionList ? (
-                    <div className="artifact-box">
-                      <div className="artifact-name">{latestActionList.name}</div>
-                      <div className="artifact-path">{latestActionList.path}</div>
-                      <div className="artifact-count">预览行数 {actionPreview.length}</div>
-                    </div>
-                  ) : <div className="empty-state">暂无日报文件</div>}
-                </SectionCard>
-                <div className="grid grid-cols-2 gap-4">
-                  <SectionCard title="市场热度" className="glass-card">
-                    <div className="metric-stack">
-                      <StatCard label="上涨" value={marketBreadth.上涨 ?? '--'} />
-                      <StatCard label="下跌" value={marketBreadth.下跌 ?? '--'} />
-                      <StatCard label="上涨比例" value={marketBreadth.上涨比例 ?? '--'} />
-                    </div>
-                  </SectionCard>
-                  <SectionCard title="宏观指标" className="glass-card">
-                    <div className="metric-stack">
-                      <StatCard label="美元/人民币" value={macroSnapshot['美元/人民币'] ?? '--'} />
-                      <StatCard label="Shibor 隔夜" value={macroSnapshot['Shibor隔夜'] ?? '--'} />
-                    </div>
-                  </SectionCard>
-                </div>
-              </div>
+              <SectionCard title="最新日报" subtitle={latestActionList?.path ?? ''}>
+                {latestActionList ? (
+                  <div className="artifact-box">
+                    <div className="artifact-name">{latestActionList.name}</div>
+                    <div className="artifact-path">{latestActionList.path}</div>
+                    <div className="artifact-count">预览行数 {actionPreview.length}</div>
+                  </div>
+                ) : <div className="empty-state">暂无日报文件</div>}
+              </SectionCard>
             </div>
           </>
         ) : null}
@@ -512,7 +515,7 @@ function App() {
               <p>设置价格区间，点击按钮生成候选池并执行布林扫描。扫描完成后自动回测。</p>
             </div>
             <div className="grid grid-cols-1 lg:grid-cols-3 gap-4">
-              <SectionCard title="选股参数" className="glass-card-accent lg:col-span-2">
+              <SectionCard title="选股参数" className="lg:col-span-2">
                 <div className="selection-form">
                   <Field label="最低价" hint="过滤太低价标的">
                     <input value={selectionParams.priceMin} type="number" min="1" step="1"
@@ -620,7 +623,7 @@ function App() {
                 ) : null}
               </SectionCard>
 
-              <SectionCard title="候选池" className="glass-card">
+              <SectionCard title="候选池">
                 <div className="candidate-pool">
                   <div className="candidate-count">
                     <span className="candidate-count-num">{candidateCodes.length}</span>
@@ -651,7 +654,7 @@ function App() {
               <h2>个股分析</h2>
               <p>输入股票代码查看布林带信号和技术指标</p>
             </div>
-            <SectionCard title="个股分析" className="glass-card-accent max-w-3xl">
+            <SectionCard title="个股分析" className="max-w-3xl">
               <div className="analysis-form">
                 <input value={analysisCode} onChange={(e) => setAnalysisCode(e.target.value)}
                   placeholder="输入股票代码，例如 000001"
@@ -680,7 +683,7 @@ function App() {
               <p>查看持仓、录入交易</p>
             </div>
             <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
-              <SectionCard title="持仓概览" className="glass-card-accent">
+              <SectionCard title="持仓概览">
                 {openPositions.length > 0 ? (
                   <div className="index-list">
                     {openPositions.slice(0, 5).map((item) => (
@@ -694,7 +697,7 @@ function App() {
                 ) : <div className="empty-state">还没有持仓记录</div>}
               </SectionCard>
 
-              <SectionCard title="交易录入" className="glass-card">
+              <SectionCard title="交易录入">
                 <div className="trade-form">
                   <input value={tradeForm.date} type="date" className="h-9 rounded-lg bg-card border border-border px-3 text-foreground"
                     onChange={(e) => setTradeForm((p) => ({ ...p, date: e.target.value }))} />
@@ -752,7 +755,7 @@ function App() {
               <h2>回测结果</h2>
               <p>选股完成后自动生成权益曲线</p>
             </div>
-            <SectionCard title="回测" className="glass-card-accent">
+            <SectionCard title="回测">
               {backtestSummary ? (
                 <>
                   <div className="grid grid-cols-3 lg:grid-cols-6 gap-3">
@@ -771,7 +774,7 @@ function App() {
                         <div key={i} className="table-row">
                           <span>{t.code}</span>
                           <strong>{t.buy_date} → {t.sell_date}</strong>
-                          <em className={cn(t.return_pct >= 0 ? 'text-primary' : 'text-destructive')}>
+                          <em className={cn(t.return_pct >= 0 ? 'text-up' : 'text-down')}>
                             {t.return_pct >= 0 ? '+' : ''}{t.return_pct}%
                           </em>
                         </div>
@@ -795,7 +798,7 @@ function App() {
           <button onClick={() => setError('')} className="ml-2 text-primary/60 hover:text-primary text-xs">&times;</button>
         </div>
       ) : null}
-    </div>
+    </>
   )
 }
 

@@ -5,9 +5,10 @@ export default {
   theme: {
     extend: {
       fontFamily: {
-        sans: ['"PingFang SC"', '"Microsoft YaHei"', '"Helvetica Neue"', 'system-ui', 'sans-serif'],
-        mono: ['"JetBrains Mono"', '"Cascadia Code"', '"Fira Code"', '"Consolas"', 'monospace'],
-        num: ['"DIN Alternate"', '"JetBrains Mono"', '"Cascadia Code"', '"SF Mono"', 'monospace'],
+        display: ['"Space Grotesk"', '"Inter"', 'system-ui', '-apple-system', 'sans-serif'],
+        sans: ['"Inter"', 'system-ui', '-apple-system', '"PingFang SC"', 'sans-serif'],
+        mono: ['"JetBrains Mono"', 'ui-monospace', '"SF Mono"', '"Consolas"', 'monospace'],
+        num: ['"JetBrains Mono"', 'ui-monospace', 'monospace'],
       },
       colors: {
         border: 'hsl(var(--border))',
@@ -40,31 +41,21 @@ export default {
           foreground: 'hsl(var(--card-foreground))',
         },
         info: 'hsl(var(--info))',
-        warn: 'hsl(var(--warn))',
+        warn: 'hsl(var(--info))',
       },
       borderRadius: {
         lg: 'var(--radius)',
-        md: 'calc(var(--radius) - 2px)',
-        sm: 'calc(var(--radius) - 4px)',
+        md: 'calc(var(--radius) - 3px)',
+        sm: 'calc(var(--radius) - 5px)',
       },
       keyframes: {
         'fade-in': {
           from: { opacity: '0', transform: 'translateY(8px)' },
           to: { opacity: '1', transform: 'translateY(0)' },
         },
-        'slide-in': {
-          from: { transform: 'scaleY(0)' },
-          to: { transform: 'scaleY(1)' },
-        },
-        'shimmer': {
-          '0%': { transform: 'translateX(-100%)' },
-          '100%': { transform: 'translateX(100%)' },
-        },
       },
       animation: {
-        'fade-in': 'fade-in 0.35s ease-out',
-        'slide-in': 'slide-in 0.2s ease-out',
-        'shimmer': 'shimmer 1.5s ease-in-out infinite',
+        'fade-in': 'fade-in 0.6s ease-out',  /* 缓慢淡入 600ms */
       },
     },
   },
