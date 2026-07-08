@@ -434,40 +434,46 @@
 /* ── 日报预览表（最新日报卡片内，完整展示所有行）── */
 .daily-preview { overflow-x: auto; }
 .dp-head {
-  display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(80px, 1fr));
-  gap: 8px;
+  display: inline-grid;
+  min-width: 100%;
+  grid-template-columns: 70px 80px 56px 60px 58px 64px 64px 72px 60px 120px 120px;
+  gap: 0;
   padding: 10px 12px 8px;
   border-bottom: 2px solid hsl(var(--border));
   background: hsl(var(--muted) / 0.06);
 }
 .dp-head span {
   font-family: var(--font-mono);
-  font-size: 0.68rem;
-  letter-spacing: 0.06em;
+  font-size: 0.66rem;
+  letter-spacing: 0.05em;
   text-transform: uppercase;
   color: hsl(var(--muted));
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
+  padding: 0 4px;
 }
 .dp-row {
-  display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(80px, 1fr));
-  gap: 8px;
-  padding: 9px 12px;
+  display: inline-grid;
+  min-width: 100%;
+  grid-template-columns: 70px 80px 56px 60px 58px 64px 64px 72px 60px 120px 120px;
+  gap: 0;
+  padding: 8px 12px;
   border-bottom: 1px solid hsl(var(--border) / 0.5);
   transition: background 0.15s ease;
 }
 .dp-row:hover { background: hsl(var(--primary) / 0.04); }
 .dp-row span {
   font-family: var(--font-mono);
-  font-size: 0.82rem;
+  font-size: 0.78rem;
   color: hsl(var(--foreground));
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
   font-variant-numeric: tabular-nums;
+  padding: 0 4px;
+  display: block;
+  min-height: 20px;
 }
 .dp-footer {
   margin-top: 10px;
@@ -479,12 +485,20 @@
 }
 
 /* ── 完整日报表（「日报」标签，全量数据）── */
-.daily-full { overflow-x: auto; border-radius: var(--radius); border: 1px solid hsl(var(--border)); }
+.daily-full {
+  overflow-x: auto;
+  border-radius: var(--radius);
+  border: 1px solid hsl(var(--border));
+  /* 固定布局：不随内容撑开，强制横向滚动 */
+  display: block;
+  white-space: nowrap;
+}
 .df-head {
-  display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(88px, 1fr));
-  gap: 8px;
-  padding: 12px 16px;
+  display: inline-grid;
+  min-width: 100%;
+  grid-template-columns: 70px 90px 56px 60px 58px 64px 64px 72px 60px 140px 140px;
+  gap: 0;
+  padding: 12px 14px;
   background: hsl(var(--muted) / 0.07);
   border-bottom: 2px solid hsl(var(--border));
   position: sticky;
@@ -493,20 +507,22 @@
 }
 .df-head span {
   font-family: var(--font-mono);
-  font-size: 0.7rem;
-  letter-spacing: 0.05em;
+  font-size: 0.68rem;
+  letter-spacing: 0.04em;
   text-transform: uppercase;
   color: hsl(var(--muted));
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
   font-weight: 600;
+  padding: 0 6px;
 }
 .df-row {
-  display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(88px, 1fr));
-  gap: 8px;
-  padding: 10px 16px;
+  display: inline-grid;
+  min-width: 100%;
+  grid-template-columns: 70px 90px 56px 60px 58px 64px 64px 72px 60px 140px 140px;
+  gap: 0;
+  padding: 10px 14px;
   border-bottom: 1px solid hsl(var(--border) / 0.5);
   cursor: pointer;
   transition: background 0.15s ease;
@@ -515,13 +531,22 @@
 .df-row:last-child { border-bottom: none; }
 .df-row span {
   font-family: var(--font-mono);
-  font-size: 0.82rem;
+  font-size: 0.8rem;
   color: hsl(var(--foreground));
-  white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
+  white-space: nowrap;
   font-variant-numeric: tabular-nums;
+  padding: 0 6px;
+  min-height: 22px;
+  line-height: 22px;
+  display: block;
 }
+/* 列特定样式 */
+.df-row span:nth-child(1) { font-weight: 700; color: hsl(var(--primary)); }   /* 股票代码 */
+.df-row span:nth-child(2) { font-family: var(--font-body); font-size: 0.78rem; }  /* 名称 */
+.df-row span:nth-child(4),                                                    /* 来源策略 */
+.df-row span:nth-child(5) { text-align: center; }                             /* 综合评分 */
 
 /* ── 邮件式日报摘要 ── */
 .report-head {
@@ -847,6 +872,41 @@
 .bt-empty-icon { font-size: 2.4rem; margin-bottom: 12px; }
 .bt-empty-title { font-family: var(--font-display); font-size: 1.15rem; font-weight: 600; color: hsl(var(--foreground)); margin-bottom: 6px; }
 .bt-empty-desc { font-size: 0.84rem; color: hsl(var(--muted)); margin-bottom: 28px; max-width: 420px; margin-left: auto; margin-right: auto; line-height: 1.6; }
+
+/* ── 手动多策略回测表单 ── */
+.bt-form { display: flex; flex-direction: column; gap: 16px; max-width: 640px; }
+.bt-field { display: flex; flex-direction: column; gap: 6px; }
+.bt-field > label { font-size: 0.78rem; font-weight: 600; color: hsl(var(--muted)); letter-spacing: 0.02em; }
+.bt-codes {
+  width: 100%; resize: vertical; padding: 10px 12px;
+  font-family: var(--font-mono); font-size: 0.82rem;
+  color: hsl(var(--foreground)); background: hsl(var(--surface-1));
+  border: 1px solid hsl(var(--border)); border-radius: var(--radius);
+}
+.bt-codes:focus, .bt-row input:focus { outline: 2px solid hsl(var(--primary) / 0.4); border-color: hsl(var(--primary)); }
+.bt-row { display: flex; gap: 16px; flex-wrap: wrap; }
+.bt-row .bt-field { flex: 1; min-width: 160px; }
+.bt-row input[type="date"] {
+  padding: 9px 12px; font-size: 0.82rem; color: hsl(var(--foreground));
+  background: hsl(var(--surface-1)); border: 1px solid hsl(var(--border)); border-radius: var(--radius);
+}
+.bt-strats { display: flex; gap: 16px; flex-wrap: wrap; }
+.bt-strat {
+  display: inline-flex; align-items: center; gap: 6px; cursor: pointer;
+  font-size: 0.84rem; color: hsl(var(--foreground)); user-select: none;
+}
+.bt-strat input { width: 15px; height: 15px; accent-color: hsl(var(--primary)); }
+.btn-primary {
+  align-self: flex-start; padding: 10px 22px; border: none; cursor: pointer;
+  font-size: 0.86rem; font-weight: 600; color: #fff;
+  background: hsl(var(--primary)); border-radius: var(--radius);
+  transition: opacity 0.15s ease, transform 0.1s ease;
+}
+.btn-primary:hover:not(:disabled) { opacity: 0.9; }
+.btn-primary:active:not(:disabled) { transform: translateY(1px); }
+.btn-primary:disabled { opacity: 0.5; cursor: not-allowed; }
+.bt-hint { font-size: 0.76rem; color: hsl(var(--muted)); line-height: 1.6; margin: 0; }
+
 .bt-steps { display: flex; align-items: center; justify-content: center; gap: 8px; flex-wrap: wrap; }
 .bt-step {
   display: flex; align-items: center; gap: 8px;

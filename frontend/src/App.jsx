@@ -138,6 +138,13 @@ function EquityChart({ equity, initialCapital }) {
   )
 }
 
+const STRAT_LABEL = {
+  boll: 'Boll 低吸',
+  relativity: 'Relativity 相对强弱',
+  theme: 'Theme 题材动量',
+  cctv: 'CCTV 舆情',
+}
+
 function App() {
   const [activeView, setActiveView] = useState('overview')
   const [dashboard, setDashboard] = useState(null)
@@ -168,6 +175,14 @@ function App() {
   const [btTaskId, setBtTaskId] = useState(null)
   const [scanProgress, setScanProgress] = useState({ current: 0, total: 0 })
 
+  // 手动多策略回测表单
+  const _today = new Date().toISOString().slice(0, 10)
+  const _yearAgo = new Date(Date.now() - 365 * 86400000).toISOString().slice(0, 10)
+  const [multiCodes, setMultiCodes] = useState('600519,000858')
+  const [multiStart, setMultiStart] = useState(_yearAgo)
+  const [multiEnd, setMultiEnd] = useState(_today)
+  const [multiStrats, setMultiStrats] = useState({ boll: true, relativity: true, theme: true, cctv: false })
+
   const isRunning = scanPhase !== null
 
   async function cancelTask(taskId) {
@@ -192,6 +207,34 @@ function App() {
       const { task_id } = await resp.json()
       setBtTaskId(task_id)
     } catch { setScanPhase(null); setError('回测启动失败') }
+  }
+
+  // 手动多策略 Backtrader 回测
+  async function runMultiBacktest() {
+    const codes = multiCodes.split(/[\n,，\s]+/).map((s) => s.trim()).filter(Boolean)
+    if (!codes.length) { setError('请输入股票代码'); return }
+    const strategies = Object.entries(multiStrats).filter(([, v]) => v).map(([k]) => k).join(',')
+    if (!strategies) { setError('请至少选择一个策略'); return }
+    setBacktestRun(null)
+    setScanLogs([])
+    setError('')
+    try {
+      const resp = await fetch('/api/backtests/run', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          mode: 'multi',
+          codes,
+          start: multiStart,
+          end: multiEnd,
+          strategies,
+          initial_capital: 100000,
+        }),
+      })
+      if (!resp.ok) { setError('回测请求失败'); return }
+      const { task_id } = await resp.json()
+      setBtTaskId(task_id)
+    } catch { setError('回测启动失败') }
   }
 
   const [analysisLoading, setAnalysisLoading] = useState(false)
@@ -1174,8 +1217,56 @@ function App() {
           <>
             <div className="page-header">
               <h2>回测结果</h2>
-              <p>选股完成后自动生成权益曲线</p>
+              <p>运行手动多策略回测，或选股后自动生成权益曲线</p>
             </div>
+
+            <SectionCard title="手动多策略回测">
+              <div className="bt-form">
+                <div className="bt-field">
+                  <label>股票代码（逗号 / 换行分隔）</label>
+                  <textarea
+                    className="bt-codes"
+                    rows={3}
+                    value={multiCodes}
+                    onChange={(e) => setMultiCodes(e.target.value)}
+                    placeholder="例如 600519,000858,300750"
+                  />
+                </div>
+                <div className="bt-row">
+                  <div className="bt-field">
+                    <label>开始日期</label>
+                    <input type="date" value={multiStart} onChange={(e) => setMultiStart(e.target.value)} />
+                  </div>
+                  <div className="bt-field">
+                    <label>结束日期</label>
+                    <input type="date" value={multiEnd} onChange={(e) => setMultiEnd(e.target.value)} />
+                  </div>
+                </div>
+                <div className="bt-field">
+                  <label>策略（多策略融合打分）</label>
+                  <div className="bt-strats">
+                    {['boll', 'relativity', 'theme', 'cctv'].map((s) => (
+                      <label key={s} className="bt-strat">
+                        <input
+                          type="checkbox"
+                          checked={multiStrats[s]}
+                          onChange={(e) => setMultiStrats((p) => ({ ...p, [s]: e.target.checked }))}
+                        />
+                        {STRAT_LABEL[s]}
+                      </label>
+                    ))}
+                  </div>
+                </div>
+                <button className="btn-primary" onClick={runMultiBacktest} disabled={btTaskId && backtestRun === null}>
+                  运行多策略回测
+                </button>
+                <p className="bt-hint">
+                  Backtrader 多策略引擎：Boll 低吸 + 相对强弱(Relativity，需指数) + 题材轮动量价 + CCTV 舆情(需外部输入)。
+                  单票仓位上限 30%，止损=布林下轨 / 止盈=布林上轨，含 A股佣金万2.5 + 印花税千0.5。
+                </p>
+              </div>
+            </SectionCard>
+
             <SectionCard title="回测">
               {backtestSummary ? (
                 <>

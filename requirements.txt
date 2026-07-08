@@ -10,6 +10,9 @@ requests
 python-dotenv>=1.0
 supabase>=2.0  # optional: cloud trade sync (TRADES_BACKEND=supabase)
 
+# ── 多策略回测引擎（Backtrader）──
+backtrader>=1.9.78
+
 # ── 可选高速数据源：通达信(pytdx) ──
 # 直连券商行情服务器，毫秒级、最稳，国内服务器/本地默认启用（环境变量 TDX_ENABLED 默认 auto）。
 # 注意：pytdx 1.72 的 setup.py 调用了已废弃的 pypandoc.convert，直接 `pip install pytdx`

@@ -144,9 +144,10 @@ def fetch_index_snapshot() -> pd.DataFrame:
     return pd.DataFrame(rows)
 
 
-# ── 东方财富轻量计数接口（海外友好主源）─────────────────────────────
-# 不拉全量快照，而是按涨跌幅过滤后读取 data.total（单次仅返回计数，
-# payload 极小）。东财 push2 CDN 与日 K 线同源，海外可达（GitHub/Render）。
+# ── 东方财富轻量计数接口 ───────────────────────────────────────
+# 不拉全量快照，按涨跌幅过滤后读取 data.total（单次仅返回计数，
+# payload 极小）。注意：push2/82.push2 域名在 GitHub Actions / Render
+# 等海外环境可能不可达，因此仅作为"国内友好"源；海外主源见下方腾讯接口。
 _EM_FS_ALL = "m:0+t:6,m:0+t:80,m:1+t:2,m:1+t:23"
 _EM_HOSTS = [
     "https://82.push2.eastmoney.com/api/qt/clist/get",
@@ -175,7 +176,7 @@ def _em_breadth_count(fs: str) -> int | None:
     last_err: Exception | None = None
     for host in _EM_HOSTS:
         try:
-            r = requests.get(host, params=params, timeout=10, headers=_EM_HEADERS)
+            r = requests.get(host, params=params, timeout=8, headers=_EM_HEADERS)
             j = r.json()
             data = j.get("data")
             if isinstance(data, dict) and data.get("total") is not None:
@@ -189,7 +190,7 @@ def _em_breadth_count(fs: str) -> int | None:
 
 
 def _fetch_breadth_eastmoney_count() -> dict[str, Any] | None:
-    """海外友好的市场宽度：东财计数接口，4 次 tiny 请求，不拉全量快照。"""
+    """东财计数接口（4 次 tiny 请求），国内可达时最快最准。"""
     up = _em_breadth_count(_EM_FS_ALL + "+f3>0")
     dn = _em_breadth_count(_EM_FS_ALL + "+f3<0")
     fl = _em_breadth_count(_EM_FS_ALL + "+f3=0")
@@ -205,16 +206,112 @@ def _fetch_breadth_eastmoney_count() -> dict[str, Any] | None:
     }
 
 
+# ── 腾讯行情接口（海外友好主源）───────────────────────────────
+# qt.gtimg.cn 在海外（GitHub Actions / Render）实测可达（~101ms）。
+# 策略：取沪深核心成分股（中证100/上证50/深证成指成分）样本，
+# 统计样本内涨跌比例作为市场宽度估计值。不拉全量，payload 小。
+_TX_HOST = "http://qt.gtimg.cn"
+_TX_SAMPLE_CODES = [
+    # 上证50权重股（金融/消费/能源/科技）
+    "sh600519","sh601318","sh600036","sh601398","sh601988","sh600900",
+    "sh601012","sh601668","sh600276","sh601888","sh600887","sh601088",
+    "sh600048","sh601628","sh600585","sh603259","sh601985","sh603160",
+    # 深证成指权重股
+    "sz000858","sz000333","sz002594","sz300750","sz002475","sz300059",
+    "sz300142","sz002714","sz002230","sz300124","sz002415","sz300274",
+    # 创业板权重
+    "sz300760","sz300122","sz300003","sz300014","sz300033","sz300002",
+    # 科创50权重
+    "sh688981","sh688256","sh688005","sh688012","sh688111",
+]
+
+# 腾讯返回字段说明（`~` 分隔）：
+#  0=未知 1=名称 2=代码 3=当前价 4=昨收 5=开盘价 6=交易量 ...
+# 31=涨跌额 32=涨跌幅(%) 33=换手率 34=PE ... 45=最高 46=最低 47=振幅
+# 32号字段是涨跌幅%，直接可用
+_TX_CHG_FIELD_IDX = 32
+
+
+def _fetch_breadth_tencent_sample() -> dict[str, Any] | None:
+    """腾讯行情采样估计市场宽度（海外友好）。
+
+    请求 ~40 只核心权重股的实时行情，统计涨跌数量和比例，
+    作为全市场的近似估计。腾讯 qt.gtimg.cn 海外可达、响应快。
+    """
+    codes_str = ",".join(_TX_SAMPLE_CODES)
+    url = f"{_TX_HOST}/q={codes_str}"
+    try:
+        r = requests.get(url, timeout=10, headers={"User-Agent": "Mozilla/5.0"})
+        r.encoding = "gbk"
+        text = r.text.strip()
+        if not text:
+            return None
+    except Exception as exc:
+        print(f"[dashboard] 腾讯行情请求失败: {exc}")
+        return None
+
+    up = dn = fl = total = 0
+    for line in text.splitlines():
+        line = line.strip()
+        if not line or "=" not in line:
+            continue
+        try:
+            # 格式: v_sh600519="1~贵州茅台~600519~1199.30~...~0.88~..."
+            parts = line.split("=", 1)
+            if len(parts) < 2:
+                continue
+            raw = parts[1].strip()
+            # 去掉首尾引号（可能有单/双引号或无引号）
+            if len(raw) >= 2 and raw[0] == '"':
+                raw = raw[1:]
+            if len(raw) >= 1 and raw[-1] == '"':
+                raw = raw[:-1]
+            if not raw:
+                continue
+            fields = raw.split("~")
+            if len(fields) < _TX_CHG_FIELD_IDX + 1:
+                continue
+            chg_str = fields[_TX_CHG_FIELD_IDX].strip()
+            if not chg_str or chg_str == "0.00":
+                chg = 0.0
+            else:
+                chg = float(chg_str)
+            total += 1
+            if chg > 0:
+                up += 1
+            elif chg < 0:
+                dn += 1
+            else:
+                fl += 1
+        except (ValueError, IndexError):
+            continue
+
+    if total == 0:
+        return None
+    # 按样本比例推算全市场（A 股约 ~5000 只）
+    estimated_total = 5000
+    ratio = estimated_total / total
+    return {
+        "上涨": int(up * ratio),
+        "下跌": int(dn * ratio),
+        "平盘": int(fl * ratio),
+        "总数": estimated_total,
+        "上涨比例": round(up / total * 100, 1),
+        "_source": f"tencent_sample_{total}stocks",
+    }
+
+
 def fetch_market_breadth() -> dict[str, Any] | None:
     """Fetch the market breadth snapshot (up/down counts across A-shares).
 
-    数据链路口径（云端=海外，本地=国内）：
+    数据链路（按优先级）：
       1) 通达信直连（仅本机/国内可达，毫秒级全市场，最准）
-      2) 东财计数接口（轻量 4 次 tiny 请求，海外友好 —— 云端主源）
-      3) 全量快照兜底（东方财富/新浪，重，海外可能超时，仅最后手段）
-    任意一层拿到数据即返回，全失败返回 None（前端显示「暂无」而非崩溃）。
+      2) 腾讯行情采样（~40 只权重股，qt.gtimg.cn 海外可达，快速估计）
+      3) 东财计数接口（4 次 tiny 请求，国内精确，海外可能不可达）
+      4) 全量快照兜底（akshare 东财/新浪，重，仅最后手段）
+    任意一层拿到数据即返回，全失败返回 None（前端显示「暂无」）。
     """
-    # 1) 通达信优先（直连券商行情服务器，全市场快照毫秒到秒级；云端无 pytdx 自动跳过）
+    # 1) 通达信优先（直连券商行情服务器，毫秒级；云端无 pytdx 自动跳过）
     try:
         from smcore.data.tdx_client import available as tdx_available, get_client
         if tdx_available():
@@ -225,12 +322,17 @@ def fetch_market_breadth() -> dict[str, Any] | None:
     except Exception as exc:
         print(f"[dashboard] 市场宽度 Tdx 失败，回退: {exc}")
 
-    # 2) 东财计数接口（轻量，海外友好 —— 云端主源）
-    b = _safe_fetch(_fetch_breadth_eastmoney_count, 30, "市场宽度(东财计数)", None, retries=2)
+    # 2) 腾讯行情采样（海外友好主源：qt.gtimg.cn 可达，~40 权重股估算）
+    b = _safe_fetch(_fetch_breadth_tencent_sample, 12, "市场宽度(腾讯采样)", None, retries=2)
     if b:
         return b
 
-    # 3) 全量快照兜底（重，海外可能超时）
+    # 3) 东财计数接口（国内精确；海外 push2 域名可能不可达）
+    b = _safe_fetch(_fetch_breadth_eastmoney_count, 15, "市场宽度(东财计数)", None, retries=1)
+    if b:
+        return b
+
+    # 4) 全量快照兜底（重，海外可能超时）
     import akshare as ak
 
     for name, fn in (

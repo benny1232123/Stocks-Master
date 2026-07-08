@@ -7,7 +7,7 @@ import threading
 import time
 import uuid
 from contextlib import asynccontextmanager
-from datetime import date
+from datetime import date, datetime, timedelta
 from pathlib import Path
 
 from dotenv import load_dotenv
@@ -28,7 +28,7 @@ os.environ.setdefault("KLINE_BACKEND", "akshare")
 
 from smcore.artifacts import find_latest_file, find_latest_file_any, preview_csv, read_csv_file
 from smcore.analysis import build_stock_analysis
-from smcore.backtest import run_signal_backtest
+from smcore.backtest import run_signal_backtest, run_multi_strategy_backtest
 from smcore.dashboard import build_dashboard_payload, prewarm_dashboard_cache
 from smcore.holdings import add_trade, clear_trades, portfolio_snapshot, trades_backend_name
 from smcore.selection import get_candidate_codes, run_strategy_fusion, scan_boll_batch
@@ -275,6 +275,37 @@ def run_backtest(payload: dict) -> dict:
         return {"summary": {"error": "未提供股票代码"}}
     codes = codes[:3000]
 
+    # 多策略 Backtrader 模式：传入 mode="multi" + start/end/strategies
+    mode = str(payload.get("mode", "signal")).lower()
+    if mode == "multi":
+        start = _parse_date(payload.get("start"), date.today() - timedelta(days=365))
+        end = _parse_date(payload.get("end"), date.today())
+        strategies = payload.get("strategies", "boll,relativity,theme")
+        task_id = _new_task("backtest")
+        _append_log(task_id, f"开始多策略回测({strategies})，共 {len(codes)} 只股票，区间 {start}~{end}")
+
+        def _run_multi():
+            try:
+                _append_log(task_id, "正在拉取K线并运行多策略 Backtrader 引擎...")
+                result = run_multi_strategy_backtest(
+                    codes,
+                    start,
+                    end,
+                    initial_capital=float(payload.get("initial_capital", 100000)),
+                    strategies=strategies,
+                )
+                _append_log(task_id, f"回测完成：{result.summary.get('num_trades', 0)} 笔交易")
+                _finish_task(task_id, result={
+                    "summary": result.summary,
+                    "equity": result.equity.to_dict(orient="records"),
+                    "trades": result.trades.to_dict(orient="records"),
+                })
+            except Exception as e:
+                _finish_task(task_id, error=str(e))
+
+        threading.Thread(target=_run_multi, daemon=True).start()
+        return {"task_id": task_id}
+
     import pandas as pd
     signals = pd.DataFrame({"日期": [signal_date] * len(codes), "代码": codes})
 
@@ -302,6 +333,19 @@ def run_backtest(payload: dict) -> dict:
 
     threading.Thread(target=_run, daemon=True).start()
     return {"task_id": task_id}
+
+
+def _parse_date(value, default: date) -> date:
+    """解析 YYYY-MM-DD / YYYYMMDD 为 date，失败返回 default。"""
+    if not value:
+        return default
+    text = str(value).strip()
+    for fmt in ("%Y-%m-%d", "%Y%m%d"):
+        try:
+            return datetime.strptime(text, fmt).date()
+        except ValueError:
+            continue
+    return default
 
 
 @app.get("/api/analysis/{code}")
