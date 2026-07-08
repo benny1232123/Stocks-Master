@@ -191,6 +191,16 @@ function App() {
     } catch { setScanPhase(null); setError('回测启动失败') }
   }
 
+  // 从列表/榜单点选股票 → 拉取分析并切换详情
+  async function openAnalysis(code) {
+    if (!code) return
+    setAnalysisCode(code)
+    try {
+      const r = await fetch(`/api/analysis/${code}`)
+      if (r.ok) setAnalysis(await r.json())
+    } catch { /* 离线时保持空，由 error chip 提示 */ }
+  }
+
   // Poll boll-scan task
   useEffect(() => {
     if (!bollTaskId) return
@@ -375,6 +385,24 @@ function App() {
   const selectionRows = selectionScan?.rows ?? []
   const fusionRows = fusionResult?.rows ?? []
 
+  // 分析页主从列表数据源：优先融合结果（带名称+评分），否则用候选池代码
+  const analysisList = fusionRows.length
+    ? fusionRows.map((r) => ({ code: r['股票代码'], name: r['股票名称'] ?? '', score: Number(r['综合评分'] ?? 0) }))
+    : candidateCodes.map((code) => ({ code, name: code, score: null }))
+
+  // 概览页「候选榜」：按融合综合评分排名，点选跳分析页
+  const rankRows = fusionRows
+    .map((r) => ({ code: r['股票代码'], name: r['股票名称'] ?? '', score: Number(r['综合评分'] ?? 0) }))
+    .filter((r) => r.code)
+  const rankMax = Math.max(1, ...rankRows.map((r) => r.score))
+
+  // 信号徽章配色（红涨绿跌语义）
+  const sigRaw = analysisSignal?.signal
+  const sigClass = !sigRaw ? 'neutral'
+    : /买|多|看多|bull/i.test(String(sigRaw)) ? 'up'
+    : /卖|空|看空|bear/i.test(String(sigRaw)) ? 'down'
+    : 'neutral'
+
   return (
     <>
       {/* ── Icon rail ── */}
@@ -505,6 +533,27 @@ function App() {
                 ) : <div className="empty-state">暂无日报文件</div>}
               </SectionCard>
             </div>
+
+            {/* 榜单：候选榜 · 融合排序（抄 chengzuopeng 榜单页） */}
+            <SectionCard title="候选榜 · 融合排序" subtitle="点选跳转分析页" className="mt-4">
+              {rankRows.length > 0 ? (
+                <div className="rank-list">
+                  {rankRows.map((r, i) => (
+                    <div key={r.code} className="rank-row" onClick={() => openAnalysis(r.code)}>
+                      <span className="rank-no">{i + 1}</span>
+                      <span className="rank-code">{r.code}</span>
+                      <span className="rank-name">{r.name}</span>
+                      <span className="rank-bar">
+                        <span className="rank-bar-fill" style={{ width: `${Math.max(4, (r.score / rankMax) * 100)}%` }} />
+                      </span>
+                      <span className="rank-score">{Number(r.score).toFixed(1)}</span>
+                    </div>
+                  ))}
+                </div>
+              ) : (
+                <div className="empty-state">运行「选股」中的融合排序后，这里会按综合评分生成榜单</div>
+              )}
+            </SectionCard>
           </>
         ) : null}
 
@@ -652,27 +701,53 @@ function App() {
           <>
             <div className="page-header">
               <h2>个股分析</h2>
-              <p>输入股票代码查看布林带信号和技术指标</p>
+              <p>从左侧候选列表点选，右侧查看布林带信号与技术指标（雪球式主从布局）</p>
             </div>
-            <SectionCard title="个股分析" className="max-w-3xl">
-              <div className="analysis-form">
-                <input value={analysisCode} onChange={(e) => setAnalysisCode(e.target.value)}
-                  placeholder="输入股票代码，例如 000001"
-                  className="flex-1 h-10 rounded-lg bg-card border border-border px-3 text-foreground placeholder:text-muted-foreground" />
-                <Button onClick={async () => {
-                  const r = await fetch(`/api/analysis/${analysisCode}`)
-                  if (r.ok) setAnalysis(await r.json())
-                }}>加载分析</Button>
+            <div className="split">
+              <aside className="split-list" aria-label="候选列表">
+                {analysisList.length > 0 ? analysisList.map((item) => (
+                  <button
+                    key={item.code}
+                    className={cn('split-item', analysisCode === item.code && 'active')}
+                    onClick={() => openAnalysis(item.code)}
+                  >
+                    <span className="si-code">{item.code}</span>
+                    <span className="si-name">{item.name}</span>
+                    {item.score != null ? <span className="si-score">{Number(item.score).toFixed(1)}</span> : null}
+                  </button>
+                )) : (
+                  <div className="empty-state" style={{ border: 'none', background: 'transparent' }}>去「选股」生成候选池</div>
+                )}
+              </aside>
+
+              <div className="split-detail">
+                <SectionCard title="个股分析" className="max-w-none">
+                  <div className="analysis-form" style={{ marginBottom: 16 }}>
+                    <input value={analysisCode} onChange={(e) => setAnalysisCode(e.target.value)}
+                      placeholder="输入股票代码，例如 000001"
+                      className="flex-1 h-10 rounded-lg bg-card border border-border px-3 text-foreground placeholder:text-muted-foreground" />
+                    <Button onClick={() => openAnalysis(analysisCode)}>加载分析</Button>
+                  </div>
+                  {analysis ? (
+                    <>
+                      <div className="detail-head">
+                        <div className="detail-title">
+                          <span className="detail-code">{analysisCode}</span>
+                          <span className="detail-name">{analysis?.latest?.name ?? analysisList.find((i) => i.code === analysisCode)?.name ?? ''}</span>
+                        </div>
+                        <span className={cn('signal-badge', sigClass)}>{analysisSignal?.signal ?? '暂无信号'}</span>
+                      </div>
+                      <div className="analysis-grid">
+                        <StatCard label="信号" value={analysisSignal?.signal ?? '--'} />
+                        <StatCard label="最新收盘" value={analysisLatest?.close ?? '--'} />
+                        <StatCard label="RSI" value={analysisLatest?.rsi ?? '--'} />
+                        <StatCard label="距下轨%" value={analysis?.metrics?.dist_to_lower_pct ?? '--'} />
+                      </div>
+                    </>
+                  ) : <div className="empty-state">从左侧列表点选，或输入代码后点击「加载分析」</div>}
+                </SectionCard>
               </div>
-              {analysis ? (
-                <div className="analysis-grid">
-                  <StatCard label="信号" value={analysisSignal?.signal ?? '--'} />
-                  <StatCard label="最新收盘" value={analysisLatest?.close ?? '--'} />
-                  <StatCard label="RSI" value={analysisLatest?.rsi ?? '--'} />
-                  <StatCard label="距下轨%" value={analysis?.metrics?.dist_to_lower_pct ?? '--'} />
-                </div>
-              ) : <div className="empty-state">输入代码后点击「加载分析」</div>}
-            </SectionCard>
+            </div>
           </>
         ) : null}
 

@@ -614,6 +614,59 @@
 .candidate-tag-more { background: hsla(229, 87%, 56%, 0.06); border-color: hsla(229, 87%, 56%, 0.2); color: hsl(var(--primary)); font-weight: 500; }
 .candidate-footer { font-size: 0.72rem; color: hsl(var(--muted-foreground)); margin-top: 8px; }
 
+/* ── Split: 列表 + 详情 主从布局（抄 FreqUI 交易视图 / 雪球个股详情）── */
+.split { display: grid; grid-template-columns: 252px 1fr; gap: 16px; align-items: start; }
+.split-list {
+  background: hsl(var(--card)); border: 1px solid hsl(var(--border));
+  border-radius: var(--radius); padding: 10px; max-height: 580px; overflow-y: auto;
+  display: flex; flex-direction: column; gap: 4px; position: sticky; top: 84px;
+}
+.split-item {
+  display: grid; grid-template-columns: auto 1fr auto; align-items: center; gap: 10px;
+  padding: 11px 12px; border-radius: 9px; border: 1px solid transparent;
+  background: transparent; cursor: pointer; text-align: left; width: 100%;
+  transition: background 0.18s ease, border-color 0.18s ease;
+}
+.split-item:hover { background: hsl(var(--surface-1)); }
+.split-item.active { background: hsla(229, 87%, 56%, 0.08); border-color: hsla(229, 87%, 56%, 0.28); }
+.split-item .si-code { font-family: var(--font-mono); font-size: 0.82rem; font-weight: 600; color: hsl(var(--foreground)); }
+.split-item .si-name { font-size: 0.78rem; color: hsl(var(--muted)); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.split-item .si-score { font-family: var(--font-mono); font-size: 0.78rem; font-weight: 600; color: hsl(var(--primary)); }
+.split-detail { min-width: 0; }
+
+.detail-head { display: flex; align-items: center; gap: 14px; flex-wrap: wrap; margin-bottom: 18px; }
+.detail-title { display: flex; align-items: baseline; gap: 10px; }
+.detail-code { font-family: var(--font-mono); font-size: 1.5rem; font-weight: 700; color: hsl(var(--foreground)); letter-spacing: -0.02em; font-variant-numeric: tabular-nums; }
+.detail-name { font-size: 0.92rem; color: hsl(var(--muted)); }
+
+/* 信号徽章（红涨绿跌语义，抄 FreqUI 状态色块） */
+.signal-badge {
+  display: inline-flex; align-items: center; gap: 6px;
+  padding: 5px 14px; border-radius: 999px; font-size: 0.82rem; font-weight: 600; font-family: var(--font-mono);
+  border: 1px solid transparent;
+}
+.signal-badge.up { color: var(--up); background: hsla(3, 80%, 50%, 0.1); border-color: hsla(3, 80%, 50%, 0.26); }
+.signal-badge.down { color: var(--down); background: hsla(157, 81%, 37%, 0.1); border-color: hsla(157, 81%, 37%, 0.26); }
+.signal-badge.neutral { color: hsl(var(--muted)); background: hsl(var(--surface-2)); border-color: hsl(var(--border)); }
+
+/* ── 榜单 ranking（抄 chengzuopeng 榜单页）── */
+.rank-list { display: grid; gap: 6px; }
+.rank-row {
+  display: grid; grid-template-columns: 30px 100px 1fr 120px 66px; align-items: center; gap: 12px;
+  padding: 10px 14px; border-radius: 10px; background: hsl(var(--card)); border: 1px solid hsl(var(--border));
+  cursor: pointer; transition: background 0.18s ease, border-color 0.18s ease, transform 0.18s ease;
+}
+.rank-row:hover { background: hsl(var(--surface-1)); border-color: hsla(229, 87%, 56%, 0.35); transform: translateX(3px); }
+.rank-no { font-family: var(--font-display); font-weight: 700; font-size: 0.92rem; color: hsl(var(--muted)); text-align: center; }
+.rank-row:nth-child(1) .rank-no { color: var(--up); }
+.rank-row:nth-child(2) .rank-no { color: hsl(var(--primary)); }
+.rank-row:nth-child(3) .rank-no { color: hsl(38, 92%, 48%); }
+.rank-code { font-family: var(--font-mono); font-size: 0.82rem; font-weight: 600; color: hsl(var(--foreground)); }
+.rank-name { font-size: 0.82rem; color: hsl(var(--muted)); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.rank-bar { height: 7px; border-radius: 999px; background: hsl(var(--surface-2)); overflow: hidden; }
+.rank-bar-fill { height: 100%; border-radius: 999px; background: linear-gradient(90deg, hsla(229, 87%, 56%, 0.55), hsl(var(--primary))); transition: width 0.45s ease; }
+.rank-score { font-family: var(--font-mono); font-size: 0.84rem; font-weight: 600; color: hsl(var(--primary)); text-align: right; font-variant-numeric: tabular-nums; }
+
 /* ═══════════════════════════════════════════
    RESPONSIVE
    ═════════════════════════════════════════ */
@@ -621,6 +674,8 @@
   .hero { grid-template-columns: 1fr; }
   .stat-grid { grid-template-columns: repeat(2, 1fr); }
   .analysis-grid { grid-template-columns: repeat(2, 1fr); }
+  .split { grid-template-columns: 1fr; }
+  .split-list { position: static; max-height: 280px; }
 }
 @media (max-width: 720px) {
   .rail { width: 60px; }
@@ -629,4 +684,6 @@
   .stat-grid { grid-template-columns: 1fr; }
   .selection-form, .trade-form { grid-template-columns: 1fr; }
   .analysis-form { flex-direction: column; }
+  .rank-row { grid-template-columns: 24px 76px 1fr 52px; }
+  .rank-name { display: none; }
 }
