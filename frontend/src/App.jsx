@@ -7,6 +7,7 @@ import {
   FlaskConical,
   ArrowUpRight,
   ArrowDownRight,
+  FileText,
 } from 'lucide-react'
 import { Button } from './components/ui/button'
 import { cn } from './lib/utils'
@@ -15,6 +16,7 @@ const TABS = [
   { id: 'overview', label: '概览', icon: LayoutDashboard },
   { id: 'selection', label: '选股', icon: Filter },
   { id: 'analysis', label: '分析', icon: LineChart },
+  { id: 'daily', label: '日报', icon: FileText },
   { id: 'portfolio', label: '持仓', icon: Briefcase },
   { id: 'backtest', label: '回测', icon: FlaskConical },
 ]
@@ -156,6 +158,7 @@ function App() {
   const [error, setError] = useState('')
   const [scanLogs, setScanLogs] = useState([])
   const [dbStatus, setDbStatus] = useState(null)
+  const [fullDaily, setFullDaily] = useState(null)
   const logContainerRef = useRef(null)
 
   // Phase: null | 'candidates' | 'boll' | 'backtest' | 'fusion'
@@ -191,14 +194,27 @@ function App() {
     } catch { setScanPhase(null); setError('回测启动失败') }
   }
 
+  const [analysisLoading, setAnalysisLoading] = useState(false)
+  const [analysisError, setAnalysisError] = useState(null)
+
   // 从列表/榜单点选股票 → 拉取分析并切换详情
   async function openAnalysis(code) {
     if (!code) return
     setAnalysisCode(code)
+    setAnalysisLoading(true)
+    setAnalysisError(null)
     try {
       const r = await fetch(`/api/analysis/${code}`)
-      if (r.ok) setAnalysis(await r.json())
-    } catch { /* 离线时保持空，由 error chip 提示 */ }
+      if (r.ok) {
+        setAnalysis(await r.json())
+      } else {
+        setAnalysisError(`服务器返回 ${r.status}`)
+      }
+    } catch (err) {
+      setAnalysisError('无法连接后端 API（离线模式或服务未启动）')
+    } finally {
+      setAnalysisLoading(false)
+    }
   }
 
   // Poll boll-scan task
@@ -344,6 +360,19 @@ function App() {
       } catch (err) { if (err.name !== 'AbortError') setError('后端未启动或接口不可用') }
     }
     loadDashboard()
+    return () => controller.abort()
+  }, [])
+
+  // 加载完整日报数据（全部行，供「日报」标签全量查看）
+  useEffect(() => {
+    const controller = new AbortController()
+    async function loadFullDaily() {
+      try {
+        const resp = await fetch('/api/artifacts/daily-action-list/full', { signal: controller.signal })
+        if (resp.ok) setFullDaily(await resp.json())
+      } catch { /* 离线时保持 null */ }
+    }
+    loadFullDaily()
     return () => controller.abort()
   }, [])
 
@@ -543,14 +572,32 @@ function App() {
                 </div>
               </SectionCard>
 
-              <SectionCard title="最新日报" subtitle={latestActionList?.path ?? ''}>
-                {latestActionList ? (
-                  <div className="artifact-box">
-                    <div className="artifact-name">{latestActionList.name}</div>
-                    <div className="artifact-path">{latestActionList.path}</div>
-                    <div className="artifact-count">预览行数 {actionPreview.length}</div>
+              <SectionCard title="最新日报" subtitle={latestActionList?.path ?? ''} className="relative">
+                <button
+                  onClick={() => setActiveView('daily')}
+                  style={{ position: 'absolute', top: 14, right: 16, fontSize: '0.76rem', color: 'hsl(var(--primary))', background: 'transparent', border: 'none', cursor: 'pointer', fontFamily: 'var(--font-mono)' }}
+                >查看完整 →</button>
+                {latestActionList && actionPreview.length > 0 ? (
+                  <div className="daily-preview">
+                    <div className="dp-head">
+                      {Object.keys(actionPreview[0] ?? {}).map((k) => (
+                        <span key={k}>{k}</span>
+                      ))}
+                    </div>
+                    {actionPreview.map((row, i) => (
+                      <div key={i} className="dp-row">
+                        {Object.values(row ?? {}).map((v, j) => (
+                          <span key={j}>{v != null ? String(v) : '--'}</span>
+                        ))}
+                      </div>
+                    ))}
+                    <div className="dp-footer">共 {actionPreview.length} 行 · 完整文件: {latestActionList.name}</div>
                   </div>
-                ) : <div className="empty-state">暂无日报文件</div>}
+                ) : latestActionList ? (
+                  <div className="empty-state">日报文件存在但预览为空</div>
+                ) : (
+                  <div className="empty-state">暂无日报文件</div>
+                )}
               </SectionCard>
             </div>
 
@@ -745,9 +792,18 @@ function App() {
                   <div className="analysis-form" style={{ marginBottom: 16 }}>
                     <input value={analysisCode} onChange={(e) => setAnalysisCode(e.target.value)}
                       placeholder="输入股票代码，例如 000001"
-                      className="flex-1 h-10 rounded-lg bg-card border border-border px-3 text-foreground placeholder:text-muted-foreground" />
-                    <Button onClick={() => openAnalysis(analysisCode)}>加载分析</Button>
+                      className="flex-1 h-10 rounded-lg bg-card border border-border px-3 text-foreground placeholder:text-muted-foreground"
+                      onKeyDown={(e) => e.key === 'Enter' && openAnalysis(analysisCode)} />
+                    <Button onClick={() => openAnalysis(analysisCode)} disabled={analysisLoading}>
+                      {analysisLoading ? '请求中...' : '加载分析'}
+                    </Button>
                   </div>
+
+                  {analysisError ? (
+                    <div style={{ padding: '14px 16px', background: 'hsl(var(--destructive) / 0.08)', borderRadius: '8px', color: 'hsl(var(--destructive))', fontSize: '0.85rem', marginBottom: 12 }}>
+                      ⚠️ {analysisError}
+                    </div>
+                  ) : null}
                   {analysis ? (
                     <>
                       <div className="detail-head">
@@ -768,6 +824,40 @@ function App() {
                 </SectionCard>
               </div>
             </div>
+          </>
+        ) : null}
+
+        {activeView === 'daily' ? (
+          <>
+            <div className="page-header">
+              <h2>每日信号日报</h2>
+              <p>完整版 Daily-Action-List，所有信号行一览无余（点选某行可跳转分析页）</p>
+            </div>
+            {fullDaily?.rows?.length > 0 ? (
+              <SectionCard title={`完整日报 · ${fullDaily.total} 行`} subtitle={fullDaily.latest?.path ?? ''} className="max-w-none">
+                <div className="daily-full">
+                  <div className="df-head">
+                    {fullDaily.columns.map((col) => (
+                      <span key={col}>{col}</span>
+                    ))}
+                  </div>
+                  {fullDaily.rows.map((row, i) => {
+                    const code = row['股票代码'] ?? row['代码'] ?? Object.values(row)[0] ?? ''
+                    return (
+                      <div key={i} className="df-row" onClick={() => { const c = String(code).trim(); if (c) { setAnalysisCode(c); setActiveView('analysis'); openAnalysis(c) } }}>
+                        {fullDaily.columns.map((col) => (
+                          <span key={col}>{row[col] != null ? String(row[col]) : '--'}</span>
+                        ))}
+                      </div>
+                    )
+                  })}
+                </div>
+              </SectionCard>
+            ) : (
+              <div className="empty-state">
+                {fullDaily === null ? '加载中...' : '暂无日报文件，去「选股」跑完流程后这里会显示完整信号'}
+              </div>
+            )}
           </>
         ) : null}
 

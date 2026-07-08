@@ -164,6 +164,26 @@ def daily_action_list() -> dict:
     return {"latest": latest.__dict__, "preview": preview_csv(latest.path)}
 
 
+@app.get("/api/artifacts/daily-action-list/full")
+def daily_action_list_full() -> dict:
+    """返回完整日报数据（全部行），供前端「日报」页全量查看。"""
+    latest = find_latest_file("Daily-Action-List-*.csv")
+    if latest is None:
+        return {"latest": None, "columns": [], "rows": [], "total": 0}
+
+    frame = read_csv_file(latest.path)
+    if frame.empty:
+        return {"latest": latest.__dict__, "columns": frame.columns.tolist(), "rows": [], "total": 0}
+
+    return {
+        "latest": latest.__dict__,
+        "columns": frame.columns.tolist(),
+        "rows": frame.to_dict(orient="records"),
+        "total": len(frame),
+    }
+
+
+
 @app.get("/api/portfolio")
 def portfolio() -> dict:
     return portfolio_snapshot()

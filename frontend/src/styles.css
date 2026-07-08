@@ -320,7 +320,6 @@
   border-radius: var(--radius);
   background: hsl(var(--card));
   padding: 32px 34px;
-  overflow: hidden;
   box-shadow: 0 1px 2px hsla(220, 20%, 20%, 0.04);
 }
 .hero-card::before {
@@ -427,6 +426,98 @@
 .hpt-more {
   font-size: 0.76rem; color: hsl(var(--primary)); font-weight: 500;
   padding: 6px 10px 2px; text-align: center; cursor: pointer;
+}
+
+/* ── 日报预览表（最新日报卡片内，完整展示所有行）── */
+.daily-preview { overflow-x: auto; }
+.dp-head {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(80px, 1fr));
+  gap: 8px;
+  padding: 10px 12px 8px;
+  border-bottom: 2px solid hsl(var(--border));
+  background: hsl(var(--muted) / 0.06);
+}
+.dp-head span {
+  font-family: var(--font-mono);
+  font-size: 0.68rem;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: hsl(var(--muted));
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.dp-row {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(80px, 1fr));
+  gap: 8px;
+  padding: 9px 12px;
+  border-bottom: 1px solid hsl(var(--border) / 0.5);
+  transition: background 0.15s ease;
+}
+.dp-row:hover { background: hsl(var(--primary) / 0.04); }
+.dp-row span {
+  font-family: var(--font-mono);
+  font-size: 0.82rem;
+  color: hsl(var(--foreground));
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  font-variant-numeric: tabular-nums;
+}
+.dp-footer {
+  margin-top: 10px;
+  padding-top: 8px;
+  border-top: 1px dashed hsl(var(--border));
+  font-size: 0.76rem;
+  color: hsl(var(--muted));
+  text-align: right;
+}
+
+/* ── 完整日报表（「日报」标签，全量数据）── */
+.daily-full { overflow-x: auto; border-radius: var(--radius); border: 1px solid hsl(var(--border)); }
+.df-head {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(88px, 1fr));
+  gap: 8px;
+  padding: 12px 16px;
+  background: hsl(var(--muted) / 0.07);
+  border-bottom: 2px solid hsl(var(--border));
+  position: sticky;
+  top: 0;
+  z-index: 1;
+}
+.df-head span {
+  font-family: var(--font-mono);
+  font-size: 0.7rem;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+  color: hsl(var(--muted));
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  font-weight: 600;
+}
+.df-row {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(88px, 1fr));
+  gap: 8px;
+  padding: 10px 16px;
+  border-bottom: 1px solid hsl(var(--border) / 0.5);
+  cursor: pointer;
+  transition: background 0.15s ease;
+}
+.df-row:hover { background: hsl(var(--primary) / 0.05); }
+.df-row:last-child { border-bottom: none; }
+.df-row span {
+  font-family: var(--font-mono);
+  font-size: 0.82rem;
+  color: hsl(var(--foreground));
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  font-variant-numeric: tabular-nums;
 }
 
 /* ═══════════════════════════════════════════
