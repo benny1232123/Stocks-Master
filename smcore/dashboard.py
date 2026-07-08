@@ -25,8 +25,12 @@ INDEX_MAP = {
 
 
 def configure_runtime() -> None:
-    """Apply the runtime defaults needed by the data layer."""
-    os.environ.setdefault("KLINE_BACKEND", "akshare")
+    """Apply the runtime defaults needed by the data layer.
+
+    K 线默认优先通达信（最快最稳）；CI/云端若无 pytdx 或不可达，kline 的
+    回退链会自动切到 akshare，无需手动配置。
+    """
+    os.environ.setdefault("KLINE_BACKEND", "tdx")
 
 
 # 看板数据拉取超时（秒）。超时即视为失败并跳过该数据源，避免单接口卡死拖垮预热。
@@ -92,7 +96,22 @@ def _load_cache(key: str) -> Any:
 
 
 def fetch_index_snapshot() -> pd.DataFrame:
-    """Fetch the latest index snapshot from the Sina HTTP source."""
+    """Fetch the latest index snapshot.
+
+    优先通达信直连（毫秒级、稳），失败回退新浪 HTTP 源。
+    """
+    # 通达信优先
+    try:
+        from smcore.data.tdx_client import available as tdx_available, get_client
+        if tdx_available():
+            cli = get_client()
+            snap = _call_with_timeout(lambda: cli.get_index_snapshot(INDEX_MAP), 20)
+            if snap:
+                return pd.DataFrame(snap)
+    except Exception as exc:
+        print(f"[dashboard] 指数快照 Tdx 失败，回退新浪: {exc}")
+
+    # 回退：新浪 HTTP
     from smcore.data.quote_sina import fetch_sina_index_quotes
 
     try:
@@ -126,8 +145,21 @@ def fetch_index_snapshot() -> pd.DataFrame:
 def fetch_market_breadth() -> dict[str, Any] | None:
     """Fetch the market breadth snapshot (up/down counts across A-shares).
 
-    先试东方财富 spot（通常更快），失败再回退新浪 spot；任一成功即用。
+    优先通达信直连（~2-6s 拉全市场，远快于 akshare 的 60s 超时）；
+    失败/超时才回退东方财富/新浪 spot。
     """
+    # 通达信优先（直连券商行情服务器，全市场快照毫秒到秒级）
+    try:
+        from smcore.data.tdx_client import available as tdx_available, get_client
+        if tdx_available():
+            cli = get_client()
+            b = _call_with_timeout(cli.get_market_breadth, 30)
+            if b and b.get("总数"):
+                return b
+    except Exception as exc:
+        print(f"[dashboard] 市场宽度 Tdx 失败，回退 akshare: {exc}")
+
+    # 回退：akshare spot
     import akshare as ak
 
     sources = [

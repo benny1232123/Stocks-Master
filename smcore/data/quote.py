@@ -93,7 +93,31 @@ def fetch_realtime_quotes(codes: Iterable[str]) -> pd.DataFrame:
     if not codes_set:
         return pd.DataFrame(columns=["code", "name", "price", "pct"])
 
-    # 优先：新浪HTTP按需查询（快，不拉全量）
+    # 优先：通达信直连（毫秒级、最稳）
+    try:
+        from smcore.data.tdx_client import available as tdx_available, get_client
+        if tdx_available():
+            q = get_client().get_realtime_quotes(list(codes_set))
+            if q:
+                rows = []
+                for code, info in q.items():
+                    price = info.get("price")
+                    if price is None:
+                        continue
+                    pre = info.get("last_close") or 0
+                    pct = ((price - pre) / pre * 100) if pre else 0.0
+                    rows.append({
+                        "code": code,
+                        "name": info.get("name", ""),
+                        "price": round(price, 2),
+                        "pct": round(pct, 2),
+                    })
+                if rows:
+                    return pd.DataFrame(rows)
+    except Exception:
+        pass
+
+    # 其次：新浪HTTP按需查询（快，不拉全量）
     try:
         sina_result = fetch_sina_quotes(codes_set)
         if sina_result:

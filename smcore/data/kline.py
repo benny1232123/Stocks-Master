@@ -23,15 +23,22 @@ DAILY_K_COLUMNS = ["date", "open", "high", "low", "close", "volume", "amount"]
 
 
 def _backend() -> str:
-    """返回当前 K 线后端：baostock（本地）或 akshare（云端）。
+    """返回当前 K 线后端：tdx（最快）> baostock（本地）> akshare（云端兜底）。
 
-    优先读取 KLINE_BACKEND 环境变量，未设置时自动检测 baostock 是否可用，
-    不可用则自动回退到 akshare（避免云端部署报 No module named 'baostock'）。
+    优先读取 KLINE_BACKEND 环境变量（可强制 tdx/baostock/akshare）；
+    未设置时自动检测：通达信可用则优先（毫秒级、直连券商、最稳），
+    否则 baostock，再否则 akshare。
     """
     backend = os.getenv("KLINE_BACKEND", "").strip().lower()
-    if backend in ("baostock", "akshare"):
+    if backend in ("tdx", "baostock", "akshare"):
         return backend
-    # 自动检测：baostock 可用则用 baostock，否则用 akshare
+    # 自动检测：通达信可用则优先（比 baostock/akshare 快且稳）
+    try:
+        from smcore.data.tdx_client import available as tdx_available
+        if tdx_available():
+            return "tdx"
+    except Exception:
+        pass
     try:
         import baostock as bs  # noqa: F401
         return "baostock"
@@ -156,39 +163,46 @@ def fetch_daily_k(
             segments.append((max(request_start, request_end - timedelta(days=10)), request_end))
 
     parts: list[pd.DataFrame] = []
-    if _backend() == "akshare":
-    # 云端后端：akshare HTTP 接口（新浪数据源，无需登录会话）
-        for seg_start, seg_end in segments:
-            if seg_start > seg_end:
-                continue
-            seg_df = _fetch_via_akshare(code6, seg_start, seg_end, adjust)
-            if not seg_df.empty:
-                parts.append(seg_df)
-    else:
-        # 本地后端：baostock（需登录会话）
+
+    def _fetch_segment(seg_start: date, seg_end: date, backend: str) -> pd.DataFrame:
+        if seg_start > seg_end:
+            return pd.DataFrame()
+        if backend == "tdx":
+            return _fetch_via_tdx(code6, seg_start, seg_end, adjust)
+        if backend == "akshare":
+            return _fetch_via_akshare(code6, seg_start, seg_end, adjust)
+        # baostock
         import baostock as bs
         from smcore.data.session import session
         with session() as ok:
             if not ok:
-                return _slice(cached, request_start, request_end) if not cached.empty else _empty_df()
-            for seg_start, seg_end in segments:
-                if seg_start > seg_end:
-                    continue
-                rs = bs.query_history_k_data_plus(
-                    to_baostock_code(code6),
-                    "date,code,open,high,low,close,volume,amount",
-                    start_date=_to_date_string(seg_start),
-                    end_date=_to_date_string(seg_end),
-                    frequency="d",
-                    adjustflag=flag,
-                )
-                if rs.error_code != "0":
-                    continue
-                rows = []
-                while rs.next():
-                    rows.append(rs.get_row_data())
-                if rows:
-                    parts.append(pd.DataFrame(rows, columns=rs.fields))
+                return pd.DataFrame()
+            rs = bs.query_history_k_data_plus(
+                to_baostock_code(code6),
+                "date,code,open,high,low,close,volume,amount",
+                start_date=_to_date_string(seg_start),
+                end_date=_to_date_string(seg_end),
+                frequency="d",
+                adjustflag=flag,
+            )
+            if rs.error_code != "0":
+                return pd.DataFrame()
+            rows = []
+            while rs.next():
+                rows.append(rs.get_row_data())
+            return pd.DataFrame(rows, columns=rs.fields) if rows else pd.DataFrame()
+
+    # 后端优先级：首选 tdx（最快最稳），失败自动回退 akshare → baostock
+    preferred = _backend()
+    fallback_chain = [preferred] + [b for b in ("tdx", "akshare", "baostock") if b != preferred]
+    for backend in fallback_chain:
+        parts = []
+        for seg_start, seg_end in segments:
+            seg_df = _fetch_segment(seg_start, seg_end, backend)
+            if not seg_df.empty:
+                parts.append(seg_df)
+        if parts or not cached.empty:
+            break  # 拿到数据或用缓存即可，不再回退
 
     if cached.empty and not parts:
         return _empty_df()
@@ -198,6 +212,20 @@ def fetch_daily_k(
     if use_cache and not merged.empty:
         merged.to_csv(cache, index=False, encoding=CSV_ENCODING)
     return _slice(merged, request_start, request_end) if not merged.empty else _empty_df()
+
+
+# ── 通达信后端（高速主源）──
+
+def _fetch_via_tdx(code6: str, start: date, end: date, adjust: str) -> pd.DataFrame:
+    """通过通达信直连获取 K 线（自带前复权，毫秒级）。失败返回空。"""
+    try:
+        from smcore.data.tdx_client import get_client
+        df = get_client().get_daily_k(code6, start, end, adjust)
+        if df is None or df.empty:
+            return pd.DataFrame()
+        return df[DAILY_K_COLUMNS]
+    except Exception:
+        return pd.DataFrame()
 
 
 # ── akshare 后端（云端用） ──

@@ -4,6 +4,7 @@ uvicorn>=0.30
 pandas
 akshare
 baostock
+pytdx>=1.72  # 优先级最高的 K线/行情数据源（直连券商，毫秒级）；CI 不可达时自动回退 akshare
 matplotlib
 pillow
 requests
