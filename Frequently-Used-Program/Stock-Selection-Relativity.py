@@ -175,7 +175,23 @@ def fetch_data_with_fallback(api_func, cache_key: str, *args, **kwargs) -> pd.Da
         except Exception:
             print(f"本地数据库缺少表: {table_name}，准备调用 API 补充")
 
-        df = api_func(*args, **kwargs)
+        # 调用 API：遇到瞬断网络错误（连接重置 / 超时）自动重试，减少被迫回退本地库
+        transient_errors = (OSError, ConnectionError, socket.timeout)
+        max_retries = int(os.getenv("AK_RETRY", "3"))
+        retry_backoff = float(os.getenv("AK_RETRY_BACKOFF", "2"))
+        df = None
+        for attempt in range(max_retries + 1):
+            try:
+                df = api_func(*args, **kwargs)
+                break
+            except transient_errors as exc:
+                if attempt < max_retries:
+                    print(f"API连接异常，{retry_backoff}s 后重试 ({attempt + 1}/{max_retries}): {exc}")
+                    time.sleep(retry_backoff * (attempt + 1))
+                    continue
+                print(f"API重试 {max_retries} 次仍失败: {exc}")
+                raise
+
         if isinstance(df, pd.DataFrame) and not df.empty:
             df.to_sql(table_name, conn, if_exists="replace", index=False)
             print(f"API调用成功。数据已保存至数据库表: {table_name}")

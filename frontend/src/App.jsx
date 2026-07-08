@@ -462,50 +462,70 @@ function App() {
               </div>
             ) : null}
 
-            {/* Hero：信号板 */}
+            {/* Hero：信号板（紧凑双栏，含日报预览行） */}
             <section className="hero animate-fade-in">
               <div className="hero-card">
                 <div className="hero-eyebrow">今日信号 · Signal of the day</div>
                 <h1 className="hero-title">
-                  {latestActionList ? latestActionList.name.replace(/\.md$/, '') : '策略信号待生成'}
+                  {latestActionList ? latestActionList.name.replace(/\.csv$/, '').replace(/-/g, ' ') : '策略信号待生成'}
                 </h1>
-                <p className="hero-sub">
-                  {latestActionList
-                    ? `最新日报已就绪，预览 ${actionPreview.length} 行。运行选股流程可刷新融合排序与回测曲线。`
-                    : '还没跑出结果。去「选股」启动布林扫描 + 回测，信号会自动出现在这里。'}
-                </p>
                 <div className="hero-figure">
                   <span className="num">{actionPreview.length || 0}</span>
-                  <span className="unit">行预览</span>
+                  <span className="unit">行信号</span>
+                  {latestActionList ? (
+                    <span className="hero-badge">{new Date(latestActionList.modified ?? Date.now()).toLocaleDateString('zh-CN')}</span>
+                  ) : null}
                 </div>
+                {/* 日报预览行 —— 直接展示在 Hero 内 */}
+                {actionPreview.length > 0 ? (
+                  <div className="hero-preview-table">
+                    <div className="hpt-head">
+                      <span>股票</span><span>信号</span><span>价格</span>
+                    </div>
+                    {actionPreview.slice(0, 5).map((row, i) => {
+                      const keys = Object.keys(row ?? {})
+                      const code = row[keys[0]] ?? '--'
+                      const sig = row[keys[1]] ?? '--'
+                      const price = row[keys[2]] != null ? Number(row[keys[2]]) : null
+                      return (
+                        <div key={i} className="hpt-row">
+                          <span className="hpt-code">{code}</span>
+                          <span className={cn('hpt-sig', /买|多|看多/i.test(String(sig)) ? 'sig-up' : /卖|空|看空/i.test(String(sig)) ? 'sig-down' : '')}>{sig}</span>
+                          <span className="hpt-price">{price != null ? price.toFixed(2) : '--'}</span>
+                        </div>
+                      )
+                    })}
+                    {actionPreview.length > 5 ? (
+                      <div className="hpt-more">+{actionPreview.length - 5} 行更多</div>
+                    ) : null}
+                  </div>
+                ) : null}
               </div>
               <div className="hero-side">
                 <div className="hero-stat">
                   <div className="label">候选池</div>
-                  <div className="value">{candidateCodes.length}</div>
+                  <div className="value">{candidateCodes.length}<span className="hero-stat-unit">只</span></div>
                 </div>
                 <div className="hero-stat">
-                  <div className="label">上涨 / 下跌</div>
-                  <div className="value">
-                    {marketBreadth.上涨 ?? '--'}
-                    <span style={{ color: 'hsl(var(--muted))', fontSize: '1rem', fontWeight: 400 }}> / {marketBreadth.下跌 ?? '--'}</span>
+                  <div className="label">涨 / 跌</div>
+                  <div className="value hero-pair">
+                    <span className="text-up">{marketBreadth.上涨 ?? '--'}</span>
+                    <span className="hero-sep">/</span>
+                    <span className="text-down">{marketBreadth.下跌 ?? '--'}</span>
                   </div>
                 </div>
                 <div className="hero-stat">
-                  <div className="label">美元 / 人民币</div>
+                  <div className="label">美元/人民币</div>
                   <div className="value">{macroSnapshot['美元/人民币'] ?? '--'}</div>
+                </div>
+                <div className="hero-stat">
+                  <div className="label">Shibor 隔夜</div>
+                  <div className="value">{macroSnapshot['Shibor隔夜'] ?? '--'}</div>
                 </div>
               </div>
             </section>
 
-            {/* 关键指标 */}
-            <div className="stat-grid animate-fade-in">
-              <StatCard label="上涨" value={marketBreadth.上涨 ?? '--'} />
-              <StatCard label="下跌" value={marketBreadth.下跌 ?? '--'} />
-              <StatCard label="上涨比例" value={marketBreadth.上涨比例 ?? '--'} />
-              <StatCard label="Shibor 隔夜" value={macroSnapshot['Shibor隔夜'] ?? '--'} />
-            </div>
-
+            {/* 指数快照 + 日报文件（紧凑双栏） */}
             <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
               <SectionCard title="指数快照" subtitle="来自 /api/dashboard">
                 <div className="index-list">
@@ -735,7 +755,7 @@ function App() {
                           <span className="detail-code">{analysisCode}</span>
                           <span className="detail-name">{analysis?.latest?.name ?? analysisList.find((i) => i.code === analysisCode)?.name ?? ''}</span>
                         </div>
-                        <span className={cn('signal-badge', sigClass)}>{analysisSignal?.signal ?? '暂无信号'}</span>
+                        <span className={cn('signal-badge', sigClass)} style={{ whiteSpace: 'nowrap' }}>{analysisSignal?.signal ?? '暂无信号'}</span>
                       </div>
                       <div className="analysis-grid">
                         <StatCard label="信号" value={analysisSignal?.signal ?? '--'} />
@@ -858,8 +878,31 @@ function App() {
                   ) : null}
                 </>
               ) : (
-                <div className="empty-state">
-                  {scanPhase === 'backtest' ? '正在回测中...' : '在「选股」页点击开始后，回测将自动运行并显示在此处'}
+                <div className="bt-empty">
+                  <div className="bt-empty-icon">📊</div>
+                  <div className="bt-empty-title">尚无回测结果</div>
+                  <div className="bt-empty-desc">运行一次完整的选股 → 回测流程，权益曲线会自动出现在这里</div>
+                  <div className="bt-steps">
+                    <div className="bt-step">
+                      <span className="bt-step-num">1</span>
+                      <span className="bt-step-text">去「选股」设置价格区间</span>
+                    </div>
+                    <div className="bt-step-arrow">→</div>
+                    <div className="bt-step">
+                      <span className="bt-step-num">2</span>
+                      <span className="bt-step-text">点击「开始扫描 + 回测」</span>
+                    </div>
+                    <div className="bt-step-arrow">→</div>
+                    <div className="bt-step">
+                      <span className="bt-step-num">3</span>
+                      <span className="bt-step-text">等待布林扫描 + 自动回测完成</span>
+                    </div>
+                    <div className="bt-step-arrow">→</div>
+                    <div className="bt-step">
+                      <span className="bt-step-num">4</span>
+                      <span className="bt-step-text">回到这里查看权益曲线</span>
+                    </div>
+                  </div>
                 </div>
               )}
             </SectionCard>

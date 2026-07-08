@@ -5,7 +5,8 @@ import concurrent.futures
 import os
 import pickle
 import threading
-from datetime import date, datetime
+import time
+from datetime import date, datetime, timedelta
 from pathlib import Path
 from typing import Any
 
@@ -29,7 +30,8 @@ def configure_runtime() -> None:
 
 
 # 看板数据拉取超时（秒）。超时即视为失败并跳过该数据源，避免单接口卡死拖垮预热。
-DASHBOARD_API_TIMEOUT = float(os.getenv("DASHBOARD_API_TIMEOUT", "30"))
+# 默认 60s：stock_zh_a_spot 拉全市场实时快照较大，CI 网络慢时需更长时间。
+DASHBOARD_API_TIMEOUT = float(os.getenv("DASHBOARD_API_TIMEOUT", "60"))
 
 
 def _call_with_timeout(func, timeout_seconds):
@@ -52,10 +54,25 @@ def _call_with_timeout(func, timeout_seconds):
     return box.get("result")
 
 
-def _safe_fetch(func, timeout_seconds, label, default):
-    """超时 + 容错：失败/超时返回 default，不抛异常。"""
+def _call_with_retry(func, timeout_seconds, retries=2, backoff=3.0):
+    """超时调用 + 重试：瞬断网络/超时错误自动重试，避免一次失败就放弃数据源。"""
+    last_exc = None
+    for attempt in range(retries + 1):
+        try:
+            return _call_with_timeout(func, timeout_seconds)
+        except Exception as exc:  # noqa: BLE001 - 透传异常，重试后由调用方决定
+            last_exc = exc
+            if attempt < retries:
+                print(f"[dashboard] 调用失败，{backoff}s 后重试 ({attempt + 1}/{retries}): {exc}")
+                time.sleep(backoff)
+                continue
+    raise last_exc
+
+
+def _safe_fetch(func, timeout_seconds, label, default, retries=2):
+    """超时 + 重试 + 容错：重试耗尽仍失败才返回 default。"""
     try:
-        return _call_with_timeout(func, timeout_seconds)
+        return _call_with_retry(func, timeout_seconds, retries=retries)
     except Exception as exc:
         print(f"[dashboard] {label} 获取失败（已跳过）: {exc}")
         return default
@@ -134,7 +151,7 @@ def fetch_macro_snapshot() -> dict[str, Any] | None:
     result: dict[str, Any] = {}
 
     try:
-        usdcny = _call_with_timeout(lambda: ak.currency_boc_sina(symbol="美元"), DASHBOARD_API_TIMEOUT)
+        usdcny = _call_with_retry(lambda: ak.currency_boc_sina(symbol="美元"), DASHBOARD_API_TIMEOUT)
         if usdcny is not None and not usdcny.empty:
             last = usdcny.iloc[-1]
             if "中行折算价" in last:
@@ -142,18 +159,92 @@ def fetch_macro_snapshot() -> dict[str, Any] | None:
     except Exception:
         pass
 
+    # ── SHIBOR 隔夜（多源回退 + 昨日缓存兜底）─────────────────────────
+    # ak.rate_interbank 经常返回空/超时，这里依次尝试多个数据源，
+    # 全部失败时读取昨日缓存，避免前端显示 "--"。
+    result["Shibor隔夜"] = _fetch_shibor_overnight()
+
+    return result or None
+
+
+def _fetch_shibor_overnight() -> float | None:
+    """获取 SHIBOR 隔夜利率，多源回退 + 昨日缓存兜底。
+
+    数据源优先级：
+      1) ak.rate_interbank（主源，实时）
+      2) ak.shibor_data（备源，历史数据取最新）
+      3) 昨日 macro_snapshot 缓存文件（兜底，保证不返回 None）
+
+    Returns:
+        float | None: 隔夜利率（%），None 仅在完全无法获取时返回。
+    """
+    import akshare as ak
+
+    # --- 源 1: rate_interbank（当前主源）---
     try:
-        shibor = _call_with_timeout(
+        shibor = _call_with_retry(
             lambda: ak.rate_interbank(market="上海银行间同业拆放利率", symbol="Shibor", indicator="隔夜"),
             DASHBOARD_API_TIMEOUT,
         )
-        if shibor is not None and not shibor.empty:
-            if "利率" in shibor.columns:
-                result["Shibor隔夜"] = float(shibor.iloc[-1].get("利率", 0))
-    except Exception:
-        pass
+        if shibor is not None and not shibor.empty and "利率" in shibor.columns:
+            val = float(shibor.iloc[-1].get("利率", 0))
+            if val > 0:
+                print(f"[dashboard] SHIBOR 隔夜 (rate_interbank): {val}%")
+                return val
+    except Exception as exc:
+        print(f"[dashboard] SHIBOR 源1 rate_interbank 失败: {exc}")
 
-    return result or None
+    # --- 源 2: shibor_data（备选历史接口）---
+    try:
+        df = _call_with_retry(
+            lambda: ak.shibor_data(),
+            DASHBOARD_API_TIMEOUT,
+        )
+        if df is not None and not df.empty:
+            # 取最近一行隔夜利率
+            last = df.iloc[-1]
+            for col in ("隔夜", "O/N", "ON"):
+                if col in last and pd.notna(last[col]):
+                    val = float(last[col])
+                    if val > 0:
+                        print(f"[dashboard] SHIBOR 隔夜 (shibor_data, col={col}): {val}%")
+                        return val
+    except Exception as exc:
+        print(f"[dashboard] SHIBOR 源2 shibor_data 失败: {exc}")
+
+    # --- 源 3: shibor_quote_history（备选报价接口）---
+    try:
+        df = _call_with_retry(
+            lambda: ak.shibor_quote_history(symbol="隔夜"),
+            DASHBOARD_API_TIMEOUT,
+        )
+        if df is not None and not df.empty:
+            last = df.iloc[-1]
+            for col in ("最新价", "利率", "price"):
+                if col in last and pd.notna(last[col]):
+                    val = float(last[col])
+                    if val > 0:
+                        print(f"[dashboard] SHIBOR 隔夜 (shibor_quote_history): {val}%")
+                        return val
+    except Exception as exc:
+        print(f"[dashboard] SHIBOR 源3 shibor_quote_history 失败: {exc}")
+
+    # --- 兜底: 读昨日缓存 ---
+    try:
+        yesterday = (date.today() - timedelta(days=1)).strftime("%Y-%m-%d")
+        cache_path = CACHE_DIR / f"macro_snapshot_{yesterday}.pkl"
+        if cache_path.exists():
+            with open(cache_path, "rb") as f:
+                cached = pickle.load(f)
+            cached_val = cached.get("Shibor隔夜")
+            if cached_val is not None and float(cached_val) > 0:
+                print(f"[dashboard] SHIBOR 隔夜 (昨日缓存兜底): {cached_val}%")
+                return float(cached_val)
+    except Exception as exc:
+        print(f"[dashboard] SHIBOR 缓存兜底读取失败: {exc}")
+
+    print("[dashboard] ⚠️ SHIBOR 隔夜所有数据源均失败，返回 None")
+    return None
 
 
 def build_dashboard_payload() -> dict[str, Any]:
