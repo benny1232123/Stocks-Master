@@ -193,6 +193,7 @@
     justify-content: space-between;
     padding: 0 40px;
     z-index: 40;
+    overflow: visible;
   }
 
   .command-wordmark {
@@ -204,7 +205,7 @@
     color: hsl(var(--foreground));
   }
 
-  .command-right { display: flex; align-items: center; gap: 10px; }
+  .command-right { display: flex; align-items: center; gap: 10px; overflow: visible; }
 
   .chip {
     display: inline-flex;
@@ -218,6 +219,8 @@
     font-size: 0.74rem;
     color: hsl(var(--muted));
     font-family: var(--font-mono);
+    white-space: nowrap;
+    flex-shrink: 0;
   }
   .chip .dot {
     width: 7px; height: 7px; border-radius: 50%;
@@ -681,9 +684,15 @@
 .field-hint { font-size: 0.7rem; color: hsl(var(--muted-foreground)); }
 
 .selection-form { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; }
-.button-row { display: flex; gap: 10px; }
+.button-row { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; }
 .button-row button { flex: 1; height: 44px; font-size: 0.9rem; }
 .button-row button:last-child:not(:first-child) { flex: 0 0 auto; min-width: 72px; }
+.btn-hint {
+  font-size: 0.76rem;
+  color: hsl(var(--muted));
+  margin-left: 4px;
+  white-space: nowrap;
+}
 .trade-form { display: grid; grid-template-columns: repeat(auto-fill, minmax(160px, 1fr)); gap: 12px; }
 .analysis-form { display: flex; gap: 12px; }
 .analysis-form input {

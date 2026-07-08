@@ -660,6 +660,7 @@ function App() {
                     {scanPhase === 'boll' ? (
                       <Button variant="destructive" onClick={() => cancelTask(bollTaskId)}>停止</Button>
                     ) : null}
+                    <span className="btn-hint">全流程：候选池 → 布林信号 → 自动回测</span>
                   </div>
 
                   <div className="button-row">
@@ -674,6 +675,7 @@ function App() {
                     {scanPhase === 'fusion' ? (
                       <Button variant="destructive" onClick={() => cancelTask(fusionTaskId)}>停止</Button>
                     ) : null}
+                    <span className="btn-hint">跳过扫描，直接用已有结果做融合排名</span>
                   </div>
                 </div>
 
