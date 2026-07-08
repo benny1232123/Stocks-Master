@@ -828,7 +828,7 @@ function App() {
                         const middle = L.middle != null ? Number(L.middle) : null
                         const ma5 = L.ma5 != null ? Number(L.ma5) : null
                         const ma10 = L.ma10 != null ? Number(L.ma10) : null
-                        ma20 = L.ma20 != null ? Number(L.ma20) : null
+                        const ma20 = L.ma20 != null ? Number(L.ma20) : null
                         const ma60 = L.ma60 != null ? Number(L.ma60) : null
                         const distLo = M.dist_to_lower_pct != null ? Number(M.dist_to_lower_pct) : null
                         const distHi = M.dist_to_upper_pct != null ? Number(M.dist_to_upper_pct) : null
@@ -981,30 +981,115 @@ function App() {
         {activeView === 'daily' ? (
           <>
             <div className="page-header">
-              <h2>每日信号日报</h2>
-              <p>完整版 Daily-Action-List，所有信号行一览无余（点选某行可跳转分析页）</p>
+              <h2>每日策略信号日报</h2>
+              <p>邮件级摘要 · 全市场多策略信号汇总（点选任意标的跳转分析）</p>
             </div>
-            {fullDaily?.rows?.length > 0 ? (
-              <SectionCard title={`完整日报 · ${fullDaily.total} 行`} subtitle={fullDaily.latest?.path ?? ''} className="max-w-none">
-                <div className="daily-full">
-                  <div className="df-head">
-                    {fullDaily.columns.map((col) => (
-                      <span key={col}>{col}</span>
-                    ))}
+            {fullDaily?.rows?.length > 0 ? (() => {
+              const rows = fullDaily.rows
+              const num = (r, k) => { const v = r[k]; return v != null && v !== '' ? Number(v) : NaN }
+              const total = rows.length
+              const totalAmt = rows.reduce((s, r) => s + (num(r, '建议金额') || 0), 0)
+              const avgScore = total ? rows.reduce((s, r) => s + (num(r, '综合评分') || 0), 0) / total : 0
+              // 策略分布
+              const stratMap = {}
+              rows.forEach((r) => { const k = r['来源策略'] ?? '未知'; stratMap[k] = (stratMap[k] || 0) + 1 })
+              const stratList = Object.entries(stratMap).sort((a, b) => b[1] - a[1])
+              // 重点推荐 Top5（按综合评分）
+              const top = [...rows].sort((a, b) => (num(b, '综合评分') || 0) - (num(a, '综合评分') || 0)).slice(0, 5)
+              const fileDate = (fullDaily.latest?.name ?? '').replace('Daily-Action-List-', '').replace('.csv', '')
+              const genTime = fullDaily.latest?.modified
+                ? new Date(fullDaily.latest.modified * 1000).toLocaleString('zh-CN')
+                : ''
+
+              return (
+                <>
+                  {/* 报告头 */}
+                  <div className="report-head">
+                    <div>
+                      <div className="report-title">每日策略信号日报</div>
+                      <div className="report-sub">日期 {fileDate} · 生成于 {genTime}</div>
+                    </div>
+                    <div className="report-tag">共 {total} 只标的</div>
                   </div>
-                  {fullDaily.rows.map((row, i) => {
-                    const code = row['股票代码'] ?? row['代码'] ?? Object.values(row)[0] ?? ''
-                    return (
-                      <div key={i} className="df-row" onClick={() => { const c = String(code).trim(); if (c) { setAnalysisCode(c); setActiveView('analysis'); openAnalysis(c) } }}>
-                        {fullDaily.columns.map((col) => (
-                          <span key={col}>{row[col] != null ? String(row[col]) : '--'}</span>
+
+                  {/* 统计卡 */}
+                  <div className="report-stats">
+                    <div className="rs-card">
+                      <span className="rs-label">信号总数</span>
+                      <span className="rs-val">{total}</span>
+                    </div>
+                    <div className="rs-card">
+                      <span className="rs-label">建议总金额</span>
+                      <span className="rs-val">¥{(totalAmt / 10000).toFixed(1)}万</span>
+                    </div>
+                    <div className="rs-card">
+                      <span className="rs-label">平均综合评分</span>
+                      <span className="rs-val">{avgScore.toFixed(1)}</span>
+                    </div>
+                    <div className="rs-card">
+                      <span className="rs-label">涉及策略</span>
+                      <span className="rs-val">{stratList.length} 类</span>
+                    </div>
+                  </div>
+
+                  {/* 策略分布 + 重点推荐 */}
+                  <div className="report-grid">
+                    <SectionCard title="策略命中分布">
+                      <div className="strat-list">
+                        {stratList.map(([name, cnt]) => (
+                          <div key={name} className="strat-row">
+                            <span className="strat-name">{name}</span>
+                            <span className="strat-bar"><span className="strat-bar-fill" style={{ width: `${(cnt / total) * 100}%` }} /></span>
+                            <span className="strat-cnt">{cnt}</span>
+                          </div>
                         ))}
                       </div>
-                    )
-                  })}
-                </div>
-              </SectionCard>
-            ) : (
+                    </SectionCard>
+
+                    <SectionCard title="重点推荐 · Top 5">
+                      <div className="top-list">
+                        {top.map((r, i) => {
+                          const buy = num(r, '建议买入价')
+                          const stop = num(r, '止损价(下轨)')
+                          const tp = num(r, '止盈价(上轨)')
+                          const rr = (buy && stop && tp && (buy - stop) !== 0) ? ((tp - buy) / (buy - stop)) : null
+                          return (
+                            <div key={r['股票代码']} className="top-row" onClick={() => { const c = String(r['股票代码'] ?? '').trim(); if (c) { setAnalysisCode(c); setActiveView('analysis'); openAnalysis(c) } }}>
+                              <span className="top-no">{i + 1}</span>
+                              <span className="top-code">{r['股票代码']}</span>
+                              <span className="top-name">{r['股票名称']}</span>
+                              <span className="top-score">{num(r, '综合评分')?.toFixed(1) ?? '--'}</span>
+                              <span className="top-rr">{rr != null ? `盈亏比 ${rr.toFixed(1)}` : '—'}</span>
+                            </div>
+                          )
+                        })}
+                      </div>
+                    </SectionCard>
+                  </div>
+
+                  {/* 完整明细 */}
+                  <SectionCard title={`完整信号明细 · ${total} 行`} subtitle={fullDaily.latest?.path ?? ''} className="max-w-none">
+                    <div className="daily-full">
+                      <div className="df-head">
+                        {fullDaily.columns.map((col) => (
+                          <span key={col}>{col}</span>
+                        ))}
+                      </div>
+                      {rows.map((row, i) => {
+                        const code = row['股票代码'] ?? row['代码'] ?? Object.values(row)[0] ?? ''
+                        return (
+                          <div key={i} className="df-row" onClick={() => { const c = String(code).trim(); if (c) { setAnalysisCode(c); setActiveView('analysis'); openAnalysis(c) } }}>
+                            {fullDaily.columns.map((col) => (
+                              <span key={col}>{row[col] != null ? String(row[col]) : '--'}</span>
+                            ))}
+                          </div>
+                        )
+                      })}
+                    </div>
+                  </SectionCard>
+                </>
+              )
+            })() : (
               <div className="empty-state">
                 {fullDaily === null ? '加载中...' : '暂无日报文件，去「选股」跑完流程后这里会显示完整信号'}
               </div>
