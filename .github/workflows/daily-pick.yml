@@ -11,6 +11,10 @@ jobs:
     timeout-minutes: 90
     permissions:
       contents: write
+    env:
+      # GitHub 海外 Runner 连不上国内券商 Tdx 服务器，关闭直连避免 ~24s 试探浪费，
+      # 走下方加固的 akshare 兜底。国内自托管 Runner 请覆盖为 "1" 或 "auto" 启用 Tdx 提速。
+      TDX_ENABLED: "0"
     steps:
       - uses: actions/checkout@v4
 
@@ -28,7 +32,11 @@ jobs:
       - name: 安装依赖
         run: |
           pip install --upgrade pip
-          pip install akshare pandas requests baostock matplotlib cos-python-sdk-v5 supabase
+          pip install --retries 3 akshare pandas requests baostock matplotlib cos-python-sdk-v5 supabase
+
+      - name: 尝试安装 pytdx（国内自托管 Runner 可选；GitHub 海外 Runner 自动跳过）
+        continue-on-error: true
+        run: pip install "pypandoc<1.10" pytdx 2>/dev/null || pip install pytdx 2>/dev/null || true
 
       - name: 策略1 Boll 扫描
         id: boll
@@ -148,5 +156,7 @@ jobs:
             echo "无变更，跳过提交"
           else
             git commit -m "chore: 预热看板缓存 $(date +%Y-%m-%d)"
+            # 远程可能有新提交（如手动 push），先拉取 rebase 再推送
+            git pull --rebase --autostash origin main || true
             git push
           fi

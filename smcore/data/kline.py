@@ -10,6 +10,8 @@
 from __future__ import annotations
 
 import os
+import threading
+import time
 from datetime import date, datetime, timedelta
 from pathlib import Path
 
@@ -63,6 +65,27 @@ def _to_date(value) -> date:
 
 def _empty_df() -> pd.DataFrame:
     return pd.DataFrame(columns=DAILY_K_COLUMNS)
+
+
+def _call_with_timeout(func, timeout: float):
+    """在 daemon 线程中执行 func，超时（挂起）则返回 None 而非永久阻塞。
+
+    用于包裹 akshare 等无内置超时的网络调用，保证云端流水线「不会挂」。
+    """
+    box: dict = {}
+
+    def _run():
+        try:
+            box["r"] = func()
+        except BaseException:
+            box["e"] = True
+
+    worker = threading.Thread(target=_run, daemon=True)
+    worker.start()
+    worker.join(timeout)
+    if worker.is_alive() or "e" in box:
+        return None
+    return box.get("r")
 
 
 def _normalize(df: pd.DataFrame) -> pd.DataFrame:
@@ -254,15 +277,22 @@ def _fetch_via_akshare(code6: str, start: date, end: date, adjust: str) -> pd.Da
     start_str = start.strftime("%Y%m%d")
     end_str = end.strftime("%Y%m%d")
 
-    try:
-        raw = ak.stock_zh_a_daily(
-            symbol=sina_symbol,
-            start_date=start_str,
-            end_date=end_str,
-            adjust=ak_adjust,
+    # 云端环境 akshare 偶发挂起/瞬断：超时(30s) + 重试(2 次) 兜底，保证「不会挂」
+    raw = None
+    for attempt in range(2):
+        raw = _call_with_timeout(
+            lambda: ak.stock_zh_a_daily(
+                symbol=sina_symbol,
+                start_date=start_str,
+                end_date=end_str,
+                adjust=ak_adjust,
+            ),
+            30,
         )
-    except Exception:
-        return pd.DataFrame()
+        if raw is not None and not raw.empty:
+            break
+        if attempt < 1:
+            time.sleep(1.0)
 
     if raw is None or raw.empty:
         return pd.DataFrame()

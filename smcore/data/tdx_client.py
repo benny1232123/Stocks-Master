@@ -83,7 +83,7 @@ class TdxClient:
 
     # ── 连接管理 ──
     def connect(self) -> bool:
-        if not HAS_PYTDX:
+        if not _tdx_enabled():
             return False
         if self.api is not None:
             return True
@@ -406,6 +406,22 @@ class TdxClient:
 _default_client: TdxClient | None = None
 
 
+def _tdx_enabled() -> bool:
+    """是否启用通达信数据源。
+
+    - TDX_ENABLED=0/false：强制关闭（如 GitHub 海外 Runner 连不上券商服务器，
+      跳过直连避免浪费 ~24s 试探，直接走 akshare 兜底）。
+    - TDX_ENABLED=1/true：强制启用（仍需 pytdx 已安装）。
+    - 未设置/auto：有 pytdx 即启用（国内服务器/本地默认走此路径，毫秒级最稳）。
+    """
+    val = os.getenv("TDX_ENABLED", "auto").strip().lower()
+    if val in ("0", "false", "no"):
+        return False
+    if val in ("1", "true", "yes"):
+        return HAS_PYTDX
+    return HAS_PYTDX  # auto
+
+
 def get_client() -> TdxClient:
     global _default_client
     if _default_client is None:
@@ -414,4 +430,4 @@ def get_client() -> TdxClient:
 
 
 def available() -> bool:
-    return HAS_PYTDX
+    return _tdx_enabled()

@@ -4,9 +4,17 @@ uvicorn>=0.30
 pandas
 akshare
 baostock
-pytdx>=1.72  # 优先级最高的 K线/行情数据源（直连券商，毫秒级）；CI 不可达时自动回退 akshare
 matplotlib
 pillow
 requests
 python-dotenv>=1.0
 supabase>=2.0  # optional: cloud trade sync (TRADES_BACKEND=supabase)
+
+# ── 可选高速数据源：通达信(pytdx) ──
+# 直连券商行情服务器，毫秒级、最稳，国内服务器/本地默认启用（环境变量 TDX_ENABLED 默认 auto）。
+# 注意：pytdx 1.72 的 setup.py 调用了已废弃的 pypandoc.convert，直接 `pip install pytdx`
+# 会构建失败。请单独用以下任一方式安装（CI 不装也能跑，会自动回退 akshare）：
+#   pip install "pypandoc<1.10" pytdx      # 装旧版 pypandoc 提供 convert()
+#   # 或手动打补丁：下载源码改 setup.py 的 except 子句为 except Exception 后本地安装
+#   # 或 pip install pytdx --no-build-isolation   （需先装好 pypandoc）
+# 未安装 pytdx 时不影响任何功能，数据层会自动降级到 akshare / baostock 兜底。

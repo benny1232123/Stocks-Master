@@ -6,6 +6,8 @@ import os
 import pickle
 import threading
 import time
+
+import requests
 from datetime import date, datetime, timedelta
 from pathlib import Path
 from typing import Any
@@ -142,13 +144,77 @@ def fetch_index_snapshot() -> pd.DataFrame:
     return pd.DataFrame(rows)
 
 
+# ── 东方财富轻量计数接口（海外友好主源）─────────────────────────────
+# 不拉全量快照，而是按涨跌幅过滤后读取 data.total（单次仅返回计数，
+# payload 极小）。东财 push2 CDN 与日 K 线同源，海外可达（GitHub/Render）。
+_EM_FS_ALL = "m:0+t:6,m:0+t:80,m:1+t:2,m:1+t:23"
+_EM_HOSTS = [
+    "https://82.push2.eastmoney.com/api/qt/clist/get",
+    "https://push2.eastmoney.com/api/qt/clist/get",
+]
+_EM_HEADERS = {
+    "User-Agent": "Mozilla/5.0",
+    "Referer": "https://quote.eastmoney.com/",
+}
+
+
+def _em_breadth_count(fs: str) -> int | None:
+    """单次请求东财 clist，按过滤条件读取 data.total（仅计数）。"""
+    params = {
+        "pn": 1,
+        "pz": 1,
+        "po": 1,
+        "np": 1,
+        "fltt": 2,
+        "invt": 2,
+        "fid": "f3",
+        "fs": fs,
+        "fields": "f12,f14",
+        "_": int(time.time() * 1000),
+    }
+    last_err: Exception | None = None
+    for host in _EM_HOSTS:
+        try:
+            r = requests.get(host, params=params, timeout=10, headers=_EM_HEADERS)
+            j = r.json()
+            data = j.get("data")
+            if isinstance(data, dict) and data.get("total") is not None:
+                return int(data["total"])
+        except Exception as exc:  # noqa: BLE001 - 换 host 重试
+            last_err = exc
+            continue
+    if last_err:
+        raise last_err
+    return None
+
+
+def _fetch_breadth_eastmoney_count() -> dict[str, Any] | None:
+    """海外友好的市场宽度：东财计数接口，4 次 tiny 请求，不拉全量快照。"""
+    up = _em_breadth_count(_EM_FS_ALL + "+f3>0")
+    dn = _em_breadth_count(_EM_FS_ALL + "+f3<0")
+    fl = _em_breadth_count(_EM_FS_ALL + "+f3=0")
+    tot = _em_breadth_count(_EM_FS_ALL)
+    if not tot:
+        return None
+    return {
+        "上涨": int(up or 0),
+        "下跌": int(dn or 0),
+        "平盘": int(fl or 0),
+        "总数": int(tot),
+        "上涨比例": round((up or 0) / tot * 100, 1),
+    }
+
+
 def fetch_market_breadth() -> dict[str, Any] | None:
     """Fetch the market breadth snapshot (up/down counts across A-shares).
 
-    优先通达信直连（~2-6s 拉全市场，远快于 akshare 的 60s 超时）；
-    失败/超时才回退东方财富/新浪 spot。
+    数据链路口径（云端=海外，本地=国内）：
+      1) 通达信直连（仅本机/国内可达，毫秒级全市场，最准）
+      2) 东财计数接口（轻量 4 次 tiny 请求，海外友好 —— 云端主源）
+      3) 全量快照兜底（东方财富/新浪，重，海外可能超时，仅最后手段）
+    任意一层拿到数据即返回，全失败返回 None（前端显示「暂无」而非崩溃）。
     """
-    # 通达信优先（直连券商行情服务器，全市场快照毫秒到秒级）
+    # 1) 通达信优先（直连券商行情服务器，全市场快照毫秒到秒级；云端无 pytdx 自动跳过）
     try:
         from smcore.data.tdx_client import available as tdx_available, get_client
         if tdx_available():
@@ -157,38 +223,37 @@ def fetch_market_breadth() -> dict[str, Any] | None:
             if b and b.get("总数"):
                 return b
     except Exception as exc:
-        print(f"[dashboard] 市场宽度 Tdx 失败，回退 akshare: {exc}")
+        print(f"[dashboard] 市场宽度 Tdx 失败，回退: {exc}")
 
-    # 回退：akshare spot
+    # 2) 东财计数接口（轻量，海外友好 —— 云端主源）
+    b = _safe_fetch(_fetch_breadth_eastmoney_count, 30, "市场宽度(东财计数)", None, retries=2)
+    if b:
+        return b
+
+    # 3) 全量快照兜底（重，海外可能超时）
     import akshare as ak
 
-    sources = [
+    for name, fn in (
         ("东方财富", lambda: ak.stock_zh_a_spot_em()),
         ("新浪", lambda: ak.stock_zh_a_spot()),
-    ]
-    df = None
-    for name, fn in sources:
+    ):
         df = _safe_fetch(fn, 45, f"市场宽度({name})", None, retries=1)
         if df is not None and isinstance(df, pd.DataFrame) and not df.empty:
-            break
-
-    if df is None or not isinstance(df, pd.DataFrame) or df.empty:
-        return None
-
-    chg_col = "涨跌幅" if "涨跌幅" in df.columns else None
-    if chg_col is None:
-        return None
-    up = (df[chg_col] > 0).sum()
-    down = (df[chg_col] < 0).sum()
-    flat = (df[chg_col] == 0).sum()
-    total = len(df)
-    return {
-        "上涨": int(up),
-        "下跌": int(down),
-        "平盘": int(flat),
-        "总数": int(total),
-        "上涨比例": round(up / total * 100, 1) if total else 0,
-    }
+            chg_col = "涨跌幅" if "涨跌幅" in df.columns else None
+            if chg_col is None:
+                continue
+            up = (df[chg_col] > 0).sum()
+            dn = (df[chg_col] < 0).sum()
+            fl = (df[chg_col] == 0).sum()
+            tot = len(df)
+            return {
+                "上涨": int(up),
+                "下跌": int(dn),
+                "平盘": int(fl),
+                "总数": int(tot),
+                "上涨比例": round(up / tot * 100, 1) if tot else 0,
+            }
+    return None
 
 
 def fetch_macro_snapshot() -> dict[str, Any] | None:
