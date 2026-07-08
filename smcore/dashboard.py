@@ -124,16 +124,31 @@ def fetch_index_snapshot() -> pd.DataFrame:
 
 
 def fetch_market_breadth() -> dict[str, Any] | None:
-    """Fetch the market breadth snapshot."""
+    """Fetch the market breadth snapshot (up/down counts across A-shares).
+
+    先试东方财富 spot（通常更快），失败再回退新浪 spot；任一成功即用。
+    """
     import akshare as ak
 
-    df = _safe_fetch(lambda: ak.stock_zh_a_spot(), DASHBOARD_API_TIMEOUT, "市场宽度", None)
+    sources = [
+        ("东方财富", lambda: ak.stock_zh_a_spot_em()),
+        ("新浪", lambda: ak.stock_zh_a_spot()),
+    ]
+    df = None
+    for name, fn in sources:
+        df = _safe_fetch(fn, 45, f"市场宽度({name})", None, retries=1)
+        if df is not None and isinstance(df, pd.DataFrame) and not df.empty:
+            break
+
     if df is None or not isinstance(df, pd.DataFrame) or df.empty:
         return None
 
-    up = (df["涨跌幅"] > 0).sum()
-    down = (df["涨跌幅"] < 0).sum()
-    flat = (df["涨跌幅"] == 0).sum()
+    chg_col = "涨跌幅" if "涨跌幅" in df.columns else None
+    if chg_col is None:
+        return None
+    up = (df[chg_col] > 0).sum()
+    down = (df[chg_col] < 0).sum()
+    flat = (df[chg_col] == 0).sum()
     total = len(df)
     return {
         "上涨": int(up),
@@ -180,7 +195,21 @@ def _fetch_shibor_overnight() -> float | None:
     """
     import akshare as ak
 
-    # --- 源 1: rate_interbank（当前主源）---
+    # --- 源 1: macro_china_shibor_all（主源，最快最稳）---
+    try:
+        df = _call_with_retry(
+            lambda: ak.macro_china_shibor_all(),
+            DASHBOARD_API_TIMEOUT,
+        )
+        if df is not None and not df.empty and "O/N-定价" in df.columns:
+            val = float(df.iloc[-1]["O/N-定价"])
+            if val > 0:
+                print(f"[dashboard] SHIBOR 隔夜 (macro_china_shibor_all): {val}%")
+                return val
+    except Exception as exc:
+        print(f"[dashboard] SHIBOR 源1 macro_china_shibor_all 失败: {exc}")
+
+    # --- 源 2: rate_interbank（备源）---
     try:
         shibor = _call_with_retry(
             lambda: ak.rate_interbank(market="上海银行间同业拆放利率", symbol="Shibor", indicator="隔夜"),
@@ -192,42 +221,7 @@ def _fetch_shibor_overnight() -> float | None:
                 print(f"[dashboard] SHIBOR 隔夜 (rate_interbank): {val}%")
                 return val
     except Exception as exc:
-        print(f"[dashboard] SHIBOR 源1 rate_interbank 失败: {exc}")
-
-    # --- 源 2: shibor_data（备选历史接口）---
-    try:
-        df = _call_with_retry(
-            lambda: ak.shibor_data(),
-            DASHBOARD_API_TIMEOUT,
-        )
-        if df is not None and not df.empty:
-            # 取最近一行隔夜利率
-            last = df.iloc[-1]
-            for col in ("隔夜", "O/N", "ON"):
-                if col in last and pd.notna(last[col]):
-                    val = float(last[col])
-                    if val > 0:
-                        print(f"[dashboard] SHIBOR 隔夜 (shibor_data, col={col}): {val}%")
-                        return val
-    except Exception as exc:
-        print(f"[dashboard] SHIBOR 源2 shibor_data 失败: {exc}")
-
-    # --- 源 3: shibor_quote_history（备选报价接口）---
-    try:
-        df = _call_with_retry(
-            lambda: ak.shibor_quote_history(symbol="隔夜"),
-            DASHBOARD_API_TIMEOUT,
-        )
-        if df is not None and not df.empty:
-            last = df.iloc[-1]
-            for col in ("最新价", "利率", "price"):
-                if col in last and pd.notna(last[col]):
-                    val = float(last[col])
-                    if val > 0:
-                        print(f"[dashboard] SHIBOR 隔夜 (shibor_quote_history): {val}%")
-                        return val
-    except Exception as exc:
-        print(f"[dashboard] SHIBOR 源3 shibor_quote_history 失败: {exc}")
+        print(f"[dashboard] SHIBOR 源2 rate_interbank 失败: {exc}")
 
     # --- 兜底: 读昨日缓存 ---
     try:

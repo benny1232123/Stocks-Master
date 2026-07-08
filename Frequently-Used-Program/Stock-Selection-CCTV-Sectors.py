@@ -58,7 +58,7 @@ def parse_args():
     parser.add_argument("--disable-extra-news", action="store_true", help="禁用补充资讯源抓取")
     parser.add_argument(
         "--extra-news-sources",
-        default="cls,sina",
+        default="",
         help="补充资讯源，逗号分隔，例如 cls,sina,em",
     )
     parser.add_argument("--extra-news-limit", type=int, default=120, help="每个补充源最多抓取条数")
@@ -633,14 +633,28 @@ def fetch_data_with_fallback(api_func, file_path, *args, **kwargs):
         conn.close()
 
 
+def _read_local_table(file_path):
+    """直接从本地 SQLite 读取表数据，不调任何 API。"""
+    table_name = file_path.replace("/", "_").replace("\\", "_").replace(".", "_").rstrip("_")
+    if not table_name or table_name[0].isdigit():
+        table_name = f"t_{table_name}"
+    try:
+        conn = sqlite3.connect(str(DATA_DIR / "stocks_data.db"))
+        df = pd.read_sql_query(f'SELECT * FROM "{table_name}"', conn)
+        conn.close()
+        return df
+    except Exception:
+        return pd.DataFrame()
+
+
 def build_sector_stock_pool(date_str, sector_df, stock_hints, sector_keywords, *, use_sw_industry=True):
     if sector_df.empty:
         return pd.DataFrame()
-    base_df = fetch_data_with_fallback(
-        ak.stock_info_a_code_name,
-        "stock_data/stock_info_a_code_name.csv",
-    )
+    # 直接读取本地数据库（stock_info_a_code_name API 在 CI 环境经常 Connection reset，
+    # 跳过网络调用，本地表不存在时返回空）
+    base_df = _read_local_table("stock_data/stock_info_a_code_name.csv")
     if base_df is None or base_df.empty or not {"code", "name"}.issubset(base_df.columns):
+        print("stock_info_a_code_name 本地数据不可用，跳过个股池构建")
         return pd.DataFrame()
 
     tmp = base_df.copy()
