@@ -91,6 +91,19 @@ def build_stock_analysis(code: str, window: int = 20, k: float = 1.645, days_bac
             "upper": float(latest["Upper"]) if pd.notna(latest.get("Upper")) else None,
             "middle": float(latest["MA"]) if pd.notna(latest.get("MA")) else None,
             "rsi": float(rsi_series.iloc[-1]) if not pd.isna(rsi_series.iloc[-1]) else None,
+            # MACD
+            "dif": float(macd_df["DIF"].iloc[-1]) if not pd.isna(macd_df["DIF"].iloc[-1]) else None,
+            "dea": float(macd_df["DEA"].iloc[-1]) if not pd.isna(macd_df["DEA"].iloc[-1]) else None,
+            "macd_hist": float(macd_df["MACD"].iloc[-1]) if not pd.isna(macd_df["MACD"].iloc[-1]) else None,
+            # KDJ
+            "k_val": float(kdj_df["K"].iloc[-1]) if not pd.isna(kdj_df["K"].iloc[-1]) else None,
+            "d_val": float(kdj_df["D"].iloc[-1]) if not pd.isna(kdj_df["D"].iloc[-1]) else None,
+            "j_val": float(kdj_df["J"].iloc[-1]) if not pd.isna(kdj_df["J"].iloc[-1]) else None,
+            # MA
+            "ma5": float(ma_df["MA5"].iloc[-1]) if not pd.isna(ma_df["MA5"].iloc[-1]) else None,
+            "ma10": float(ma_df["MA10"].iloc[-1]) if not pd.isna(ma_df["MA10"].iloc[-1]) else None,
+            "ma20": float(ma_df["MA20"].iloc[-1]) if not pd.isna(ma_df["MA20"].iloc[-1]) else None,
+            "ma60": float(ma_df["MA60"].iloc[-1]) if not pd.isna(ma_df["MA60"].iloc[-1]) else None,
         },
         "metrics": {
             "latest_close": float(latest["close"]),

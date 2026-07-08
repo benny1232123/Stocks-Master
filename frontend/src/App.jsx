@@ -250,7 +250,7 @@ function App() {
         if (!done && e.name !== 'AbortError') {
           done = true
           setScanPhase(null)
-          setError('布林扫描轮询失败')
+          setError('策略扫描轮询失败')
           clearInterval(timer)
         }
       }
@@ -628,7 +628,7 @@ function App() {
           <>
             <div className="page-header">
               <h2>策略融合选股</h2>
-              <p>设置价格区间，点击按钮生成候选池并执行布林扫描。扫描完成后自动回测。</p>
+              <p>设置价格区间，一键运行多策略筛选 → 融合排名 → 自动回测。</p>
             </div>
             <div className="grid grid-cols-1 lg:grid-cols-3 gap-4">
               <SectionCard title="选股参数" className="lg:col-span-2">
@@ -645,37 +645,32 @@ function App() {
                   <div className="button-row">
                     <Button disabled={isRunning} onClick={async () => {
                       setScanPhase('candidates'); setScanLogs([]); setSelectionScan(null); setFusionResult(null); setBacktestRun(null); setScanProgress({ current: 0, total: 0 })
+                      // Step 1: 候选池
                       const c = await fetch(`/api/selection/candidates?price_min=${selectionParams.priceMin}&price_max=${selectionParams.priceMax}`)
                       if (!c.ok) { setScanPhase(null); setError('获取候选池失败'); return }
                       const codes = (await c.json()).codes ?? []
                       setCandidateCodes(codes)
-                      setScanLogs([`候选池 ${codes.length} 只，开始布林扫描...`])
+                      setScanLogs([`候选池 ${codes.length} 只，开始多策略扫描...`])
+                      // Step 2: 布林扫描（策略之一）
                       setScanPhase('boll')
                       const s = await fetch('/api/selection/boll-scan', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ codes, window: 20, k: 1.645, near_ratio: 1.015 }) })
-                      if (!s.ok) { setScanPhase(null); setError('布林扫描启动失败'); return }
+                      if (!s.ok) { setScanPhase(null); setError('扫描启动失败'); return }
                       setBollTaskId((await s.json()).task_id)
+                      // 布林完成后会自动触发回测；回测结束后再自动跑融合排序
                     }}>
-                      {scanPhase === 'boll' || scanPhase === 'backtest' ? '扫描进行中...' : '开始扫描 + 回测'}
+                      {isRunning ? (
+                        scanPhase === 'candidates' ? '获取候选...' :
+                        scanPhase === 'boll' ? '多策略扫描中...' :
+                        scanPhase === 'backtest' ? '回测运行中...' :
+                        scanPhase === 'fusion' ? '融合排名中...' :
+                        '运行中...'
+                      ) : '开始选股'}
                     </Button>
-                    {scanPhase === 'boll' ? (
+                    {(scanPhase === 'boll' || scanPhase === 'backtest') ? (
                       <Button variant="destructive" onClick={() => cancelTask(bollTaskId)}>停止</Button>
-                    ) : null}
-                    <span className="btn-hint">全流程：候选池 → 布林信号 → 自动回测</span>
-                  </div>
-
-                  <div className="button-row">
-                    <Button variant="secondary" disabled={isRunning} onClick={async () => {
-                      setScanPhase('fusion'); setScanLogs(['开始策略融合排序...']); setSelectionScan(null); setFusionResult(null); setBacktestRun(null); setScanProgress({ current: 0, total: 0 })
-                      const r = await fetch('/api/selection/fusion', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ total_capital: 100000, max_picks: 15 }) })
-                      if (!r.ok) { setScanPhase(null); setError('融合排序启动失败'); return }
-                      setFusionTaskId((await r.json()).task_id)
-                    }}>
-                      {scanPhase === 'fusion' ? '融合进行中...' : '仅运行融合排序'}
-                    </Button>
-                    {scanPhase === 'fusion' ? (
+                    ) : scanPhase === 'fusion' ? (
                       <Button variant="destructive" onClick={() => cancelTask(fusionTaskId)}>停止</Button>
                     ) : null}
-                    <span className="btn-hint">跳过扫描，直接用已有结果做融合排名</span>
                   </div>
                 </div>
 
@@ -697,7 +692,7 @@ function App() {
                       scanPhase === 'fusion' && 'running',
                       scanPhase === 'backtest' && 'running',
                     )}>
-                      {scanPhase === 'boll' ? '布林扫描中' :
+                      {scanPhase === 'boll' ? '多策略扫描中' :
                        scanPhase === 'fusion' ? '策略融合中' :
                        scanPhase === 'backtest' ? '回测中' :
                        scanPhase === 'candidates' ? '获取候选...' :
@@ -716,7 +711,7 @@ function App() {
 
                 {selectionRows.length > 0 ? (
                   <div className="table-shell">
-                    <div className="section-head"><h3>布林扫描结果</h3><span>命中 {selectionRows.length} 只</span></div>
+                    <div className="section-head"><h3>策略扫描结果</h3><span>命中 {selectionRows.length} 只</span></div>
                     {selectionRows.slice(0, 8).map((row) => (
                       <div key={row.代码} className="table-row">
                         <span>{row.代码}</span>
@@ -770,7 +765,7 @@ function App() {
           <>
             <div className="page-header">
               <h2>个股分析</h2>
-              <p>从左侧候选列表点选，右侧查看布林带信号与技术指标（雪球式主从布局）</p>
+              <p>从左侧候选列表点选，右侧查看多指标技术分析与信号解读</p>
             </div>
             <div className="split">
               <aside className="split-list" aria-label="候选列表">
@@ -815,12 +810,166 @@ function App() {
                         </div>
                         <span className={cn('signal-badge', sigClass)} style={{ whiteSpace: 'nowrap' }}>{analysisSignal?.signal ?? '暂无信号'}</span>
                       </div>
-                      <div className="analysis-grid">
-                        <StatCard label="信号" value={analysisSignal?.signal ?? '--'} />
-                        <StatCard label="最新收盘" value={analysisLatest?.close ?? '--'} />
-                        <StatCard label="RSI" value={analysisLatest?.rsi ?? '--'} />
-                        <StatCard label="距下轨%" value={analysis?.metrics?.dist_to_lower_pct ?? '--'} />
-                      </div>
+
+                      {/* ── 多指标解读面板 ── */}
+                      {(() => {
+                        const L = analysisLatest ?? {}
+                        const M = analysis?.metrics ?? {}
+                        const rsi = L.rsi != null ? Number(L.rsi) : null
+                        const dif = L.dif != null ? Number(L.dif) : null
+                        const dea = L.dea != null ? Number(L.dea) : null
+                        const macdH = L.macd_hist != null ? Number(L.macd_hist) : null
+                        const kV = L.k_val != null ? Number(L.k_val) : null
+                        const dV = L.d_val != null ? Number(L.d_val) : null
+                        const jV = L.j_val != null ? Number(L.j_val) : null
+                        const close = L.close != null ? Number(L.close) : null
+                        const lower = L.lower != null ? Number(L.lower) : null
+                        const upper = L.upper != null ? Number(L.upper) : null
+                        const middle = L.middle != null ? Number(L.middle) : null
+                        const ma5 = L.ma5 != null ? Number(L.ma5) : null
+                        const ma10 = L.ma10 != null ? Number(L.ma10) : null
+                        ma20 = L.ma20 != null ? Number(L.ma20) : null
+                        const ma60 = L.ma60 != null ? Number(L.ma60) : null
+                        const distLo = M.dist_to_lower_pct != null ? Number(M.dist_to_lower_pct) : null
+                        const distHi = M.dist_to_upper_pct != null ? Number(M.dist_to_upper_pct) : null
+                        const bw = M.bandwidth != null ? Number(M.bandwidth) : null
+
+                        // RSI 解读
+                        const rsiTxt = rsi == null ? '--'
+                          : rsi > 70 ? `超买区（${rsi.toFixed(1)}），短期回调风险较高`
+                          : rsi < 30 ? `超卖区（${rsi.toFixed(1)}），可能存在反弹机会`
+                          : rsi > 55 ? `偏强（${rsi.toFixed(1)}），多头略占优`
+                          : rsi < 45 ? `偏弱（${rsi.toFixed(1)}），空头略占优`
+                          : `中性（${rsi.toFixed(1)}），多空均衡`
+                        // MACD 解读
+                        const macdTxt = (dif == null || dea == null) ? '--'
+                          : dif > dea && macdH > 0 ? `金叉确认，DIF(${dif.toFixed(2)})>DEA(${dea.toFixed(2)})，红柱放大`
+                          : dif > dea && macdH <= 0 ? `多头趋势但动能减弱，DIF>DEA 柱转绿/平`
+                          : dif < dea && macdH < 0 ? `死叉确认，DIF(${dif.toFixed(2)})<DEA(${dea.toFixed(2)})，绿柱`
+                          : dif < dea && macdH >= 0 ? `空头趋势但动能衰减，DIF<DEA 柱转红/平`
+                          : `DIF≈DEA，方向待选择`
+                        // KDJ 解读
+                        const kdjTxt = (kV == null || dV == null) ? '--'
+                          : jV != null && jV > 100 ? `极端超买 J=${jV.toFixed(1)}>100，注意回落`
+                          : jV != null && jV < 0 ? `极端超卖 J=${jV.toFixed(1)}<0，可能反弹`
+                          : kV > dV ? `K(${kV.toFixed(1)})>D(${dV.toFixed(1)}) 金叉形态，偏多`
+                          : kV < dV ? `K(${kV.toFixed(1)})<D(${dV.toFixed(1)}) 死叉形态，偏空`
+                          : `K≈D 震荡缠绕`
+                        // 均线解读
+                        const maTxt = (ma5 == null || ma10 == null || ma20 == null) ? '--'
+                          : ma5 > ma10 && ma10 > ma20 && ma20 > (ma60 ?? 0) ? `完美多头排列 ↑ 短中长期均线全部向上发散`
+                          : ma5 < ma10 && ma10 < ma20 && (ma20 < (ma60 ?? 999)) ? `空头排列 ↓ 均线依次向下压制`
+                          : ma5 > ma20 ? `短期偏强，MA5(${ma5.toFixed(2)})在MA20(${ma20.toFixed(2)})上方`
+                          : ma5 < ma20 ? `短期偏弱，MA5(${ma5.toFixed(2)})在MA20(${ma20.toFixed(2)})下方`
+                          : `均线纠缠，方向不明等待突破`
+                        // 价格位置解读
+                        const posTxt = (distLo == null && lower == null) ? '--'
+                          : close != null && lower != null && close < lower ? `已跌破下轨（${(close/lower*100-100).toFixed(2)}%），超卖信号`
+                          : distLo != null && distLo < 3 ? `接近下轨（距${distLo.toFixed(2)}%），支撑位附近`
+                          : distHi != null && distHi > -3 ? `接近上轨（距${Math.abs(distHi).toFixed(2)}%），压力位附近`
+                          : close != null && upper != null && close > upper ? `已突破上轨（${((close/upper-1)*100).toFixed(2)}%），强势但注意回调`
+                          : `位于布林带中部区间${bw != null ? `，带宽${bw.toFixed(1)}%${bw < 8 ? ' 收窄→变盘前兆' : ''}` : ''}`
+                        // 带宽颜色
+                        const bwWarn = bw != null && bw < 8
+
+                        return (
+                          <div className="ind-grid">
+                            {/* ① RSI */}
+                            <div className="ind-card">
+                              <span className="ind-label">RSI(14)</span>
+                              <span className={cn('ind-val', rsi > 70 ? 'text-up' : rsi < 30 ? 'text-down' : '')}>{rsi != null ? rsi.toFixed(1) : '--'}</span>
+                              {rsi != null ? (
+                                <div className="ind-gauge">
+                                  <div className="ig-track">
+                                    <div className="ig-zone ig-sold" style={{ width: '30%' }} />
+                                    <div className="ig-zone ig-neutral" style={{ width: '40%' }} />
+                                    <div className="ig-zone ig-bought" style={{ width: '30%' }} />
+                                    <div className="ig-fill" style={{ left: `${Math.min(100, Math.max(0, rsi))}%` }} />
+                                  </div>
+                                  <span className="ig-labels"><em>0</em><em>30</em><em>70</em><em>100</em></span>
+                                </div>
+                              ) : null}
+                              <span className="ind-txt">{rsiTxt}</span>
+                            </div>
+
+                            {/* ② MACD */}
+                            <div className="ind-card">
+                              <span className="ind-label">MACD(12,26,9)</span>
+                              <div className="ind-row-val">
+                                <span>DIF <strong className={cn(dif != null && dif > 0 ? 'text-up' : dif != null ? 'text-down' : '')}>{dif != null ? dif.toFixed(3) : '--'}</strong></span>
+                                <span>DEA <strong className={cn(dea != null && dea > 0 ? 'text-up' : dea != null ? 'text-down' : '')}>{dea != null ? dea.toFixed(3) : '--'}</strong></span>
+                                <span>柱 <strong className={cn(macdH != null && macdH > 0 ? 'text-up' : macdH != null ? 'text-down' : '')}>{macdH != null ? macdH.toFixed(3) : '--'}</strong></span>
+                              </div>
+                              <span className="ind-txt">{macdTxt}</span>
+                            </div>
+
+                            {/* ③ KDJ */}
+                            <div className="ind-card">
+                              <span className="ind-label">KDJ(9,3,3)</span>
+                              <div className="ind-row-val">
+                                <span>K <strong>{kV != null ? kV.toFixed(1) : '--'}</strong></span>
+                                <span>D <strong>{dV != null ? dV.toFixed(1) : '--'}</strong></span>
+                                <span>J <strong className={cn(jV != null && jV > 100 ? 'text-up' : jV != null && jV < 0 ? 'text-down' : '')}>{jV != null ? jV.toFixed(1) : '--'}</strong></span>
+                              </div>
+                              <span className="ind-txt">{kdjTxt}</span>
+                            </div>
+
+                            {/* ④ 均线系统 */}
+                            <div className="ind-card">
+                              <span className="ind-label">均线系统</span>
+                              <div className="ind-ma-row">
+                                <span className="ind-ma-item">MA5 <strong>{ma5 != null ? ma5.toFixed(2) : '--'}</strong></span>
+                                <span className="ind-ma-item">MA10 <strong>{ma10 != null ? ma10.toFixed(2) : '--'}</strong></span>
+                                <span className="ind-ma-item">MA20 <strong>{ma20 != null ? ma20.toFixed(2) : '--'}</strong></span>
+                                {ma60 != null ? <span className="ind-ma-item">MA60 <strong>{ma60.toFixed(2)}</strong></span> : null}
+                              </div>
+                              {/* 均线排列箭头 */}
+                              {(ma5 != null && ma10 != null && ma20 != null) ? (
+                                <div className="ind-ma-arrows">
+                                  {ma5 > ma10 ? <span className="text-up">↑</span> : ma5 < ma10 ? <span className="text-down">↓</span> : <span>=</span>}
+                                  {ma10 > ma20 ? <span className="text-up">↑</span> : ma10 < ma20 ? <span className="text-down">↓</span> : <span>=</span>}
+                                  {ma20 > (ma60 ?? 0) ? <span className="text-up">↑</span> : ma20 < (ma60 ?? 999) ? <span className="text-down">↓</span> : <span>=</span>}
+                                </div>
+                              ) : null}
+                              <span className="ind-txt">{maTxt}</span>
+                            </div>
+
+                            {/* ⑤ 布林带价格位置 */}
+                            <div className="ind-card ind-card-wide">
+                              <span className="ind-label">布林带 · 价格位置</span>
+                              {close != null && lower != null && upper != null && middle != null ? (
+                                <>
+                                  <div className="ind-band-bar">
+                                    <div className="ibb-track">
+                                      <div className="ibb-lower" />
+                                      <div className="ibb-middle" />
+                                      <div className="ibb-upper" />
+                                      {/* price dot position: lower=0%, upper=100% */}
+                                      <div className="ibb-dot" style={{
+                                        left: `${Math.min(100, Math.max(0, ((close - lower) / (upper - lower)) * 100))}%`,
+                                        top: close > upper ? '-14px' : close < lower ? '22px' : '50%',
+                                        transform: 'translateX(-50%) translateY(-50%)',
+                                      }} />
+                                    </div>
+                                    <div className="ibb-labels">
+                                      <span>下轨 {lower.toFixed(2)}</span>
+                                      <span>中轨 {middle.toFixed(2)}</span>
+                                      <span>上轨 {upper.toFixed(2)}</span>
+                                    </div>
+                                  </div>
+                                  <div className="ind-pos-stats">
+                                    <span>收盘 <strong>{close.toFixed(2)}</strong></span>
+                                    {distLo != null ? <span>距下轨 <strong className={distLo < 5 ? 'text-down' : ''}>{distLo > 0 ? '+' : ''}{distLo.toFixed(2)}%</strong></span> : null}
+                                    {distHi != null ? <span>距上轨 <strong className={distHi > -5 ? 'text-up' : ''}>{distHi > 0 ? '+' : ''}{distHi.toFixed(2)}%</strong></span> : null}
+                                    {bw != null ? <span className={cn(bwWarn ? 'text-up font-medium' : '')}>带宽 {bw.toFixed(1)}%{bwWarn ? ' ⚠收窄' : ''}</span> : null}
+                                  </div>
+                                </>
+                              ) : null}
+                              <span className="ind-txt">{posTxt}</span>
+                            </div>
+                          </div>
+                        )
+                      })()}
                     </>
                   ) : <div className="empty-state">从左侧列表点选，或输入代码后点击「加载分析」</div>}
                 </SectionCard>
@@ -982,12 +1131,12 @@ function App() {
                     <div className="bt-step-arrow">→</div>
                     <div className="bt-step">
                       <span className="bt-step-num">2</span>
-                      <span className="bt-step-text">点击「开始扫描 + 回测」</span>
+                      <span className="bt-step-text">点击「开始选股」</span>
                     </div>
                     <div className="bt-step-arrow">→</div>
                     <div className="bt-step">
                       <span className="bt-step-num">3</span>
-                      <span className="bt-step-text">等待布林扫描 + 自动回测完成</span>
+                      <span className="bt-step-text">等待多策略扫描 + 自动回测完成</span>
                     </div>
                     <div className="bt-step-arrow">→</div>
                     <div className="bt-step">

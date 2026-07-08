@@ -818,14 +818,173 @@
 .bt-step-arrow { font-size: 1rem; color: hsl(var(--muted)); }
 
 /* ═══════════════════════════════════════════
-   RESPONSIVE
+   INDICATOR DASHBOARD — 多指标解读面板
    ═════════════════════════════════════════ */
+.ind-grid {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 14px;
+  margin-top: 16px;
+}
+.ind-card {
+  background: hsl(var(--secondary) / 0.35);
+  border-radius: 10px;
+  padding: 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.ind-card-wide {
+  grid-column: span 3;
+}
+.ind-label {
+  font-family: var(--font-mono);
+  font-size: 0.72rem;
+  color: hsl(var(--muted-foreground));
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+.ind-val {
+  font-family: var(--font-mono);
+  font-size: 1.6rem;
+  font-weight: 700;
+  line-height: 1.2;
+}
+.ind-row-val {
+  display: flex;
+  gap: 12px;
+  font-family: var(--font-mono);
+  font-size: 0.82rem;
+  flex-wrap: wrap;
+}
+.ind-row-val strong {
+  font-weight: 600;
+}
+
+/* RSI gauge */
+.ind-gauge { display: flex; flex-direction: column; gap: 2px; }
+.ig-track {
+  position: relative;
+  height: 8px;
+  border-radius: 4px;
+  display: flex;
+  overflow: hidden;
+  background: #E5E7EB;
+}
+.ig-zone { height: 100%; }
+.ig-sold { background: linear-gradient(90deg, #30A46C, rgba(48,164,108,0.35)); }
+.ig-neutral { background: #E5E7EB; }
+.ig-bought { background: linear-gradient(90deg, rgba(229,72,78,0.35), #E5484D); }
+.ig-fill {
+  position: absolute;
+  top: -3px;
+  width: 4px;
+  height: 14px;
+  border-radius: 2px;
+  background: hsl(var(--foreground));
+  transform: translateX(-50%);
+  box-shadow: 0 0 0 2px white, 0 1px 4px rgba(0,0,0,0.15);
+  left: 50%;
+  transition: left 0.3s ease;
+}
+.ig-labels { display: flex; justify-content: space-between; font-family: var(--font-mono); font-size: 0.62rem; color: hsl(var(--muted)); }
+
+/* Interpretation text */
+.ind-txt {
+  font-size: 0.79rem;
+  line-height: 1.45;
+  color: hsl(var(--foreground) / 0.7);
+  padding-top: 4px;
+  border-top: 1px solid hsl(var(--border) / 0.5);
+}
+
+/* MA row */
+.ind-ma-row {
+  display: flex;
+  gap: 10px;
+  flex-wrap: wrap;
+  font-family: var(--font-mono);
+  font-size: 0.78rem;
+}
+.ind-ma-item strong { font-weight: 600; }
+.ind-ma-arrows {
+  display: flex;
+  gap: 8px;
+  font-size: 1rem;
+  font-weight: 700;
+  margin: 2px 0;
+}
+
+/* Bollinger band bar */
+.ind-band-bar { margin: 4px 0; }
+.ibb-track {
+  position: relative;
+  height: 28px;
+  border-radius: 6px;
+  background: repeating-linear-gradient(
+    to bottom,
+    transparent, transparent 11px,
+    hsl(var(--border)) 11px,
+    hsl(var(--border)) 12px
+  );
+  overflow: visible;
+}
+.ibb-lower {
+  position: absolute;
+  bottom: 0; left: 0; right: 0;
+  height: 2px;
+  background: #30A46C;
+  border-radius: 1px;
+}
+.ibb-middle {
+  position: absolute;
+  bottom: 50%; left: 0; right: 0;
+  height: 1px;
+  background: hsl(var(--muted));
+  transform: translateY(50%);
+}
+.ibb-upper {
+  position: absolute;
+  top: 0; left: 0; right: 0;
+  height: 2px;
+  background: #E5484D;
+  border-radius: 1px;
+}
+.ibb-dot {
+  position: absolute;
+  width: 12px;
+  height: 12px;
+  border-radius: 50%;
+  background: hsl(var(--primary));
+  border: 2px solid white;
+  box-shadow: 0 0 0 1px hsl(var(--primary)), 0 2px 6px rgba(0,0,0,0.18);
+  z-index: 2;
+  transition: all 0.25s ease;
+}
+.ibb-labels {
+  display: flex;
+  justify-content: space-between;
+  font-family: var(--font-mono);
+  font-size: 0.65rem;
+  color: hsl(var(--muted));
+  margin-top: 2px;
+}
+.ind-pos-stats {
+  display: flex;
+  gap: 14px;
+  flex-wrap: wrap;
+  font-size: 0.78rem;
+  font-family: var(--fontono), monospace;
+}
+.ind-pos-stats strong { font-weight: 600; }
 @media (max-width: 980px) {
   .hero { grid-template-columns: 1fr; }
   .hero-side { flex-direction: row; flex-wrap: wrap; gap: 14px; }
   .hero-stat { flex: 1; min-width: 120px; }
   .stat-grid { grid-template-columns: repeat(2, 1fr); }
   .analysis-grid { grid-template-columns: repeat(2, 1fr); }
+  .ind-grid { grid-template-columns: 1fr; }
+  .ind-card-wide { grid-column: span 1; }
   .split { grid-template-columns: 1fr; }
   .split-list { position: static; max-height: 280px; }
   .bt-steps { flex-direction: column; align-items: stretch; }

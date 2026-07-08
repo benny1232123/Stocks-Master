@@ -46,6 +46,18 @@ def _trailing_true_count(mask: pd.Series) -> int:
     return count
 
 
+def _band_metrics(close: float, lower: float, upper: float, middle: float | None = None) -> dict:
+    """计算布林带位置指标（供所有信号分支统一返回）。"""
+    dist_lower = (close - lower) / lower * 100 if lower else None
+    dist_upper = (close - upper) / upper * 100 if upper else None
+    bandwidth = ((upper - lower) / middle * 100) if (middle and middle != 0) else None
+    return {
+        "dist_to_lower_pct": round(dist_lower, 2) if dist_lower is not None else None,
+        "dist_to_upper_pct": round(dist_upper, 2) if dist_upper is not None else None,
+        "bandwidth": round(bandwidth, 2) if bandwidth is not None else None,
+    }
+
+
 def evaluate_boll_signal(
     df: pd.DataFrame,
     near_ratio: float = 1.015,
@@ -63,15 +75,19 @@ def evaluate_boll_signal(
     - insufficient / empty: 数据不足
     """
     if df.empty:
-        return {"signal": "无数据", "selected": False, "signal_type": "empty"}
+        return {"signal": "无数据", "selected": False, "signal_type": "empty",
+                **_band_metrics(0, 0, 0)}
 
     latest = df.iloc[-1]
     if pd.isna(latest.get("Lower")) or pd.isna(latest.get("Upper")):
-        return {"signal": "数据不足（至少 20 个交易日）", "selected": False, "signal_type": "insufficient"}
+        return {"signal": "数据不足（至少 20 个交易日）", "selected": False, "signal_type": "insufficient",
+                **_band_metrics(0, 0, 0)}
 
     close = float(latest["close"])
     lower = float(latest["Lower"])
     upper = float(latest["Upper"])
+    middle = float(latest["MA"]) if pd.notna(latest.get("MA")) else None
+    bm = _band_metrics(close, lower, upper, middle)
 
     close_series = pd.to_numeric(df.get("close", pd.Series(dtype=float)), errors="coerce")
     lower_series = pd.to_numeric(df.get("Lower", pd.Series(dtype=float)), errors="coerce")
@@ -85,12 +101,13 @@ def evaluate_boll_signal(
                 "selected": False,
                 "signal_type": "oversold_continuous",
                 "streak": oversold_streak,
+                **bm,
             }
-        return {"signal": "超卖：收盘价低于下轨", "selected": True, "signal_type": "oversold"}
+        return {"signal": "超卖：收盘价低于下轨", "selected": True, "signal_type": "oversold", **bm}
     if close <= lower * near_ratio:
-        return {"signal": "关注：收盘价接近下轨", "selected": True, "signal_type": "near_lower"}
+        return {"signal": "关注：收盘价接近下轨", "selected": True, "signal_type": "near_lower", **bm}
     if close > upper:
-        return {"signal": "偏热：收盘价高于上轨", "selected": False, "signal_type": "overbought"}
+        return {"signal": "偏热：收盘价高于上轨", "selected": False, "signal_type": "overbought", **bm}
     if close >= upper * upper_near_ratio:
-        return {"signal": "高位：收盘价接近上轨", "selected": False, "signal_type": "near_upper"}
-    return {"signal": "中性：位于布林带中部", "selected": False, "signal_type": "neutral"}
+        return {"signal": "高位：收盘价接近上轨", "selected": False, "signal_type": "near_upper", **bm}
+    return {"signal": "中性：位于布林带中部", "selected": False, "signal_type": "neutral", **bm}
