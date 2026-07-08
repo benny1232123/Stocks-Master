@@ -157,6 +157,6 @@ jobs:
           else
             git commit -m "chore: 预热看板缓存 $(date +%Y-%m-%d)"
             # 远程可能有新提交（如手动 push），先拉取 rebase 再推送
-            git pull --rebase --autostash origin main || true
+            git pull --rebase --autostash origin master || true
             git push
           fi
