@@ -3,11 +3,15 @@ services:
     name: stocks-master
     env: python
     plan: free
+    branch: master
     buildCommand: cd frontend && npm install && npm run build && cd .. && pip install -r requirements.txt
     startCommand: uvicorn backend.main:app --host 0.0.0.0 --port $PORT
+    healthCheckPath: /
     envVars:
       - key: KLINE_BACKEND
         value: akshare
+      - key: TDX_ENABLED
+        value: "0"
       - key: TRADES_BACKEND
         value: auto
       - key: SUPABASE_URL

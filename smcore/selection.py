@@ -9,6 +9,7 @@ import pandas as pd
 from smcore.cache_daily import get_daily
 from smcore.data.kline import fetch_daily_k
 from smcore.indicators.boll import calc_bollinger, evaluate_boll_signal
+from smcore.strategies.boll_selection import run_boll_selection
 from smcore.strategy import fuse_signals, save_action_list
 from smcore.utils.code import format_stock_code
 
@@ -57,10 +58,30 @@ def scan_boll_batch(
 ) -> pd.DataFrame:
     """Scan a batch of stocks for Bollinger signals.
 
+    若 codes 为空（如前端触发"运行完整布林选股"），则直接运行 auto-boll 多因子
+    选股（资金流 + 基本面 + 重要股东 + 布林），返回与每日流水线一致的结果。
+
     Args:
         on_progress: optional callback(index, total, code, status_msg) called per stock.
         is_cancelled: optional callable() -> bool; if returns True the scan stops early.
     """
+    # 无候选 → 运行真实 auto-boll 多因子选股（daily-pick 同款逻辑）。
+    if not codes:
+        if on_progress:
+            on_progress(0, 1, "", "运行 auto-boll 多因子选股 ...")
+        df = run_boll_selection(k=k, near_ratio=near_ratio, days_back=days_back)
+        if on_progress:
+            on_progress(1, 1, "", f"完成，命中 {len(df)} 只")
+        # 归一化列名，使前端"策略扫描结果"表格与轻量扫描一致显示
+        if df.empty:
+            return pd.DataFrame(columns=["代码", "名称", "最新价", "信号"])
+        return pd.DataFrame({
+            "代码": df["股票代码"].tolist(),
+            "名称": df["股票名称"].tolist(),
+            "最新价": df["建议买入价"].tolist(),
+            "信号": ["auto-boll 多因子"] * len(df),
+        })
+
     results: list[dict[str, Any]] = []
     total = len(codes)
 

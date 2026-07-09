@@ -709,6 +709,12 @@ function App() {
                         '运行中...'
                       ) : '开始选股'}
                     </Button>
+                    <Button variant="secondary" disabled={isRunning} onClick={async () => {
+                      setScanPhase('boll'); setScanLogs([]); setSelectionScan(null); setFusionResult(null); setBacktestRun(null); setCandidateCodes([]); setScanProgress({ current: 0, total: 0 })
+                      const s = await fetch('/api/selection/boll-scan', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({}) })
+                      if (!s.ok) { setScanPhase(null); setError('完整布林选股启动失败'); return }
+                      setBollTaskId((await s.json()).task_id)
+                    }}>运行完整布林选股(多因子)</Button>
                     {(scanPhase === 'boll' || scanPhase === 'backtest') ? (
                       <Button variant="destructive" onClick={() => cancelTask(bollTaskId)}>停止</Button>
                     ) : scanPhase === 'fusion' ? (
