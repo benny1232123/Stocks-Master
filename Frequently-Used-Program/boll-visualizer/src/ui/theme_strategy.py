@@ -1,6 +1,6 @@
 """短线题材换手策略 UI 模块
 
-包装 Stock-Selection-Ashare-Theme-Turnover.py 的核心逻辑，
+包装 smcore/strategies/theme.py 的核心逻辑，
 在 Streamlit 页面中提供参数配置、扫描执行与结果展示功能。
 
 数据流：
@@ -10,6 +10,7 @@
 from __future__ import annotations
 
 import importlib.util
+import sys
 import types
 from pathlib import Path
 
@@ -22,22 +23,24 @@ import streamlit as st
 
 # 当前文件: boll-visualizer/src/ui/theme_strategy.py
 # parents[0] = ui/, parents[1] = src/, parents[2] = boll-visualizer/
-# parents[3] = Frequently-Used-Program/
-_PARENT_DIR = Path(__file__).resolve().parents[3]  # Frequently-Used-Program/
-_THEME_SCRIPT = _PARENT_DIR / "Stock-Selection-Ashare-Theme-Turnover.py"
+# parents[3] = Frequently-Used-Program/, parents[4] = 项目根（含 smcore 包）
+_PARENT_DIR = Path(__file__).resolve().parents[4]  # 项目根
+if str(_PARENT_DIR) not in sys.path:
+    sys.path.insert(0, str(_PARENT_DIR))
+_THEME_SCRIPT = _PARENT_DIR / "smcore" / "strategies" / "theme.py"
 
 # ---------------------------------------------------------------------------
-# 延迟加载主题策略脚本（文件名含连字符，无法直接 import）
+# 延迟加载主题策略模块
 # ---------------------------------------------------------------------------
 
 
 def _get_theme_module():
-    """延迟加载并缓存 Stock-Selection-Ashare-Theme-Turnover 模块。"""
+    """延迟加载并缓存 smcore.strategies.theme 模块。"""
     if not hasattr(_get_theme_module, "_mod"):
         if not _THEME_SCRIPT.exists():
             raise FileNotFoundError(
                 f"未找到主题策略脚本:\n{_THEME_SCRIPT}\n"
-                "请确认 Stock-Selection-Ashare-Theme-Turnover.py 存在于上级目录中。"
+                "请确认 smcore/strategies/theme.py 存在于项目中。"
             )
         _spec = importlib.util.spec_from_file_location(
             "theme_turnover",

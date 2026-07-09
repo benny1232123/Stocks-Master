@@ -1,3 +1,7 @@
+"""A股短线题材策略模块（smcore 多策略体系之一），由 Frequently-Used-Program/Stock-Selection-Ashare-Theme-Turnover.py 重构而来。
+
+政策题材 + 动量，换手率可放宽。输出 stock_data/Stock-Selection-Ashare-Theme-Turnover-{today}.csv。
+"""
 import argparse
 import datetime
 import json
@@ -14,9 +18,11 @@ import akshare as ak
 import baostock as bs
 import pandas as pd
 
+from smcore.config.defaults import PROJECT_ROOT, STOCK_DATA_DIR
 
-ROOT_DIR = Path(__file__).resolve().parents[1]
-DATA_DIR = ROOT_DIR / "stock_data"
+
+ROOT_DIR = PROJECT_ROOT
+DATA_DIR = STOCK_DATA_DIR
 DATA_DIR.mkdir(parents=True, exist_ok=True)
 LOG_DIR = DATA_DIR / "auto_logs"
 LOG_DIR.mkdir(parents=True, exist_ok=True)
@@ -41,8 +47,8 @@ def parse_args():
     parser.add_argument("--max-stocks", type=int, default=1200, help="最多扫描多少只A股")
     parser.add_argument("--max-workers", type=int, default=8, help="扫描并发数，默认8")
     parser.add_argument("--hot-sector-top-n", type=int, default=5, help="使用CCTV热点板块前N")
-    parser.add_argument("--min-latest-turn", type=float, default=0.8, help="最新换手率下限(%)")
-    parser.add_argument("--min-avg-turn5", type=float, default=0.6, help="近5日平均换手率下限(%)")
+    parser.add_argument("--min-latest-turn", type=float, default=0.8, help="最新换手率下限(%%)")
+    parser.add_argument("--min-avg-turn5", type=float, default=0.6, help="近5日平均换手率下限(%%)")
     parser.add_argument("--min-latest-amount", type=float, default=2.0e8, help="最新成交额下限(元)")
     parser.add_argument("--min-latest-price", type=float, default=5.0, help="最新价格下限(元)")
     parser.add_argument("--max-latest-price", type=float, default=30.0, help="最新价格上限(元)")
@@ -793,7 +799,7 @@ def build_strategy_candidates(args, log_path=None):
     return out_df.reset_index(drop=True), hot_sectors
 
 
-def main():
+def run_theme():
     args = parse_args()
 
     # 防止单个baostock请求长时间无响应导致线程池卡死。
@@ -837,4 +843,4 @@ def main():
 
 
 if __name__ == "__main__":
-    raise SystemExit(main())
+    raise SystemExit(run_theme())

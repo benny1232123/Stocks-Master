@@ -14,9 +14,9 @@ import pandas as pd
 import streamlit as st
 
 # ---------------------------------------------------------------------------
-# 定位父目录 Frequently-Used-Program/ 以便导入 Stock-Selection-Relativity.py
+# 定位项目根目录（含 smcore 包）以便导入 relativity 策略模块
 # ---------------------------------------------------------------------------
-_PARENT_DIR = Path(__file__).resolve().parents[3]  # ui/ → src/ → boll-visualizer/ → Frequently-Used-Program/
+_PARENT_DIR = Path(__file__).resolve().parents[4]  # ui/ → src/ → boll-visualizer/ → Frequently-Used-Program/ → 项目根
 if str(_PARENT_DIR) not in sys.path:
     sys.path.insert(0, str(_PARENT_DIR))
 
@@ -29,10 +29,7 @@ _LOAD_LOCK = threading.Lock()
 
 
 def _get_relativity_module():
-    """首次调用时加载 Stock-Selection-Relativity 模块，后续返回缓存。
-
-    由于脚本文件名含连字符（Stock-Selection-Relativity.py），无法直接 import，
-    因此使用 importlib 动态加载。
+    """首次调用时加载 relativity 策略模块（smcore.strategies.relativity），后续返回缓存。
     """
     global _RELATIVITY_MODULE, _LOAD_ERROR
 
@@ -43,7 +40,7 @@ def _get_relativity_module():
         if _RELATIVITY_MODULE is not None:
             return _RELATIVITY_MODULE
 
-        script_path = _PARENT_DIR / "Stock-Selection-Relativity.py"
+        script_path = _PARENT_DIR / "smcore" / "strategies" / "relativity.py"
         if not script_path.exists():
             _LOAD_ERROR = f"找不到脚本文件：{script_path}"
             raise ImportError(_LOAD_ERROR)

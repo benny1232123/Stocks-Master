@@ -4,7 +4,7 @@ from pathlib import Path
 import pandas as pd
 
 
-MODULE_PATH = Path(__file__).resolve().parent / "Stock-Selection-CCTV-Sectors.py"
+MODULE_PATH = Path(__file__).resolve().parent.parent / "smcore" / "strategies" / "cctv.py"
 spec = importlib.util.spec_from_file_location("cctv_strategy", MODULE_PATH)
 if spec is None or spec.loader is None:
     raise RuntimeError(f"无法加载模块: {MODULE_PATH}")

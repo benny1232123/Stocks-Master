@@ -1,23 +1,15 @@
+"""断点续跑 CSV 读写工具 —— 由 Frequently-Used-Program/strategy_common.py 提炼而来。
+
+此前各选股脚本散落自己的 checkpoint 读写逻辑，本模块统一为单一入口，
+供 smcore/strategies/relativity.py 等复用。
+"""
 from __future__ import annotations
 
 from pathlib import Path
 
 import pandas as pd
 
-
-def format_stock_code(code) -> str:
-    if isinstance(code, str):
-        digits = "".join(ch for ch in code if ch.isdigit())
-        return digits.zfill(6)
-    if isinstance(code, int):
-        return f"{code:06d}"
-    text = str(code)
-    digits = "".join(ch for ch in text if ch.isdigit())
-    return digits.zfill(6) if digits else text
-
-
-def normalize_code_series(series: pd.Series) -> pd.Series:
-    return series.astype(str).apply(format_stock_code)
+from smcore.utils.code import normalize_code_series
 
 
 def load_checkpoint_df(checkpoint_path: Path) -> pd.DataFrame:

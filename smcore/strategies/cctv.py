@@ -1,3 +1,7 @@
+"""CCTV 新闻舆论热门板块监测策略模块（smcore 多策略体系之一），由 Frequently-Used-Program/Stock-Selection-CCTV-Sectors.py 重构而来。
+
+抓取 CCTV 新闻 + 补充资讯源，构建关键词热度与个股池。输出 stock_data/CCTV-Sector-Stock-Pool-{today}.csv 等。
+"""
 import argparse
 import datetime
 import os
@@ -8,6 +12,8 @@ from pathlib import Path
 
 import akshare as ak
 import pandas as pd
+
+from smcore.config.defaults import PROJECT_ROOT, STOCK_DATA_DIR
 
 
 TOP_N = 15
@@ -42,8 +48,8 @@ def _progress_label(prefix, index, total):
     return f"{prefix}: {index}/{total} ({percent}%)"
 
 
-ROOT_DIR = Path(__file__).resolve().parents[1]
-DATA_DIR = ROOT_DIR / "stock_data"
+ROOT_DIR = PROJECT_ROOT
+DATA_DIR = STOCK_DATA_DIR
 DATA_DIR.mkdir(parents=True, exist_ok=True)
 
 
@@ -823,7 +829,7 @@ def write_markdown_report(date_str, sector_df, quality_df, emerging_df, top_n, u
     return path
 
 
-def main():
+def run_cctv():
     args = parse_args()
     if args.unit_days <= 0:
         print("--unit-days 必须 >= 1")
@@ -935,4 +941,4 @@ def main():
 
 
 if __name__ == "__main__":
-    main()
+    run_cctv()

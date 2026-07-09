@@ -349,9 +349,7 @@ def _fetch_economic_calendar_risk(window_days=7):
 
 
 ROOT_DIR = Path(__file__).resolve().parents[1]
-THEME_SCRIPT_PATH = ROOT_DIR / "Frequently-Used-Program" / "Stock-Selection-Ashare-Theme-Turnover.py"
-CCTV_SCRIPT_PATH = ROOT_DIR / "Frequently-Used-Program" / "Stock-Selection-CCTV-Sectors.py"
-RELATIVITY_SCRIPT_PATH = ROOT_DIR / "Frequently-Used-Program" / "Stock-Selection-Relativity.py"
+# 题材/相对强弱/CCTV 策略已重构为 smcore.strategies.* 模块，由子进程 `python -m` 调用（cwd=ROOT_DIR 使其可解析）。
 CLEANUP_SCRIPT_PATH = ROOT_DIR / "Frequently-Used-Program" / "cleanup_stock_data.py"
 ARCHIVE_SCRIPT_PATH = ROOT_DIR / "Frequently-Used-Program" / "archive_stock_data.py"
 COMPRESS_SCRIPT_PATH = ROOT_DIR / "Frequently-Used-Program" / "compress_stock_data.py"
@@ -1136,7 +1134,7 @@ def _build_market_and_strategy_summary(*, boll_rows_count, theme_rows_count, mac
         reco.extend(
             [
                 "1. 主策略: 震荡轮动（Boll低吸高抛 + 题材择强切换）。",
-                "2. 辅策略: 关注相对强弱脚本(Stock-Selection-Relativity.py)做强者恒强过滤。",
+                "2. 辅策略: 关注相对强弱模块(smcore.strategies.relativity)做强者恒强过滤。",
                 "3. 参数建议: THEME_MAX_STOCKS=600, THEME_TOP_N=20，保持分散持仓。",
                 "4. 策略原理: 震荡市中单一主线持续性弱，分批低吸高抛更容易提高胜率。",
                 "5. 失效信号: 指数单边突破并伴随成交放大，应切换到趋势模式参数。",
@@ -1994,7 +1992,7 @@ def main():
     enable_cctv = os.getenv("ENABLE_CCTV_STRATEGY", "1").strip() != "0"
     cctv_summary = ""
     if enable_cctv:
-        cctv_cmd = [sys.executable, str(CCTV_SCRIPT_PATH), "--top-n", "5", "--emerging-top-n", "20"]
+        cctv_cmd = [sys.executable, "-m", "smcore.strategies.cctv", "--top-n", "5", "--emerging-top-n", "20"]
         cctv_disable_extra_news = os.getenv("CCTV_DISABLE_EXTRA_NEWS", "0").strip() == "1"
         cctv_extra_sources = os.getenv("CCTV_EXTRA_NEWS_SOURCES", "cls,sina").strip() or "cls,sina"
         cctv_extra_limit = os.getenv("CCTV_EXTRA_NEWS_LIMIT", "120").strip() or "120"
@@ -2135,7 +2133,8 @@ def main():
         )
         theme_cmd = [
             sys.executable,
-            str(THEME_SCRIPT_PATH),
+            "-m",
+            "smcore.strategies.theme",
             "--top-n",
             str(theme_top_n),
             "--max-stocks",
@@ -2169,7 +2168,7 @@ def main():
     enable_relativity = os.getenv("ENABLE_RELATIVITY_STRATEGY", "1").strip() != "0"
     relativity_cmd = []
     if enable_relativity:
-        relativity_cmd = [sys.executable, str(RELATIVITY_SCRIPT_PATH)]
+        relativity_cmd = [sys.executable, "-m", "smcore.strategies.relativity"]
         default_relativity_workers = "4"
         relativity_max_workers = os.getenv("RELATIVITY_MAX_WORKERS", default_relativity_workers).strip() or default_relativity_workers
         relativity_holder_max_workers = os.getenv("RELATIVITY_HOLDER_MAX_WORKERS", relativity_max_workers).strip() or relativity_max_workers

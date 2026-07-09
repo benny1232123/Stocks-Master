@@ -64,7 +64,7 @@ jobs:
         run: |
           TODAY=$(date +%Y%m%d)
           python scripts/strategy_cache.py pull theme $TODAY && echo "skip=true" >> $GITHUB_OUTPUT && exit 0
-          python Frequently-Used-Program/Stock-Selection-Ashare-Theme-Turnover.py
+          python -m smcore.strategies.theme
           python scripts/strategy_cache.py push theme $TODAY
 
       - name: 策略3 CCTV 板块
@@ -78,7 +78,7 @@ jobs:
         run: |
           TODAY=$(date +%Y%m%d)
           python scripts/strategy_cache.py pull cctv $TODAY && echo "skip=true" >> $GITHUB_OUTPUT && exit 0
-          python Frequently-Used-Program/Stock-Selection-CCTV-Sectors.py
+          python -m smcore.strategies.cctv
           python scripts/strategy_cache.py push cctv $TODAY
 
       - name: 策略4 相对强弱
@@ -94,7 +94,7 @@ jobs:
         run: |
           TODAY=$(date +%Y%m%d)
           python scripts/strategy_cache.py pull relativity $TODAY && echo "skip=true" >> $GITHUB_OUTPUT && exit 0
-          python Frequently-Used-Program/Stock-Selection-Relativity.py --max-workers 1
+          python -m smcore.strategies.relativity --max-workers 1
           python scripts/strategy_cache.py push relativity $TODAY
 
       - name: 生成操作清单 + 上传 COS

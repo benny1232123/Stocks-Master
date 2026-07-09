@@ -1,13 +1,14 @@
 """央视新闻板块监测 —— Streamlit UI 模块
 
 抓取新闻联播文本 → 舆情情绪分析 → 热门板块识别 → 关联股票池
-通过 importlib 延迟加载 Stock-Selection-CCTV-Sectors.py（文件名含连字符）。
+通过 importlib 延迟加载 smcore/strategies/cctv.py 模块。
 """
 
 from __future__ import annotations
 
 import datetime
 import importlib.util
+import sys
 from pathlib import Path
 from typing import Any
 
@@ -18,19 +19,21 @@ import streamlit as st
 # 路径与模块加载
 # ---------------------------------------------------------------------------
 
-# 本文件位于 boll-visualizer/src/ui/，往上两级即 Frequently-Used-Program/
-_PARENT_DIR = Path(__file__).resolve().parents[3]  # ui/ → src/ → boll-visualizer/ → Frequently-Used-Program/
+# 本文件位于 boll-visualizer/src/ui/，往上四级即项目根（含 smcore 包）
+_PARENT_DIR = Path(__file__).resolve().parents[4]  # ui/ → src/ → boll-visualizer/ → Frequently-Used-Program/ → 项目根
+if str(_PARENT_DIR) not in sys.path:
+    sys.path.insert(0, str(_PARENT_DIR))
 
 
 def _get_cctv_module():
-    """延迟加载 CCTV 脚本模块（文件名含连字符，不能直接 import）。"""
+    """延迟加载 CCTV 策略模块（smcore.strategies.cctv）。"""
     if not hasattr(_get_cctv_module, "_mod"):
         _spec = importlib.util.spec_from_file_location(
             "cctv_sectors",
-            str(_PARENT_DIR / "Stock-Selection-CCTV-Sectors.py"),
+            str(_PARENT_DIR / "smcore" / "strategies" / "cctv.py"),
         )
         if _spec is None or _spec.loader is None:
-            raise ImportError("无法定位 Stock-Selection-CCTV-Sectors.py")
+            raise ImportError("无法定位 smcore/strategies/cctv.py")
         _mod = importlib.util.module_from_spec(_spec)
         _spec.loader.exec_module(_mod)
         _get_cctv_module._mod = _mod

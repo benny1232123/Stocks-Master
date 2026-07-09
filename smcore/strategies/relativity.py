@@ -1,5 +1,10 @@
 from __future__ import annotations
 
+"""A股相对强弱策略模块（smcore 多策略体系之一），由 Frequently-Used-Program/Stock-Selection-Relativity.py 重构而来。
+
+完整保留实战验证过的筛选链路：资金流 + 基本面 + 重要股东 + 指数相对强弱（抗跌/上涨满足率）。
+输出 stock_data/Stock-Selection-Relativity-{today}.csv（股票代码, 股票名称, 建议买入价, 上涨满足率, 抗跌满足率 ...）。
+"""
 import argparse
 import os
 import re
@@ -15,11 +20,12 @@ import akshare as ak
 import baostock as bs
 import pandas as pd
 
-from strategy_common import format_stock_code, load_checkpoint_df, normalize_code_series, save_checkpoint_df
+from smcore.config.defaults import PROJECT_ROOT, STOCK_DATA_DIR
+from smcore.utils.checkpoint import load_checkpoint_df, save_checkpoint_df
+from smcore.utils.code import format_stock_code, normalize_code_series
 
 
-ROOT_DIR = Path(__file__).resolve().parents[1]
-STOCK_DATA_DIR = ROOT_DIR / "stock_data"
+ROOT_DIR = PROJECT_ROOT
 CHECKPOINT_DIR = STOCK_DATA_DIR / "checkpoints"
 DB_PATH = STOCK_DATA_DIR / "stocks_data.db"
 
@@ -960,7 +966,7 @@ def print_param_warnings() -> None:
         print(f"[参数警告] RS_DOWN_OUTPERF={RS_DOWN_OUTPERF} 看起来过大（日收益率小数制：0.01=1%）。")
 
 
-def main() -> None:
+def run_relativity() -> None:
     args = parse_args()
     socket.setdefaulttimeout(max(3.0, float(args.bs_timeout_seconds)))
     STOCK_DATA_DIR.mkdir(parents=True, exist_ok=True)
@@ -1082,4 +1088,4 @@ def main() -> None:
 
 
 if __name__ == "__main__":
-    main()
+    run_relativity()
