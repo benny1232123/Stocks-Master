@@ -349,7 +349,6 @@ def _fetch_economic_calendar_risk(window_days=7):
 
 
 ROOT_DIR = Path(__file__).resolve().parents[1]
-SCRIPT_PATH = ROOT_DIR / "Frequently-Used-Program" / "Stock-Selection-Boll.py"
 THEME_SCRIPT_PATH = ROOT_DIR / "Frequently-Used-Program" / "Stock-Selection-Ashare-Theme-Turnover.py"
 CCTV_SCRIPT_PATH = ROOT_DIR / "Frequently-Used-Program" / "Stock-Selection-CCTV-Sectors.py"
 RELATIVITY_SCRIPT_PATH = ROOT_DIR / "Frequently-Used-Program" / "Stock-Selection-Relativity.py"
@@ -1232,7 +1231,7 @@ def _build_message(success, csv_path=None, rows=None, run_output_tail=""):
         return (
             "# Stocks-Master Daily Run Failed\n"
             f"> Time: {now}\n\n"
-            "Stock-Selection-Boll.py failed.\n\n"
+            "smcore.strategies.boll failed.\n\n"
             "Recent output:\n"
             f"{run_output_tail or '(no output)'}"
         )
@@ -1984,7 +1983,7 @@ def main():
     _append_log(log_lines, "[  0%] Pipeline started (8 steps): 1=boll, 2=cctv, 3=macro-news, 4=theme+relativity, 5=archive, 6=cleanup, 7=notify, 8=compress")
     main_returncode, output_tail = _run_command_with_live_output(
         log_lines,
-        cmd=[sys.executable, str(SCRIPT_PATH)],
+        cmd=[sys.executable, "-m", "smcore.strategies.boll"],
         cwd=ROOT_DIR,
         step_index=1,
         stage_name="boll",

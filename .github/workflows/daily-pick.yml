@@ -50,7 +50,7 @@ jobs:
         run: |
           TODAY=$(date +%Y%m%d)
           python scripts/strategy_cache.py pull boll $TODAY && echo "skip=true" >> $GITHUB_OUTPUT && exit 0
-          python Frequently-Used-Program/Stock-Selection-Boll.py
+          python -m smcore.strategies.boll
           python scripts/strategy_cache.py push boll $TODAY
 
       - name: 策略2 题材热度

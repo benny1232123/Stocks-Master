@@ -1,6 +1,6 @@
 """baostock 会话管理 —— 单一登录点。
 
-此前 bs.login()/bs.logout() 散落在 6+ 处（Stock-Selection-Boll / data_fetcher /
+此前 bs.login()/bs.logout() 散落在 6+ 处（boll 选股 / data_fetcher /
 boll_strategy / auto_notify_boll...），全市场扫描时每只股票都 login/logout，
 极慢且易触发连接限制。本模块提供进程级单例，确保只登录一次、全程复用。
 

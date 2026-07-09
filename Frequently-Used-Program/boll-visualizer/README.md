@@ -1,6 +1,6 @@
 # Boll Visualizer
 
-基于 `Stock-Selection-Boll.py` 的全流程思路，做成可交互可视化工具，并且默认不使用东方财富接口。
+基于 `smcore/strategies/boll.py`（原 `Stock-Selection-Boll.py`，已合并进 smcore 多策略体系）的全流程思路，做成可交互可视化工具，并且默认不使用东方财富接口。
 
 ## 功能
 
@@ -72,25 +72,11 @@ python -m pip install -r requirements-dev.txt
 	- `full_flow/financial/`：全流程基本面指标缓存（按报告期缓存）
 	- `full_flow/shareholder/`：全流程股东命中结果缓存（默认周级复用）
 - 网络波动时会优先回退到最近可用缓存，避免整次任务失败。
-- `Stock-Selection-Boll-All.py` 默认会复用当日已生成的结果文件；使用 `--force-refresh` 可强制重跑：
+- 选股逻辑已统一到 `smcore/strategies/boll.py`（`python -m smcore.strategies.boll` 产出 `stock_data/Stock-Selection-Boll-{date}.csv`）；本可视化工具直接读取该 CSV，不再单独运行独立的 Boll 脚本。批量/断点续跑等能力如需保留，可在 `boll.py` 中扩展：
 
 ```powershell
 cd c:\Users\29408\Desktop\Stocks-Master
-python Frequently-Used-Program\Stock-Selection-Boll-All.py --force-refresh
-```
-
-- 支持断点续跑（适合全市场长任务）：
-
-```powershell
-cd c:\Users\29408\Desktop\Stocks-Master
-python Frequently-Used-Program\Stock-Selection-Boll-All.py --resume --chunk-size 400
-```
-
-- 可选并发与重试参数（提高稳定性/速度）：
-
-```powershell
-cd c:\Users\29408\Desktop\Stocks-Master
-python Frequently-Used-Program\Stock-Selection-Boll-All.py --resume --chunk-size 400 --max-workers 4 --max-retries 2 --retry-backoff 0.5 --request-interval 0.0
+python -m smcore.strategies.boll
 ```
 
 ## 参数说明

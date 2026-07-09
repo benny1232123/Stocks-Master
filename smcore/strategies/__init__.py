@@ -6,6 +6,6 @@
 """
 from __future__ import annotations
 
-from .boll_selection import run_boll_selection
+from .boll import run_boll
 
-__all__ = ["run_boll_selection"]
+__all__ = ["run_boll"]

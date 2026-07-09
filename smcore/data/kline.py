@@ -1,7 +1,7 @@
 """K线数据获取 —— 单一真相源（强制前复权）。
 
 合并自 boll-visualizer/src/core/data_fetcher.py 的 K线部分，关键改动：
-- 强制前复权(qfq)：此前 Stock-Selection-Boll.py 用不复权(adjustflag=3)，
+- 强制前复权(qfq)：此前 Boll 选股用不复权(adjustflag=3)，
   除权除息日布林带断裂、信号失真，是"结果不可信"的头号原因。
 - 统一 baostock 会话：用 core.data.session 单例，避免每只股票重复登录。
 - 云端后端：环境变量 KLINE_BACKEND=akshare 时改用 akshare HTTP 接口（东财数据源），

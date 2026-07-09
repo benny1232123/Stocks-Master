@@ -1,7 +1,7 @@
 """股票代码标准化 —— 全项目唯一实现。
 
 此前有 4 处独立的代码格式化函数（strategy_common / data_fetcher /
-Stock-Selection-Boll / auto_notify_boll），行为略有差异。本模块统一为单一入口。
+boll 选股 / auto_notify_boll），行为略有差异。本模块统一为单一入口。
 """
 from __future__ import annotations
 

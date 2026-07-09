@@ -1,7 +1,7 @@
 """布林带（Bollinger Bands）指标与信号 —— 全项目唯一实现。
 
 此前 Boll 逻辑散落在三处：
-- Frequently-Used-Program/Stock-Selection-Boll.py（命令行，不复权）
+- smcore/strategies/boll.py（命令行经 python -m smcore.strategies.boll，前复权）
 - boll-visualizer/src/core/indicators.py（可视化，前复权）
 - auto_notify_boll.py:_calc_boll_levels（主流程复算，tail(20)）
 三处参数名、边界条件、返回结构各不相同。本模块统一为单一真相源。

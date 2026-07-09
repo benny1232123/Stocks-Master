@@ -5,8 +5,7 @@
 ## 1）BOLL 主流程（每日优先）
 
 - auto_notify_boll.py：每日主流程（选股 + 汇总 + 推送 + 归档/清理）
-- Stock-Selection-Boll.py：核心 BOLL 选股策略
-- Stock-Selection-Boll-All.py：全市场/批量 BOLL 分析
+- BOLL 核心选股已迁入 `smcore/strategies/boll.py`（`run_boll`），由 auto_notify_boll 主流程的 boll 步骤（`python -m smcore.strategies.boll`）调用
 - Stock-Selection-Relativity.py：相对强弱策略（已接入 auto_notify_boll 主流程）
 
 ## 2）CCTV / 新闻 / 题材策略（可选增强）

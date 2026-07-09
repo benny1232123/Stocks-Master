@@ -1,4 +1,4 @@
-"""auto-boll 多因子选股 —— 从 Frequently-Used-Program/Stock-Selection-Boll.py 重构而来。
+"""auto-boll 多因子选股策略模块（smcore 多策略体系之一），由 Frequently-Used-Program/Stock-Selection-Boll.py 重构而来。
 
 完整保留实战验证过的筛选链路：
   1) 资金流向（3/5/10 日主力净流入，且现价在 [5,30] 区间）
@@ -258,7 +258,7 @@ def _plot_bollinger(result_df, fncode, k, today, save_dir, show, stock_name):
     plt.close()
 
 
-def run_boll_selection(
+def run_boll(
     today: Optional[str] = None,
     *,
     enable_visualization: Optional[bool] = None,
@@ -295,7 +295,7 @@ def run_boll_selection(
     current_year = dates["current_year"]
     do_plot = bool(enable_visualization)
 
-    print(f"[boll_selection] 开始 auto-boll 多因子选股 {today}")
+    print(f"[boll] 开始 auto-boll 多因子选股 {today}")
 
     # ── 1) 资金流向 ──
     all_fund_flow_codes: dict[str, list] = {}
@@ -321,7 +321,7 @@ def run_boll_selection(
     f5 = set(all_fund_flow_codes.get("format_5_days_positive_funds_codes", []))
     f10 = set(all_fund_flow_codes.get("format_10_days_positive_funds_codes", []))
     fund_flow_union = f3 | f5 | f10
-    print(f"[boll_selection] 资金流向候选(3/5/10日净流入并集): {len(fund_flow_union)}")
+    print(f"[boll] 资金流向候选(3/5/10日净流入并集): {len(fund_flow_union)}")
 
     # ── 2) 基本面 ──
     zcfz_codes: list = []
@@ -356,14 +356,14 @@ def run_boll_selection(
     if use_profit_forecast_filter:
         fundamental_sets.append(set(profit_forecast_codes))
     fundamental_intersection = set.intersection(*fundamental_sets) if fundamental_sets else set()
-    print(f"[boll_selection] 基本面交集: {len(fundamental_intersection)}")
+    print(f"[boll] 基本面交集: {len(fundamental_intersection)}")
 
     common_codes = fundamental_intersection & fund_flow_union
-    print(f"[boll_selection] 基本面∩资金流: {len(common_codes)}")
+    print(f"[boll] 基本面∩资金流: {len(common_codes)}")
 
     if exclude_gem_sci:
         common_codes = {c for c in common_codes if not (str(c).startswith("30") or str(c).startswith("688"))}
-    print(f"[boll_selection] 剔除创业板/科创板后: {len(common_codes)}")
+    print(f"[boll] 剔除创业板/科创板后: {len(common_codes)}")
 
     # ── 3) 流通股东（重要股东）──
     code_name_map: dict[str, str] = {}
@@ -374,7 +374,7 @@ def run_boll_selection(
             tmp["code"] = tmp["code"].apply(format_stock_code)
             code_name_map = dict(zip(tmp["code"], tmp["name"]))
     except Exception as e:
-        print(f"[boll_selection] 获取股票名称映射失败: {e}")
+        print(f"[boll] 获取股票名称映射失败: {e}")
 
     final_candidate_codes: list = []
     if common_codes:
@@ -395,11 +395,11 @@ def run_boll_selection(
                 if has_important:
                     final_candidate_codes.append(code)
             except Exception as e:
-                print(f"[boll_selection] 获取 {code} 流通股东数据出错: {e}，跳过")
-    print(f"[boll_selection] 重要股东过滤后候选: {len(final_candidate_codes)}")
+                print(f"[boll] 获取 {code} 流通股东数据出错: {e}，跳过")
+    print(f"[boll] 重要股东过滤后候选: {len(final_candidate_codes)}")
 
     if not final_candidate_codes:
-        print("[boll_selection] 没有符合所有条件的股票")
+        print("[boll] 没有符合所有条件的股票")
         return pd.DataFrame(columns=["股票代码", "股票名称", "建议买入价"])
 
     # 写出共享候选池（供 Relativity 复用）
@@ -495,8 +495,12 @@ def run_boll_selection(
         })
         out_path = STOCK_DATA_DIR / f"Stock-Selection-Boll-{today}.csv"
         out_df.to_csv(out_path, index=False, encoding="utf-8-sig")
-        print(f"[boll_selection] Stock-Selection-Boll-{today}.csv 已保存，{len(out_df)} 只")
+        print(f"[boll] Stock-Selection-Boll-{today}.csv 已保存，{len(out_df)} 只")
         return out_df
     else:
-        print("[boll_selection] 没有选出符合布林带策略的股票")
+        print("[boll] 没有选出符合布林带策略的股票")
         return pd.DataFrame(columns=["股票代码", "股票名称", "建议买入价"])
+
+
+if __name__ == "__main__":
+    run_boll()

@@ -9,7 +9,7 @@ import pandas as pd
 from smcore.cache_daily import get_daily
 from smcore.data.kline import fetch_daily_k
 from smcore.indicators.boll import calc_bollinger, evaluate_boll_signal
-from smcore.strategies.boll_selection import run_boll_selection
+from smcore.strategies.boll import run_boll
 from smcore.strategy import fuse_signals, save_action_list
 from smcore.utils.code import format_stock_code
 
@@ -69,7 +69,7 @@ def scan_boll_batch(
     if not codes:
         if on_progress:
             on_progress(0, 1, "", "运行 auto-boll 多因子选股 ...")
-        df = run_boll_selection(k=k, near_ratio=near_ratio, days_back=days_back)
+        df = run_boll(k=k, near_ratio=near_ratio, days_back=days_back)
         if on_progress:
             on_progress(1, 1, "", f"完成，命中 {len(df)} 只")
         # 归一化列名，使前端"策略扫描结果"表格与轻量扫描一致显示

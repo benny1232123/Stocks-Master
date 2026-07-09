@@ -58,12 +58,15 @@ Stocks-Master/
 │
 ├── frontend/                   # React 前端（web 看板）
 │
-├── Frequently-Used-Program/    # 选股主程序脚本
+├── Frequently-Used-Program/    # 选股主程序脚本（题材/相对强弱/CCTV 等仍在此；Boll 已迁入 smcore）
 │   ├── auto_notify_boll.py     #   本地编排入口（含 CCTV idle 超时看门狗）
-│   ├── Stock-Selection-Boll.py             # 策略1
 │   ├── Stock-Selection-Ashare-Theme-Turnover.py  # 策略2
 │   ├── Stock-Selection-Relativity.py        # 策略4（--max-workers 1 单线程）
 │   └── Stock-Selection-CCTV-Sectors.py      # 策略3（含 API 超时 + 本地回退）
+│
+├── smcore/
+│   ├── strategies/              # 多策略选股模块（一等公民）
+│   │   └── boll.py              #   Boll 多因子选股（策略1，run_boll；已被 daily-pick 与后端 boll-scan 调用）
 │
 ├── scripts/                    # 工具脚本
 │   ├── strategy_cache.py       # ⭐ Supabase 缓存 pull / push
