@@ -422,6 +422,7 @@
 .hpt-row:hover { background: hsl(var(--surface-1)); }
 .hpt-row:nth-child(even) { background: hsla(220, 20%, 96%, 0.5); }
 .hpt-code { font-family: var(--font-mono); font-size: 0.82rem; font-weight: 600; color: hsl(var(--foreground)); }
+.hpt-name { font-size: 0.82rem; font-weight: 500; color: hsl(var(--muted)); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .hpt-sig { font-size: 0.82rem; font-weight: 500; color: hsl(var(--muted)); }
 .hpt-sig.sig-up { color: var(--up); }
 .hpt-sig.sig-down { color: var(--down); }
@@ -484,69 +485,108 @@
   text-align: right;
 }
 
-/* ── 完整日报表（「日报」标签，全量数据）── */
-.daily-full {
-  overflow-x: auto;
-  border-radius: var(--radius);
+/* ── 完整日报表（「日报」标签，二层可展开）── */
+.daily-list {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.daily-item {
   border: 1px solid hsl(var(--border));
-  /* 固定布局：不随内容撑开，强制横向滚动 */
-  display: block;
-  white-space: nowrap;
-}
-.df-head {
-  display: inline-grid;
-  min-width: 100%;
-  grid-template-columns: 70px 90px 56px 60px 58px 64px 64px 72px 60px 140px 140px;
-  gap: 0;
-  padding: 12px 14px;
-  background: hsl(var(--muted) / 0.07);
-  border-bottom: 2px solid hsl(var(--border));
-  position: sticky;
-  top: 0;
-  z-index: 1;
-}
-.df-head span {
-  font-family: var(--font-mono);
-  font-size: 0.68rem;
-  letter-spacing: 0.04em;
-  text-transform: uppercase;
-  color: hsl(var(--muted));
-  white-space: nowrap;
+  border-radius: 10px;
   overflow: hidden;
-  text-overflow: ellipsis;
-  font-weight: 600;
-  padding: 0 6px;
+  background: hsl(var(--card));
+  transition: border-color 0.15s ease, box-shadow 0.15s ease;
 }
-.df-row {
-  display: inline-grid;
-  min-width: 100%;
-  grid-template-columns: 70px 90px 56px 60px 58px 64px 64px 72px 60px 140px 140px;
-  gap: 0;
-  padding: 10px 14px;
-  border-bottom: 1px solid hsl(var(--border) / 0.5);
+.daily-item.open { border-color: hsla(229, 87%, 56%, 0.4); box-shadow: 0 2px 8px hsla(229, 87%, 56%, 0.06); }
+.daily-summary {
+  display: grid;
+  grid-template-columns: 1fr auto;
+  align-items: center;
+  gap: 16px;
+  padding: 12px 16px;
   cursor: pointer;
   transition: background 0.15s ease;
 }
-.df-row:hover { background: hsl(var(--primary) / 0.05); }
-.df-row:last-child { border-bottom: none; }
-.df-row span {
+.daily-summary:hover { background: hsl(var(--surface-1)); }
+.daily-summary-left {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-width: 0;
+}
+.daily-expander {
+  font-size: 0.7rem;
+  color: hsl(var(--muted));
+  width: 14px;
+  text-align: center;
+}
+.daily-code {
   font-family: var(--font-mono);
-  font-size: 0.8rem;
-  color: hsl(var(--foreground));
+  font-size: 0.85rem;
+  font-weight: 700;
+  color: hsl(var(--primary));
+  cursor: pointer;
+}
+.daily-code:hover { text-decoration: underline; }
+.daily-name {
+  font-size: 0.85rem;
+  color: hsl(var(--muted));
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
-  font-variant-numeric: tabular-nums;
-  padding: 0 6px;
-  min-height: 22px;
-  line-height: 22px;
-  display: block;
 }
-/* 列特定样式 */
-.df-row span:nth-child(1) { font-weight: 700; color: hsl(var(--primary)); }   /* 股票代码 */
-.df-row span:nth-child(2) { font-family: var(--font-body); font-size: 0.78rem; }  /* 名称 */
-.df-row span:nth-child(4),                                                    /* 来源策略 */
-.df-row span:nth-child(5) { text-align: center; }                             /* 综合评分 */
+.daily-summary-right {
+  display: flex;
+  align-items: center;
+  gap: 18px;
+  font-family: var(--font-mono);
+  font-size: 0.82rem;
+  flex-shrink: 0;
+}
+.daily-strategies {
+  color: hsl(var(--muted));
+  max-width: 120px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.daily-score {
+  font-weight: 700;
+  color: hsl(var(--primary));
+  min-width: 40px;
+  text-align: right;
+}
+.daily-buy {
+  min-width: 60px;
+  text-align: right;
+  color: hsl(var(--foreground));
+}
+.daily-details {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(120px, 1fr));
+  gap: 12px;
+  padding: 14px 16px 16px 40px;
+  background: hsl(var(--surface-1));
+  border-top: 1px solid hsl(var(--border) / 0.5);
+}
+.dd-cell {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+.dd-cell span {
+  font-size: 0.68rem;
+  color: hsl(var(--muted));
+  font-family: var(--font-mono);
+}
+.dd-cell strong {
+  font-size: 0.9rem;
+  font-weight: 600;
+  color: hsl(var(--foreground));
+  font-family: var(--font-mono);
+  font-variant-numeric: tabular-nums;
+}
 
 /* ── 邮件式日报摘要 ── */
 .report-head {
@@ -772,6 +812,16 @@
 }
 .analysis-form input:focus { outline: none; border-color: hsla(229, 87%, 56%, 0.5); box-shadow: 0 0 0 3px hsla(229, 87%, 56%, 0.08); }
 .analysis-grid { display: grid; grid-template-columns: repeat(4, 1fr); gap: 12px; margin-top: 16px; }
+
+.analysis-single { max-width: none; }
+.analysis-top { display: flex; flex-direction: column; gap: 12px; }
+.analysis-select {
+  width: 100%; height: 44px; padding: 0 14px;
+  border-radius: 9px; border: 1px solid hsl(var(--border));
+  background: hsl(var(--card)); color: hsl(var(--foreground));
+  font-size: 0.92rem; font-family: var(--font-mono);
+}
+.analysis-select:focus { outline: none; border-color: hsla(229, 87%, 56%, 0.5); box-shadow: 0 0 0 3px hsla(229, 87%, 56%, 0.08); }
 
 /* ── Progress ── */
 .progress-bar-wrap { display: flex; align-items: center; gap: 14px; margin: 18px 0 4px; }

@@ -46,6 +46,56 @@ function Field({ label, children, hint }) {
   )
 }
 
+function DailyExpandableList({ rows, onCodeClick }) {
+  const [expanded, setExpanded] = useState(new Set())
+  const num = (r, k) => { const v = r[k]; return v != null && v !== '' ? Number(v) : NaN }
+  const toggle = (i) => setExpanded((prev) => {
+    const next = new Set(prev)
+    if (next.has(i)) next.delete(i)
+    else next.add(i)
+    return next
+  })
+  return (
+    <div className="daily-list">
+      {rows.map((row, i) => {
+        const code = row['股票代码'] ?? row['代码'] ?? '--'
+        const name = row['股票名称'] ?? '--'
+        const score = num(row, '综合评分')
+        const strategies = row['来源策略'] ?? '--'
+        const buyPrice = num(row, '建议买入价')
+        const isOpen = expanded.has(i)
+        return (
+          <div key={i} className={cn('daily-item', isOpen && 'open')}>
+            <div className="daily-summary" onClick={() => toggle(i)}>
+              <div className="daily-summary-left">
+                <span className="daily-expander">{isOpen ? '▼' : '▶'}</span>
+                <span className="daily-code" onClick={(e) => { e.stopPropagation(); onCodeClick(code) }}>{code}</span>
+                <span className="daily-name">{name}</span>
+              </div>
+              <div className="daily-summary-right">
+                <span className="daily-strategies">{strategies}</span>
+                <span className="daily-score">{!isNaN(score) ? score.toFixed(1) : '--'}</span>
+                <span className="daily-buy">{!isNaN(buyPrice) ? buyPrice.toFixed(2) : '--'}</span>
+              </div>
+            </div>
+            {isOpen ? (
+              <div className="daily-details">
+                <div className="dd-cell"><span>命中策略数</span><strong>{row['命中策略数'] ?? '--'}</strong></div>
+                <div className="dd-cell"><span>建议仓位%</span><strong>{row['建议仓位%'] != null ? `${Number(row['建议仓位%'])}%` : '--'}</strong></div>
+                <div className="dd-cell"><span>建议金额</span><strong>{row['建议金额'] != null ? `¥${Number(row['建议金额']).toFixed(0)}` : '--'}</strong></div>
+                <div className="dd-cell"><span>最新价</span><strong>{row['最新价'] != null ? Number(row['最新价']).toFixed(2) : '--'}</strong></div>
+                <div className="dd-cell"><span>止损价(下轨)</span><strong>{row['止损价(下轨)'] != null ? Number(row['止损价(下轨)']).toFixed(2) : '--'}</strong></div>
+                <div className="dd-cell"><span>止盈价(上轨)</span><strong>{row['止盈价(上轨)'] != null ? Number(row['止盈价(上轨)']).toFixed(2) : '--'}</strong></div>
+                <div className="dd-cell"><span>MA20</span><strong>{row['MA20'] != null ? Number(row['MA20']).toFixed(2) : '--'}</strong></div>
+              </div>
+            ) : null}
+          </div>
+        )
+      })}
+    </div>
+  )
+}
+
 function SectionCard({ title, subtitle, children, className = '' }) {
   return (
     <section className={cn('glass-card animate-fade-in', className)}>
@@ -196,7 +246,7 @@ function App() {
   async function startBacktest(codes) {
     if (!codes || codes.length === 0) return
     setScanPhase('backtest')
-    setScanLogs((prev) => [...prev, `选股完成，开始自动回测 ${codes.length} 只股票...`])
+    setScanLogs((prev) => [...prev, `融合完成，开始自动回测 ${codes.length} 只股票...`])
     try {
       const resp = await fetch('/api/backtests/run', {
         method: 'POST',
@@ -207,6 +257,32 @@ function App() {
       const { task_id } = await resp.json()
       setBtTaskId(task_id)
     } catch { setScanPhase(null); setError('回测启动失败') }
+  }
+
+  async function startFusion() {
+    setScanPhase('fusion')
+    setScanLogs((prev) => [...prev, 'Boll 扫描完成，开始策略融合...'])
+    try {
+      const today = new Date().toISOString().slice(0, 10).replace(/-/g, '')
+      const resp = await fetch('/api/selection/fusion', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ date: today, total_capital: 100000, max_picks: 15 }),
+      })
+      if (!resp.ok) { setScanPhase(null); setError('融合启动失败'); return }
+      setFusionTaskId((await resp.json()).task_id)
+    } catch { setScanPhase(null); setError('融合启动失败') }
+  }
+
+  async function reloadArtifacts() {
+    try {
+      const [a, f] = await Promise.all([
+        fetch('/api/artifacts/daily-action-list'),
+        fetch('/api/artifacts/daily-action-list/full'),
+      ])
+      if (a.ok) setArtifacts(await a.json())
+      if (f.ok) setFullDaily(await f.json())
+    } catch { /* 忽略刷新失败 */ }
   }
 
   // 手动多策略 Backtrader 回测
@@ -280,9 +356,7 @@ function App() {
             done = true
             if (data.status === 'done' && data.result?.rows) {
               setSelectionScan(data.result)
-              const codes = data.result.rows.map((r) => r['代码']).filter(Boolean)
-              if (codes.length > 0) startBacktest(codes)
-              else setScanPhase(null)
+              startFusion()
             } else {
               setScanPhase(null)
             }
@@ -316,8 +390,15 @@ function App() {
         if (data.status === 'done' || data.status === 'error' || data.status === 'cancelled') {
           if (!done) {
             done = true
-            if (data.status === 'done' && data.result) setFusionResult(data.result)
-            setScanPhase(null)
+            if (data.status === 'done' && data.result) {
+              setFusionResult(data.result)
+              reloadArtifacts()
+              const codes = data.result.rows?.map((r) => r['股票代码']).filter(Boolean) ?? []
+              if (codes.length > 0) startBacktest(codes)
+              else setScanPhase(null)
+            } else {
+              setScanPhase(null)
+            }
             clearInterval(timer)
           }
         }
@@ -552,23 +633,23 @@ function App() {
                 {actionPreview.length > 0 ? (
                   <div className="hero-preview-table">
                     <div className="hpt-head">
-                      <span>股票</span><span>信号</span><span>价格</span>
+                      <span>代码</span><span>名称</span><span>价格</span>
                     </div>
                     {actionPreview.slice(0, 5).map((row, i) => {
-                      const keys = Object.keys(row ?? {})
-                      const code = row[keys[0]] ?? '--'
-                      const sig = row[keys[1]] ?? '--'
-                      const price = row[keys[2]] != null ? Number(row[keys[2]]) : null
+                      const code = row['股票代码'] ?? row['代码'] ?? '--'
+                      const name = row['股票名称'] ?? row['名称'] ?? '--'
+                      const priceRaw = row['最新价'] ?? row['建议买入价'] ?? null
+                      const price = priceRaw != null ? Number(priceRaw) : null
                       return (
                         <div key={i} className="hpt-row">
                           <span className="hpt-code">{code}</span>
-                          <span className={cn('hpt-sig', /买|多|看多/i.test(String(sig)) ? 'sig-up' : /卖|空|看空/i.test(String(sig)) ? 'sig-down' : '')}>{sig}</span>
-                          <span className="hpt-price">{price != null ? price.toFixed(2) : '--'}</span>
+                          <span className="hpt-name">{name}</span>
+                          <span className="hpt-price">{price != null && !isNaN(price) ? price.toFixed(2) : '--'}</span>
                         </div>
                       )
                     })}
                     {actionPreview.length > 5 ? (
-                      <div className="hpt-more">+{actionPreview.length - 5} 行更多</div>
+                      <div className="hpt-more" onClick={() => setActiveView('daily')}>+{actionPreview.length - 5} 行更多</div>
                     ) : null}
                   </div>
                 ) : null}
@@ -621,21 +702,17 @@ function App() {
                   style={{ position: 'absolute', top: 14, right: 16, fontSize: '0.76rem', color: 'hsl(var(--primary))', background: 'transparent', border: 'none', cursor: 'pointer', fontFamily: 'var(--font-mono)' }}
                 >查看完整 →</button>
                 {latestActionList && actionPreview.length > 0 ? (
-                  <div className="daily-preview">
-                    <div className="dp-head">
-                      {Object.keys(actionPreview[0] ?? {}).map((k) => (
-                        <span key={k}>{k}</span>
-                      ))}
-                    </div>
-                    {actionPreview.map((row, i) => (
-                      <div key={i} className="dp-row">
-                        {Object.values(row ?? {}).map((v, j) => (
-                          <span key={j}>{v != null ? String(v) : '--'}</span>
-                        ))}
-                      </div>
-                    ))}
-                    <div className="dp-footer">共 {actionPreview.length} 行 · 完整文件: {latestActionList.name}</div>
-                  </div>
+                  <>
+                    <DailyExpandableList
+                      rows={actionPreview.slice(0, 5)}
+                      onCodeClick={(code) => { const c = String(code).trim(); if (c) { setAnalysisCode(c); setActiveView('analysis'); openAnalysis(c) } }}
+                    />
+                    {actionPreview.length > 5 ? (
+                      <div className="dp-footer" style={{ marginTop: 10 }}>共 {actionPreview.length} 行 · 完整文件: {latestActionList.name} · <button onClick={() => setActiveView('daily')} style={{ color: 'hsl(var(--primary))', background: 'transparent', border: 'none', cursor: 'pointer', fontFamily: 'var(--font-mono)', padding: 0 }}>查看完整 →</button></div>
+                    ) : (
+                      <div className="dp-footer" style={{ marginTop: 10 }}>完整文件: {latestActionList.name}</div>
+                    )}
+                  </>
                 ) : latestActionList ? (
                   <div className="empty-state">日报文件存在但预览为空</div>
                 ) : (
@@ -687,38 +764,34 @@ function App() {
 
                   <div className="button-row">
                     <Button disabled={isRunning} onClick={async () => {
-                      setScanPhase('candidates'); setScanLogs([]); setSelectionScan(null); setFusionResult(null); setBacktestRun(null); setScanProgress({ current: 0, total: 0 })
-                      // Step 1: 候选池
+                      setScanPhase('candidates'); setScanLogs([]); setSelectionScan(null); setFusionResult(null); setBacktestRun(null); setCandidateCodes([]); setScanProgress({ current: 0, total: 0 })
+                      // Step 1: 获取候选池（仅用于展示数量与价格区间参考）
                       const c = await fetch(`/api/selection/candidates?price_min=${selectionParams.priceMin}&price_max=${selectionParams.priceMax}`)
                       if (!c.ok) { setScanPhase(null); setError('获取候选池失败'); return }
                       const codes = (await c.json()).codes ?? []
                       setCandidateCodes(codes)
-                      setScanLogs([`候选池 ${codes.length} 只，开始多策略扫描...`])
-                      // Step 2: 布林扫描（策略之一）
+                      setScanLogs([`候选池 ${codes.length} 只，开始运行完整布林多因子扫描...`])
+                      // Step 2: 运行完整布林多因子选股（内部自带价格/基本面/技术过滤）
                       setScanPhase('boll')
-                      const s = await fetch('/api/selection/boll-scan', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ codes, window: 20, k: 1.645, near_ratio: 1.015 }) })
+                      const s = await fetch('/api/selection/boll-scan', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({}) })
                       if (!s.ok) { setScanPhase(null); setError('扫描启动失败'); return }
                       setBollTaskId((await s.json()).task_id)
-                      // 布林完成后会自动触发回测；回测结束后再自动跑融合排序
+                      // 布林完成后自动跑融合排序，融合完成后自动跑回测
                     }}>
                       {isRunning ? (
                         scanPhase === 'candidates' ? '获取候选...' :
                         scanPhase === 'boll' ? '多策略扫描中...' :
-                        scanPhase === 'backtest' ? '回测运行中...' :
                         scanPhase === 'fusion' ? '融合排名中...' :
+                        scanPhase === 'backtest' ? '回测运行中...' :
                         '运行中...'
                       ) : '开始选股'}
                     </Button>
-                    <Button variant="secondary" disabled={isRunning} onClick={async () => {
-                      setScanPhase('boll'); setScanLogs([]); setSelectionScan(null); setFusionResult(null); setBacktestRun(null); setCandidateCodes([]); setScanProgress({ current: 0, total: 0 })
-                      const s = await fetch('/api/selection/boll-scan', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({}) })
-                      if (!s.ok) { setScanPhase(null); setError('完整布林选股启动失败'); return }
-                      setBollTaskId((await s.json()).task_id)
-                    }}>运行完整布林选股(多因子)</Button>
-                    {(scanPhase === 'boll' || scanPhase === 'backtest') ? (
-                      <Button variant="destructive" onClick={() => cancelTask(bollTaskId)}>停止</Button>
-                    ) : scanPhase === 'fusion' ? (
-                      <Button variant="destructive" onClick={() => cancelTask(fusionTaskId)}>停止</Button>
+                    {isRunning ? (
+                      <Button variant="destructive" onClick={() => {
+                        if (scanPhase === 'boll') cancelTask(bollTaskId)
+                        else if (scanPhase === 'fusion') cancelTask(fusionTaskId)
+                        else if (scanPhase === 'backtest') cancelTask(btTaskId)
+                      }}>停止</Button>
                     ) : null}
                   </div>
                 </div>
@@ -814,28 +887,25 @@ function App() {
           <>
             <div className="page-header">
               <h2>个股分析</h2>
-              <p>从左侧候选列表点选，右侧查看多指标技术分析与信号解读</p>
+              <p>选择或输入股票代码，查看多指标技术分析与信号解读</p>
             </div>
-            <div className="split">
-              <aside className="split-list" aria-label="候选列表">
-                {analysisList.length > 0 ? analysisList.map((item) => (
-                  <button
-                    key={item.code}
-                    className={cn('split-item', analysisCode === item.code && 'active')}
-                    onClick={() => openAnalysis(item.code)}
-                  >
-                    <span className="si-code">{item.code}</span>
-                    <span className="si-name">{item.name}</span>
-                    {item.score != null ? <span className="si-score">{Number(item.score).toFixed(1)}</span> : null}
-                  </button>
-                )) : (
-                  <div className="empty-state" style={{ border: 'none', background: 'transparent' }}>去「选股」生成候选池</div>
-                )}
-              </aside>
-
-              <div className="split-detail">
-                <SectionCard title="个股分析" className="max-w-none">
-                  <div className="analysis-form" style={{ marginBottom: 16 }}>
+            <div className="analysis-single">
+              <SectionCard title="个股分析" className="max-w-none">
+                <div className="analysis-top" style={{ marginBottom: 16 }}>
+                  {analysisList.length > 0 ? (
+                    <select
+                      className="analysis-select"
+                      value={analysisCode}
+                      onChange={(e) => openAnalysis(e.target.value)}
+                    >
+                      {analysisList.map((item) => (
+                        <option key={item.code} value={item.code}>
+                          {item.code} {item.name ? `- ${item.name}` : ''} {item.score != null ? `(${Number(item.score).toFixed(1)})` : ''}
+                        </option>
+                      ))}
+                    </select>
+                  ) : null}
+                  <div className="analysis-form">
                     <input value={analysisCode} onChange={(e) => setAnalysisCode(e.target.value)}
                       placeholder="输入股票代码，例如 000001"
                       className="flex-1 h-10 rounded-lg bg-card border border-border px-3 text-foreground placeholder:text-muted-foreground"
@@ -844,24 +914,25 @@ function App() {
                       {analysisLoading ? '请求中...' : '加载分析'}
                     </Button>
                   </div>
+                </div>
 
-                  {analysisError ? (
-                    <div style={{ padding: '14px 16px', background: 'hsl(var(--destructive) / 0.08)', borderRadius: '8px', color: 'hsl(var(--destructive))', fontSize: '0.85rem', marginBottom: 12 }}>
-                      ⚠️ {analysisError}
-                    </div>
-                  ) : null}
-                  {analysis ? (
-                    <>
-                      <div className="detail-head">
-                        <div className="detail-title">
-                          <span className="detail-code">{analysisCode}</span>
-                          <span className="detail-name">{analysis?.latest?.name ?? analysisList.find((i) => i.code === analysisCode)?.name ?? ''}</span>
-                        </div>
-                        <span className={cn('signal-badge', sigClass)} style={{ whiteSpace: 'nowrap' }}>{analysisSignal?.signal ?? '暂无信号'}</span>
+                {analysisError ? (
+                  <div style={{ padding: '14px 16px', background: 'hsl(var(--destructive) / 0.08)', borderRadius: '8px', color: 'hsl(var(--destructive))', fontSize: '0.85rem', marginBottom: 12 }}>
+                    ⚠️ {analysisError}
+                  </div>
+                ) : null}
+                {analysis ? (
+                  <>
+                    <div className="detail-head">
+                      <div className="detail-title">
+                        <span className="detail-code">{analysisCode}</span>
+                        <span className="detail-name">{analysis?.latest?.name ?? analysisList.find((i) => i.code === analysisCode)?.name ?? ''}</span>
                       </div>
+                      <span className={cn('signal-badge', sigClass)} style={{ whiteSpace: 'nowrap' }}>{analysisSignal?.signal ?? '暂无信号'}</span>
+                    </div>
 
-                      {/* ── 多指标解读面板 ── */}
-                      {(() => {
+                    {/* ── 多指标解读面板 ── */}
+                    {(() => {
                         const L = analysisLatest ?? {}
                         const M = analysis?.metrics ?? {}
                         const rsi = L.rsi != null ? Number(L.rsi) : null
@@ -1020,9 +1091,8 @@ function App() {
                         )
                       })()}
                     </>
-                  ) : <div className="empty-state">从左侧列表点选，或输入代码后点击「加载分析」</div>}
+                  ) : <div className="empty-state">选择或输入股票代码后点击「加载分析」</div>}
                 </SectionCard>
-              </div>
             </div>
           </>
         ) : null}
@@ -1116,25 +1186,12 @@ function App() {
                     </SectionCard>
                   </div>
 
-                  {/* 完整明细 */}
+                  {/* 完整明细：二层可展开 */}
                   <SectionCard title={`完整信号明细 · ${total} 行`} subtitle={fullDaily.latest?.path ?? ''} className="max-w-none">
-                    <div className="daily-full">
-                      <div className="df-head">
-                        {fullDaily.columns.map((col) => (
-                          <span key={col}>{col}</span>
-                        ))}
-                      </div>
-                      {rows.map((row, i) => {
-                        const code = row['股票代码'] ?? row['代码'] ?? Object.values(row)[0] ?? ''
-                        return (
-                          <div key={i} className="df-row" onClick={() => { const c = String(code).trim(); if (c) { setAnalysisCode(c); setActiveView('analysis'); openAnalysis(c) } }}>
-                            {fullDaily.columns.map((col) => (
-                              <span key={col}>{row[col] != null ? String(row[col]) : '--'}</span>
-                            ))}
-                          </div>
-                        )
-                      })}
-                    </div>
+                    <DailyExpandableList
+                      rows={rows}
+                      onCodeClick={(code) => { const c = String(code).trim(); if (c) { setAnalysisCode(c); setActiveView('analysis'); openAnalysis(c) } }}
+                    />
                   </SectionCard>
                 </>
               )
