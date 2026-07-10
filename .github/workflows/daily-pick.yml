@@ -146,11 +146,12 @@ jobs:
           KLINE_BACKEND: akshare
         run: python scripts/prewarm_dashboard.py
 
-      - name: 每日清单多策略回测
+      - name: 每日清单前向信号回测
         continue-on-error: true
         timeout-minutes: 40
         env:
           KLINE_BACKEND: akshare
+          HOLD_DAYS: "10"
           SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
           SUPABASE_KEY: ${{ secrets.SUPABASE_KEY }}
         run: python scripts/daily_backtest.py

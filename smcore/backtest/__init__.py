@@ -5,11 +5,12 @@
 """
 from __future__ import annotations
 
-from smcore.backtest.engine import run_multi_strategy_backtest
+from smcore.backtest.engine import run_forward_signal_backtest, run_multi_strategy_backtest
 from smcore.backtest.signal_backtest import BacktestResult, run_signal_backtest
 
 __all__ = [
     "BacktestResult",
     "run_signal_backtest",
     "run_multi_strategy_backtest",
+    "run_forward_signal_backtest",
 ]

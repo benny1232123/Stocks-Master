@@ -1545,7 +1545,7 @@ function App() {
                       </span>
                     </div>
                     <p className="bt-hint" style={{ marginBottom: 0 }}>
-                      每日盘后 CI 自动回测 · 策略：{s.strategies} · {s.codes_count ?? '--'} 只标的 · {trades} 笔交易
+                      前向信号回测 · 信号日 {s.signal_start}{s.signal_start !== s.signal_end ? ` ~ ${s.signal_end}` : ''} · 持有 {s.hold_days ?? '--'} 天往后回测 · 策略 {s.strategies} · {s.codes_count ?? '--'} 只标的 · {trades} 笔交易
                     </p>
                   </div>
 

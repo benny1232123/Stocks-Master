@@ -5,7 +5,7 @@
 """
 from __future__ import annotations
 
-from datetime import date
+from datetime import date, timedelta
 from typing import Any, Optional
 
 import numpy as np
@@ -156,4 +156,165 @@ def run_multi_strategy_backtest(
     summary["relativity_active"] = relativity_active
     summary["data_coverage"] = {code: len(df) for code, df in price_dfs.items()}
 
+    return BacktestResult(summary=summary, equity=equity_df, trades=trades_df)
+
+
+def run_forward_signal_backtest(
+    signals: pd.DataFrame,
+    *,
+    hold_days: int = 5,
+    initial_capital: float = 100000.0,
+    max_positions: int = 200,
+    slippage: float = 0.001,
+) -> "BacktestResult":
+    """前向信号回测：锁定历史某天的信号清单，从信号日起往后持有 hold_days 天，回测真实表现。
+
+    与 run_multi_strategy_backtest（在历史区间里重跑策略引擎重新派生信号）不同，
+    本函数直接使用信号清单里的标的与信号日，模拟：
+      - 信号日次日开盘买入（真实往前走，不用未来数据）
+      - 持有 hold_days 个日历日后卖出
+      - 按交易日盯市（收盘价）生成平滑权益曲线
+    语义 = 「从历史某一天开始策略 → 往后回测」。
+    """
+    from collections import defaultdict
+
+    from smcore.data.kline import fetch_daily_k
+
+    if signals is None or signals.empty:
+        return BacktestResult(summary={"error": "信号文件为空"}, equity=pd.DataFrame(), trades=pd.DataFrame())
+
+    norm = signals.copy()
+    rename_map = {"日期": "date", "代码": "code", "建议买入价": "price"}
+    norm = norm.rename(columns=rename_map)
+    if "date" not in norm.columns or "code" not in norm.columns:
+        return BacktestResult(summary={"error": "信号文件缺少「日期」或「代码」列"}, equity=pd.DataFrame(), trades=pd.DataFrame())
+
+    norm["date"] = pd.to_datetime(norm["date"], errors="coerce")
+    norm = norm.dropna(subset=["date", "code"]).sort_values("date")
+    if norm.empty:
+        return BacktestResult(summary={"error": "信号文件无有效行"}, equity=pd.DataFrame(), trades=pd.DataFrame())
+
+    # 按信号日分组
+    raw_by_date: dict[date, list[str]] = defaultdict(list)
+    for _, row in norm.iterrows():
+        raw_by_date[row["date"].date()].append(str(row["code"]).strip())
+
+    min_sig = min(raw_by_date.keys())
+    max_sig = max(raw_by_date.keys())
+    end_pad = max_sig + timedelta(days=hold_days + 15)
+
+    # 预拉每只标的 K 线（信号区间 + 持有期 + 缓冲），供盯市与买卖价查询
+    price_cache: dict[str, pd.DataFrame] = {}
+    all_dates: set[date] = set()
+    for code in norm["code"].astype(str).str.strip().unique():
+        df = fetch_daily_k(code, min_sig, end_pad)
+        if df is not None and not df.empty:
+            df = df.copy()
+            df["_dt"] = pd.to_datetime(df["date"])
+            price_cache[code] = df.set_index("_dt").sort_index()
+            all_dates.update(df["_dt"].dt.date.tolist())
+
+    if not price_cache:
+        return BacktestResult(
+            summary={"error": "无可用K线数据（全部拉取失败，可能网络不可达）"},
+            equity=pd.DataFrame(),
+            trades=pd.DataFrame(),
+        )
+
+    cal = sorted(all_dates)
+
+    def _px(code: str, d: date, col: str):
+        p = price_cache.get(code)
+        if p is None or p.empty:
+            return None
+        row = p[p.index.date == d]
+        if row.empty:
+            return None
+        val = row[col].iloc[0]
+        return None if pd.isna(val) else float(val)
+
+    # 买入调度：每个信号日 → 其「之后第一个交易日」作为买入处理日（即信号日次日开盘买入）。
+    # 信号日本身可能不是交易日（周末/休市），不能直接用信号日作为交易日历中的 key。
+    buy_schedule: dict[date, list[str]] = defaultdict(list)
+    for sd, codes in raw_by_date.items():
+        proc = None
+        for d in cal:
+            if d > sd:
+                proc = d
+                break
+        if proc is not None:
+            buy_schedule[proc].extend(codes)
+
+    cash = float(initial_capital)
+    holdings: dict[str, dict] = {}
+    equity_curve: list[dict] = []
+    trades: list[dict] = []
+
+    for d in cal:
+        # 1) 卖出到期持仓
+        to_sell = [c for c, h in holdings.items() if (d - h["buy_date"]).days >= hold_days]
+        for c in to_sell:
+            h = holdings.pop(c)
+            sell_price = _px(c, d, "close")
+            if sell_price is None:
+                sell_price = h["buy_price"]  # 极端缺数据兜底
+            sell_price *= (1 - slippage)
+            cash += sell_price * h["qty"]
+            trades.append(
+                {
+                    "code": c,
+                    "buy_date": h["buy_date"].strftime("%Y-%m-%d"),
+                    "sell_date": d.strftime("%Y-%m-%d"),
+                    "buy_price": round(h["buy_price"], 3),
+                    "sell_price": round(sell_price, 3),
+                    "qty": h["qty"],
+                    "return_pct": round((sell_price / h["buy_price"] - 1) * 100, 2),
+                }
+            )
+
+        # 2) 信号日次日开盘买入（处理日 = 信号日后第一个交易日，用其开盘价）
+        if d in buy_schedule:
+            candidates = [c for c in buy_schedule[d] if c not in holdings]
+            avail = max_positions - len(holdings)
+            n_buy = min(avail, len(candidates))
+            per = cash / max(n_buy, 1)  # 按当日实际买入数量均分资金
+            for c in candidates[:avail]:
+                buy_price = _px(c, d, "open")
+                if buy_price is None:
+                    continue
+                buy_price *= (1 + slippage)
+                qty = int(per / buy_price / 100) * 100
+                if qty < 100:
+                    continue
+                cost = buy_price * qty
+                if cost > cash:
+                    continue
+                cash -= cost
+                holdings[c] = {"buy_date": d, "buy_price": buy_price, "qty": qty}
+                avail -= 1
+
+        # 3) 按日盯市（仅对已买入持仓计价；买入前的持仓不计入）
+        hv = 0.0
+        for c, h in holdings.items():
+            if h["buy_date"] > d:
+                continue
+            close = _px(c, d, "close")
+            hv += h["qty"] * (close if close is not None else h["buy_price"])
+        equity_curve.append(
+            {
+                "date": d.strftime("%Y-%m-%d"),
+                "cash": round(cash, 2),
+                "holding_value": round(hv, 2),
+                "total": round(cash + hv, 2),
+            }
+        )
+
+    equity_df = pd.DataFrame(equity_curve)
+    trades_df = pd.DataFrame(trades)
+    if equity_df.empty:
+        return BacktestResult(summary={"error": "回测未产生任何权益曲线"}, equity=equity_df, trades=trades_df)
+
+    summary = _build_summary(equity_df, trades_df, initial_capital)
+    summary["strategies"] = None
+    summary["signal_mode"] = "forward"
     return BacktestResult(summary=summary, equity=equity_df, trades=trades_df)
