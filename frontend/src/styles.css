@@ -1182,23 +1182,11 @@
 .stat-good { color: hsl(var(--success)) !important; }
 .stat-bad { color: hsl(var(--danger)) !important; }
 
-/* ── 每日回测：信号日选择器（多批次） ── */
+/* ── 每日回测：信号日选择器（输入框式） ── */
 .dbt-tabs-wrap { margin-bottom: 18px; }
 .dbt-tabs-label {
   font-size: 0.85rem; font-weight: 600; color: hsl(var(--foreground));
   margin-bottom: 8px;
-}
-.dbt-tabs { display: flex; flex-wrap: wrap; gap: 8px; }
-.dbt-tab {
-  font-family: var(--font-mono); font-size: 0.78rem; font-weight: 600;
-  padding: 6px 12px; border-radius: 999px; cursor: pointer;
-  background: hsl(var(--surface-2)); color: hsl(var(--muted-foreground));
-  border: 1px solid hsl(var(--border)); transition: all 0.15s ease;
-}
-.dbt-tab:hover { border-color: hsl(var(--primary) / 0.4); color: hsl(var(--foreground)); }
-.dbt-tab.active {
-  background: hsl(var(--primary) / 0.12); color: hsl(var(--primary));
-  border-color: hsl(var(--primary) / 0.5);
 }
 
 /* ── 每日回测：评级 + 解读 ── */
