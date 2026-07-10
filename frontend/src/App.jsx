@@ -49,6 +49,26 @@ function Field({ label, children, hint }) {
 function DailyExpandableList({ rows, onCodeClick }) {
   const [expanded, setExpanded] = useState(new Set())
   const num = (r, k) => { const v = r[k]; return v != null && v !== '' ? Number(v) : NaN }
+
+  // 策略颜色映射
+  const STRAT_COLORS = {
+    'Boll': { bg: 'hsla(229, 87%, 56%, 0.10)', text: '#6366F1', border: 'hsla(229, 87%, 56%, 0.35)' },
+    'Relativity': { bg: 'hsla(157, 81%, 37%, 0.09)', text: '#30A46C', border: 'hsla(157, 81%, 37%, 0.35)' },
+    'Theme': { bg: 'hsla(38, 92%, 50%, 0.10)', text: '#F59E0B', border: 'hsla(38, 92%, 50%, 0.35)' },
+    'CCTV': { bg: 'hsla(3, 80%, 50%, 0.08)', text: '#E5484D', border: 'hsla(3, 80%, 50%, 0.35)' },
+  }
+  const getStratColor = (s) => STRAT_COLORS[s] || { bg: 'hsl(var(--surface-2))', text: 'hsl(var(--muted))', border: 'hsl(var(--border))' }
+
+  // 评分等级色
+  const scoreGrade = (s) => {
+    if (isNaN(s)) return { label: '--', cls: '', bar: 0 }
+    if (s >= 45) return { label: 'A+', cls: 'ds-a-plus', bar: 100 }
+    if (s >= 38) return { label: 'A', cls: 'ds-a', bar: 85 }
+    if (s >= 30) return { label: 'B', cls: 'ds-b', bar: 65 }
+    if (s >= 20) return { label: 'C', cls: 'ds-c', bar: 40 }
+    return { label: 'D', cls: 'ds-d', bar: 20 }
+  }
+
   const toggle = (i) => setExpanded((prev) => {
     const next = new Set(prev)
     if (next.has(i)) next.delete(i)
@@ -62,32 +82,84 @@ function DailyExpandableList({ rows, onCodeClick }) {
         const name = row['股票名称'] ?? '--'
         const score = num(row, '综合评分')
         const strategies = row['来源策略'] ?? '--'
+        const stratList = strategies.split('/').map(s => s.trim()).filter(Boolean)
+        const primaryStrat = stratList[0] || '--'
         const buyPrice = num(row, '建议买入价')
         const latestP = num(row, '最新价')
         const stopP = num(row, '止损价(下轨)')
         const tpP = num(row, '止盈价(上轨)')
         const ma20V = num(row, 'MA20')
+        const posPct = num(row, '建议仓位%')
+        const amt = num(row, '建议金额')
+        const hitCount = row['命中策略数'] ?? stratList.length
+
+        const sg = scoreGrade(score)
+        const sc = getStratColor(primaryStrat)
+        const pnlPct = (!isNaN(latestP) && !isNaN(buyPrice) && buyPrice > 0) ? ((latestP / buyPrice - 1) * 100) : NaN
         const isOpen = expanded.has(i)
+
+        // 排名奖牌
+        const rankBadge = (idx) => {
+          if (idx === 0) return <span className="rank-medal rank-gold">🥇</span>
+          if (idx === 1) return <span className="rank-medal rank-silver">🥈</span>
+          if (idx === 2) return <span className="rank-medal rank-bronze">🥉</span>
+          return <span className="rank-num">{idx + 1}</span>
+        }
+
         return (
-          <div key={i} className={cn('daily-item', isOpen && 'open')}>
+          <div key={i} className={cn('daily-item', isOpen && 'open')} style={{ borderLeft: `3px solid ${sc.border}` }}>
             <div className="daily-summary" onClick={() => toggle(i)}>
               <div className="daily-summary-left">
                 <span className="daily-expander">{isOpen ? '▼' : '▶'}</span>
+                {rankBadge(i)}
                 <span className="daily-code" onClick={(e) => { e.stopPropagation(); onCodeClick(code) }}>{code}</span>
                 <span className="daily-name">{name}</span>
+                {/* 策略彩色标签 */}
+                <div className="strat-badges">
+                  {stratList.map((s, si) => {
+                    const c = getStratColor(s)
+                    return <span key={si} className="strat-badge" style={{ background: c.bg, color: c.text, borderColor: c.border }}>{s}</span>
+                  })}
+                </div>
               </div>
+
               <div className="daily-summary-right">
-                <span className="daily-strategies">{strategies}</span>
-                <span className="daily-score">{!isNaN(score) ? score.toFixed(1) : '--'}</span>
-                <span className="daily-buy">{!isNaN(buyPrice) ? buyPrice.toFixed(2) : '--'}</span>
+                {/* 评级药丸 */}
+                <div className={cn('score-pill', sg.cls)} title={`综合评分: ${!isNaN(score) ? score.toFixed(1) : '--'}`}>
+                  <span className="score-label">{sg.label}</span>
+                  {!isNaN(score) && <span className="score-bar-track"><span className="score-bar-fill" style={{ width: `${sg.bar}%` }} /></span>}
+                </div>
+
+                {/* 买入价 + 盈亏 */}
+                <div className="price-group">
+                  <span className="daily-buy">¥{!isNaN(buyPrice) ? buyPrice.toFixed(2) : '--'}</span>
+                  {!isNaN(pnlPct) && (
+                    <span className={cn('pnl-mini', pnlPct >= 0 ? 'pnl-up' : 'pnl-down')}>
+                      {pnlPct >= 0 ? '+' : ''}{pnlPct.toFixed(2)}%
+                    </span>
+                  )}
+                </div>
+
+                {/* 仓位 & 金额 */}
+                <div className="pos-group">
+                  {!isNaN(posPct) && <span className="pos-tag">{posPct.toFixed(0)}%</span>}
+                  {!isNaN(amt) && <span className="amt-tag">{amt >= 10000 ? `${(amt/10000).toFixed(1)}万` : `${amt.toFixed(0)}`}</span>}
+                </div>
+
+                {/* 止损距离 */}
+                {!isNaN(latestP) && !isNaN(stopP) && stopP > 0 && (
+                  <span className={cn('stop-dist', ((latestP - stopP) / stopP * 100) < 5 ? 'stop-close' : '')}>
+                    距止损 {((latestP - stopP) / stopP * 100).toFixed(1)}%
+                  </span>
+                )}
               </div>
             </div>
             {isOpen ? (
               <div className="daily-details">
-                <div className="dd-cell"><span>命中策略数</span><strong>{row['命中策略数'] ?? '--'}</strong></div>
-                <div className="dd-cell"><span>建议仓位%</span><strong>{row['建议仓位%'] != null ? `${Number(row['建议仓位%'])}%` : '--'}</strong></div>
-                <div className="dd-cell"><span>建议金额</span><strong>{row['建议金额'] != null ? `¥${Number(row['建议金额']).toFixed(0)}` : '--'}</strong></div>
-                <div className="dd-cell"><span>最新价</span><strong className={buyPrice > 0 && latestP > buyPrice ? 'text-up' : buyPrice > 0 && latestP < buyPrice ? 'text-down' : ''}>{latestP != null && !isNaN(latestP) ? latestP.toFixed(2) : '--'}</strong></div>
+                <div className="dd-cell"><span>命中策略数</span><strong>{hitCount}</strong></div>
+                <div className="dd-cell"><span>建议仓位%</span><strong>{!isNaN(posPct) ? `${posPct.toFixed(0)}%` : '--'}</strong></div>
+                <div className="dd-cell"><span>建议金额</span><strong>{!isNaN(amt) ? `¥${amt.toFixed(0)}` : '--'}</strong></div>
+                <div className="dd-cell"><span>最新价</span><strong className={!isNaN(latestP) && !isNaN(buyPrice) && buyPrice > 0 ? (latestP >= buyPrice ? 'text-up' : 'text-down') : ''}>{latestP != null && !isNaN(latestP) ? latestP.toFixed(2) : '--'}</strong></div>
                 <div className="dd-cell"><span>建议买入价</span><strong>{!isNaN(buyPrice) ? buyPrice.toFixed(2) : '--'}</strong></div>
                 <div className="dd-cell"><span>止损价(下轨)</span><strong className={stopP != null && !isNaN(stopP) ? 'text-down' : ''}>{stopP != null && !isNaN(stopP) ? stopP.toFixed(2) : '--'}</strong></div>
                 <div className="dd-cell"><span>止盈价(上轨)</span><strong className={tpP != null && !isNaN(tpP) ? 'text-up' : ''}>{tpP != null && !isNaN(tpP) ? tpP.toFixed(2) : '--'}</strong></div>
@@ -105,9 +177,7 @@ function DailyExpandableList({ rows, onCodeClick }) {
                     </span>
                   ) : null}
                   {!isNaN(latestP) && !isNaN(tpP) && tpP > 0 ? (
-                    <span className="di-tag">
-                      距止盈 +${((tpP - latestP) / latestP * 100).toFixed(2)}%
-                    </span>
+                    <span className="di-tag">距止盈 +${((tpP - latestP) / latestP * 100).toFixed(2)}%</span>
                   ) : null}
                   {!isNaN(stopP) && !isNaN(tpP) && stopP > 0 && tpP > 0 ? (
                     <span className="di-tag">盈亏比 {(tpP / stopP - 1).toFixed(2)}:1</span>
