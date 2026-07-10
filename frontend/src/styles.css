@@ -401,6 +401,10 @@
   color: hsl(var(--foreground));
 }
 .hero-stat-unit { font-size: 0.8rem; color: hsl(var(--muted)); font-weight: 400; margin-left: 4px; }
+.hero-hint {
+  font-size: 0.68rem; color: hsl(var(--muted)); margin-top: 3px;
+  letter-spacing: 0.02em;
+}
 .hero-pair { display: flex; align-items: baseline; gap: 6px; }
 .hero-sep { color: hsl(var(--muted)); font-weight: 400; }
 .hero-badge {
@@ -1000,8 +1004,42 @@
 .bt-empty-title { font-family: var(--font-display); font-size: 1.15rem; font-weight: 600; color: hsl(var(--foreground)); margin-bottom: 6px; }
 .bt-empty-desc { font-size: 0.84rem; color: hsl(var(--muted)); margin-bottom: 28px; max-width: 420px; margin-left: auto; margin-right: auto; line-height: 1.6; }
 
+/* ── 每日回测：总体总结卡片 ── */
+.dbt-summary {
+  background: hsl(var(--secondary));
+  border: 0.5px solid hsl(var(--border) / 0.4);
+  border-radius: var(--radius-lg);
+  padding: 16px 18px;
+  margin-bottom: 20px;
+}
+.dbt-summary-head { display: flex; align-items: baseline; gap: 10px; margin-bottom: 14px; flex-wrap: wrap; }
+.dbt-summary-title { font-size: 1rem; font-weight: 600; color: hsl(var(--foreground)); }
+.dbt-summary-sub { font-size: 0.8rem; color: hsl(var(--muted)); }
+.dbt-summary-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+  gap: 12px;
+}
+.dbt-summary-cell {
+  background: hsl(var(--background));
+  border-radius: var(--radius-md);
+  padding: 12px 14px;
+  min-width: 0;
+}
+.dbt-summary-label { font-size: 0.78rem; color: hsl(var(--muted)); margin-bottom: 4px; }
+.dbt-summary-val { font-size: 1.3rem; font-weight: 600; line-height: 1.2; color: hsl(var(--foreground)); }
+.dbt-summary-hint { font-size: 0.72rem; color: hsl(var(--muted)); margin-top: 3px; }
+.dbt-summary-sep { color: hsl(var(--muted)); font-weight: 400; }
+.stat-good { color: hsl(var(--success)) !important; }
+.stat-bad { color: hsl(var(--danger)) !important; }
+
 /* ── 每日回测：信号日选择器（多批次） ── */
-.dbt-tabs { display: flex; flex-wrap: wrap; gap: 8px; margin-bottom: 16px; }
+.dbt-tabs-wrap { margin-bottom: 18px; }
+.dbt-tabs-label {
+  font-size: 0.85rem; font-weight: 600; color: hsl(var(--foreground));
+  margin-bottom: 8px;
+}
+.dbt-tabs { display: flex; flex-wrap: wrap; gap: 8px; }
 .dbt-tab {
   font-family: var(--font-mono); font-size: 0.78rem; font-weight: 600;
   padding: 6px 12px; border-radius: 999px; cursor: pointer;

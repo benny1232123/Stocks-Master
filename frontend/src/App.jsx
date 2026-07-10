@@ -244,6 +244,7 @@ function App() {
   const [fusionResult, setFusionResult] = useState(null)
   const [backtestRun, setBacktestRun] = useState(null)
   const [dailyBacktests, setDailyBacktests] = useState([])
+  const [dailySummary, setDailySummary] = useState(null)
   const [selDaily, setSelDaily] = useState(0)
   const [tradeForm, setTradeForm] = useState({
     date: new Date().toISOString().slice(0, 10),
@@ -306,6 +307,13 @@ function App() {
         const data = await resp.json()
         setDailyBacktests(data.items || [])
         setSelDaily(0)
+      }
+    } catch { /* 忽略加载失败 */ }
+    try {
+      const sresp = await fetch('/api/backtests/daily-summary')
+      if (sresp.ok) {
+        const sdata = await sresp.json()
+        setDailySummary(sdata)
       }
     } catch { /* 忽略加载失败 */ }
   }
@@ -721,10 +729,12 @@ function App() {
                 <div className="hero-stat">
                   <div className="label">美元/人民币</div>
                   <div className="value">{macroSnapshot['美元/人民币'] ?? '--'}</div>
+                  <div className="hero-hint">汇率↑利空出口/外资流出</div>
                 </div>
                 <div className="hero-stat">
-                  <div className="label">Shibor 隔夜</div>
+                  <div className="label">SHIBOR 隔夜</div>
                   <div className="value">{macroSnapshot['Shibor隔夜'] ?? '--'}</div>
+                  <div className="hero-hint">银行间利率↑资金面偏紧</div>
                 </div>
               </div>
             </section>
@@ -1471,7 +1481,57 @@ function App() {
               <p>每日 CI 自动回测当日全策略清单，或手动运行多策略回测</p>
             </div>
 
-            <SectionCard title="每日自动回测 · 前向信号回测">
+            <SectionCard title="每日自动回测 · 前向信号回测" subtitle="点击下方日期标签切换不同信号日的回测结果">
+              {dailySummary && dailySummary.count > 0 ? (
+                <div className="dbt-summary">
+                  <div className="dbt-summary-head">
+                    <span className="dbt-summary-title">📊 总体总结</span>
+                    <span className="dbt-summary-sub">近 {dailySummary.count} 个信号日前向回测（平均持有 {dailySummary.avg_hold_days} 天）的整体表现</span>
+                  </div>
+                  <div className="dbt-summary-grid">
+                    <div className="dbt-summary-cell">
+                      <div className="dbt-summary-label">平均总收益</div>
+                      <div className={cn("dbt-summary-val", dailySummary.avg_return >= 0 ? "stat-good" : "stat-bad")}>
+                        {dailySummary.avg_return >= 0 ? "+" : ""}{dailySummary.avg_return}%
+                      </div>
+                      <div className="dbt-summary-hint">中位 {dailySummary.median_return >= 0 ? "+" : ""}{dailySummary.median_return}%</div>
+                    </div>
+                    <div className="dbt-summary-cell">
+                      <div className="dbt-summary-label">平均最大回撤</div>
+                      <div className="dbt-summary-val stat-bad">{dailySummary.avg_drawdown}%</div>
+                      <div className="dbt-summary-hint">中位 {dailySummary.median_drawdown}%</div>
+                    </div>
+                    <div className="dbt-summary-cell">
+                      <div className="dbt-summary-label">正收益天数</div>
+                      <div className={cn("dbt-summary-val", dailySummary.positive_ratio >= 50 ? "stat-good" : "stat-bad")}>
+                        {dailySummary.positive_days}/{dailySummary.count}
+                      </div>
+                      <div className="dbt-summary-hint">占比 {dailySummary.positive_ratio}%</div>
+                    </div>
+                    <div className="dbt-summary-cell">
+                      <div className="dbt-summary-label">平均胜率</div>
+                      <div className="dbt-summary-val">{dailySummary.avg_win_rate}%</div>
+                      <div className="dbt-summary-hint">中位 {dailySummary.median_win_rate}%</div>
+                    </div>
+                    <div className="dbt-summary-cell">
+                      <div className="dbt-summary-label">平均夏普</div>
+                      <div className={cn("dbt-summary-val", dailySummary.avg_sharpe >= 0 ? "stat-good" : "stat-bad")}>
+                        {dailySummary.avg_sharpe}
+                      </div>
+                      <div className="dbt-summary-hint">累计成交 {dailySummary.total_trades} 笔</div>
+                    </div>
+                    <div className="dbt-summary-cell">
+                      <div className="dbt-summary-label">最佳 / 最差信号日</div>
+                      <div className="dbt-summary-val">
+                        <span className="stat-good">{dailySummary.best_day.date?.slice(4).replace(/(\d{2})(\d{2})/, "$1-$2")} +{dailySummary.best_day.return}%</span>
+                        <span className="dbt-summary-sep"> / </span>
+                        <span className="stat-bad">{dailySummary.worst_day.date?.slice(4).replace(/(\d{2})(\d{2})/, "$1-$2")} {dailySummary.worst_day.return}%</span>
+                      </div>
+                      <div className="dbt-summary-hint">整体稳健度参考</div>
+                    </div>
+                  </div>
+                </div>
+              ) : null}
               {dailyBacktests.length === 0 ? (
                 <div className="bt-empty">
                   <div className="bt-empty-icon">🌙</div>
@@ -1480,7 +1540,9 @@ function App() {
                 </div>
               ) : (
                 <>
-                  <div className="dbt-tabs">
+                  <div className="dbt-tabs-wrap">
+                    <div className="dbt-tabs-label">📅 选择信号日（点击切换）</div>
+                    <div className="dbt-tabs">
                     {dailyBacktests.map((d, i) => (
                       <button key={d.date} className={cn("dbt-tab", i === selDaily && "active")}
                         onClick={() => setSelDaily(i)}>
@@ -1488,6 +1550,7 @@ function App() {
                         {d.summary?.hold_days ? ` ·${d.summary.hold_days}天` : ""}
                       </button>
                     ))}
+                  </div>
                   </div>
                   {dailyBacktests[selDaily]?.summary ? (() => {
                     const dailyBacktest = dailyBacktests[selDaily]

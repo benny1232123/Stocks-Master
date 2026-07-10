@@ -208,6 +208,10 @@ def _scan_universe_asof(universe: list[str], name_map: dict[str, str], D: date, 
 
     boll_hits: list[dict] = []
     rel_scored: list[tuple[str, float, float]] = []
+    # 缓存每只的布林数据，供相对强弱信号也使用
+    boll_cache: dict[str, pd.DataFrame] = {}
+    price_cache: dict[str, float] = {}
+
     for code in universe:
         try:
             # 宽窗口拉取（填充缓存）；计算时严格过滤到 D 当天及之前
@@ -218,33 +222,80 @@ def _scan_universe_asof(universe: list[str], name_map: dict[str, str], D: date, 
             if kdf.empty:
                 continue
             n = len(kdf)
+
+            # 记录最新价（截至D）
+            c_close = float(pd.to_numeric(kdf.iloc[-1]["close"], errors="coerce"))
+            price_cache[code] = c_close
+
+            # 布林带计算（用于Boll筛选 + 止损止盈）
+            bd = None
             if n >= BOLL_WINDOW:
                 bd = calc_bollinger(kdf, window=BOLL_WINDOW, k=BOLL_K)
                 if bd is not None and not bd.empty:
+                    boll_cache[code] = bd
                     sig = evaluate_boll_signal(bd, near_ratio=BOLL_NEAR_RATIO)
                     if sig.get("selected"):
+                        last_row = bd.iloc[-1]
+                        buy_price = float(pd.to_numeric(last_row["close"], errors="coerce"))
+                        lower = float(pd.to_numeric(last_row.get("lower", 0), errors="coerce")) if "lower" in last_row else buy_price * 0.95
+                        upper = float(pd.to_numeric(last_row.get("upper", 0), errors="coerce")) if "upper" in last_row else buy_price * 1.05
+                        ma20_val = float(pd.to_numeric(last_row.get("ma", 0), errors="coerce")) if "ma" in last_row else buy_price
+                        # 超卖程度 → 综合评分基础（越靠近下轨分数越高）
+                        dist_pct = (buy_price - lower) / lower * 100 if lower > 0 else 0
+                        score = min(50 + max(0, 5 - dist_pct) * 5, 90)
                         boll_hits.append({
                             "股票代码": format_stock_code(code),
                             "股票名称": name_map.get(format_stock_code(code), ""),
                             "来源策略": "Boll",
-                            "建议买入价": float(pd.to_numeric(bd.iloc[-1]["close"], errors="coerce")),
+                            "建议买入价": buy_price,
+                            "最新价": c_close,
+                            "止损价(下轨)": round(lower, 2),
+                            "止盈价(上轨)": round(upper, 2),
+                            "MA20": round(ma20_val, 2),
+                            "综合评分": round(score, 1),
                         })
+
+            # 相对强弱
             if idx_ret is not None and n >= REL_LOOKBACK + 1:
-                c = pd.to_numeric(kdf["close"], errors="coerce").reset_index(drop=True)
-                base = c.iloc[-1 - REL_LOOKBACK]
+                cc = pd.to_numeric(kdf["close"], errors="coerce").reset_index(drop=True)
+                base = cc.iloc[-1 - REL_LOOKBACK]
                 if not pd.isna(base) and base != 0:
-                    ret = c.iloc[-1] / base - 1
+                    ret = cc.iloc[-1] / base - 1
                     rs = ret - idx_ret
-                    rel_scored.append((format_stock_code(code), rs, float(c.iloc[-1])))
+                    rel_scored.append((format_stock_code(code), rs, float(cc.iloc[-1])))
         except Exception:
             continue
 
     rel_scored.sort(key=lambda x: -x[1])
-    rel_hits = [
-        {"股票代码": code, "股票名称": name_map.get(code, ""), "来源策略": "Relativity", "建议买入价": price}
-        for code, _rs, price in rel_scored[:REL_TOP_N]
-        if _rs > 0
-    ]
+    rel_hits = []
+    for code, _rs, price in rel_scored[:REL_TOP_N]:
+        if _rs > 0:
+            # 相对强弱标的也补齐止损止盈（用布林带数据或默认值）
+            fc = format_stock_code(code)
+            bd = boll_cache.get(fc)
+            if bd is not None and not bd.empty:
+                lr = bd.iloc[-1]
+                lower = float(pd.to_numeric(lr.get("lower", 0), errors="coerce")) if "lower" in lr else price * 0.95
+                upper = float(pd.to_numeric(lr.get("upper", 0), errors="coerce")) if "upper" in lr else price * 1.08
+                ma20_v = float(pd.to_numeric(lr.get("ma", 0), errors="coerce")) if "ma" in lr else price
+            else:
+                lower = round(price * 0.92, 2)
+                upper = round(price * 1.08, 2)
+                ma20_v = price
+            latest = price_cache.get(fc, price)
+            # 相对强弱评分：基于RS强度
+            score = min(40 + abs(_rs) * 200, 85)
+            rel_hits.append({
+                "股票代码": fc,
+                "股票名称": name_map.get(fc, ""),
+                "来源策略": "Relativity",
+                "建议买入价": round(price, 2),
+                "最新价": round(latest, 2),
+                "止损价(下轨)": round(lower, 2),
+                "止盈价(上轨)": round(upper, 2),
+                "MA20": round(ma20_v, 2),
+                "综合评分": round(score, 1),
+            })
     return boll_hits, rel_hits
 
 
@@ -263,14 +314,37 @@ def build_list(D: date, fetch_end: date) -> pd.DataFrame | None:
             existing = by_code[c]
             strats = set(existing["来源策略"].split("/")) | set(r["来源策略"].split("/"))
             existing["来源策略"] = "/".join(sorted(strats))
+            # 多策略命中时评分叠加
+            existing["综合评分"] = min((existing.get("综合评分", 50) or 50) + 5, 100)
 
     if not by_code:
         return None
-    df = pd.DataFrame(list(by_code.values()))
-    for col in ("股票代码", "股票名称", "来源策略", "建议买入价"):
+
+    # 补全缺失列（与原始 CI 格式一致）
+    TOTAL_CAPITAL = 100_000  # 假设总资金10万元
+    rows = []
+    for c, r in by_code.items():
+        buy_price = r.get("建议买入价", 0) or 0
+        score = r.get("综合评分", 50) or 50
+        pos_pct = max(5, min(25, round(score / 4)))  # 评分→仓位%: 5%~25%
+        amt = round(TOTAL_CAPITAL * pos_pct / 100 / buy_price / 100) * 100 if buy_price > 0 else 0  # 整手取整
+        r["命中策略数"] = len(str(r.get("来源策略", "")).split("/"))
+        r["建议仓位%"] = pos_pct
+        r["建议金额"] = round(amt * buy_price, 0) if buy_price > 0 else 0
+        rows.append(r)
+
+    df = pd.DataFrame(rows)
+
+    # 保证列顺序与原始CI一致
+    FULL_COLS = [
+        "股票代码", "股票名称", "命中策略数", "来源策略", "综合评分",
+        "建议买入价", "建议仓位%", "建议金额", "最新价",
+        "止损价(下轨)", "止盈价(上轨)", "MA20",
+    ]
+    for col in FULL_COLS:
         if col not in df.columns:
-            df[col] = ""
-    return df[["股票代码", "股票名称", "来源策略", "建议买入价"]]
+            df[col] = "" if col != "MA20" else ""
+    return df[FULL_COLS]
 
 
 def compute_missing_days(today: date, only: str | None = None) -> list[date]:

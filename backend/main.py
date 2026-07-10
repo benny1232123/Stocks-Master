@@ -278,6 +278,67 @@ def daily_latest_backtest() -> dict:
     return {"items": items, "latest": latest}
 
 
+@app.get("/api/backtests/daily-summary")
+def daily_backtest_summary() -> dict:
+    """聚合全部每日前向回测批次（Multi-Backtest-*-summary.csv），产出总体总结指标。"""
+    import glob as _glob
+    import statistics as _stats
+
+    from smcore.artifacts import STOCK_DATA_DIR
+
+    files = sorted(_glob.glob(str(STOCK_DATA_DIR / "Multi-Backtest-*-summary.csv")), reverse=True)
+    rows = []
+    for f in files:
+        name = os.path.basename(f)
+        date_tag = name[len("Multi-Backtest-"):-len("-summary.csv")]
+        summary_df = read_csv_file(f"stock_data/Multi-Backtest-{date_tag}-summary.csv")
+        if summary_df.empty:
+            continue
+        rec = summary_df.to_dict(orient="records")[0]
+        rec["date"] = date_tag
+        rows.append(rec)
+
+    if not rows:
+        return {"count": 0}
+
+    def _num(x, default=0.0):
+        try:
+            return float(x)
+        except (TypeError, ValueError):
+            return default
+
+    rets = [_num(r.get("total_return")) for r in rows]
+    dds = [_num(r.get("max_drawdown")) for r in rows]
+    wrs = [_num(r.get("win_rate")) for r in rows]
+    shps = [_num(r.get("sharpe")) for r in rows]
+    holds = [_num(r.get("hold_days")) for r in rows]
+    total_trades = sum(int(_num(r.get("num_trades"), 0)) for r in rows)
+
+    positive_days = sum(1 for v in rets if v > 0)
+    best = max(rows, key=lambda r: _num(r.get("total_return")))
+    worst = min(rows, key=lambda r: _num(r.get("total_return")))
+
+    def _med(lst):
+        return _stats.median(lst) if lst else 0.0
+
+    return {
+        "count": len(rows),
+        "avg_return": round(_stats.mean(rets), 2),
+        "median_return": round(_med(rets), 2),
+        "avg_drawdown": round(_stats.mean(dds), 2),
+        "median_drawdown": round(_med(dds), 2),
+        "avg_win_rate": round(_stats.mean(wrs), 1),
+        "median_win_rate": round(_med(wrs), 1),
+        "avg_sharpe": round(_stats.mean(shps), 2),
+        "total_trades": total_trades,
+        "positive_days": positive_days,
+        "positive_ratio": round(positive_days / len(rows) * 100, 1),
+        "avg_hold_days": round(_stats.mean(holds), 1),
+        "best_day": {"date": best.get("date"), "return": _num(best.get("total_return"))},
+        "worst_day": {"date": worst.get("date"), "return": _num(worst.get("total_return"))},
+    }
+
+
 @app.post("/api/backtests/run-latest")
 def run_latest_backtest(payload: dict | None = None) -> dict:
     payload = payload or {}
