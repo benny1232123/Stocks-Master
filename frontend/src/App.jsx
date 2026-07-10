@@ -21,9 +21,9 @@ const TABS = [
   { id: 'backtest', label: '回测', icon: FlaskConical },
 ]
 
-function StatCard({ label, value, trend }) {
+function StatCard({ label, value, trend, className: cnExtra }) {
   return (
-    <div className="stat-card">
+    <div className={cn("stat-card", cnExtra)}>
       <span className="label">{label}</span>
       <span className="value">{value}</span>
       {trend != null ? (
@@ -1315,14 +1315,53 @@ function App() {
                           const buy = num(r, '建议买入价')
                           const stop = num(r, '止损价(下轨)')
                           const tp = num(r, '止盈价(上轨)')
-                          const rr = (buy && stop && tp && (buy - stop) !== 0) ? ((tp - buy) / (buy - stop)) : null
+                          const latest = num(r, '最新价')
+                          const rawRr = (buy && stop && tp && (buy - stop) !== 0) ? ((tp - buy) / (buy - stop)) : null
+                          // 截断极端盈亏比，超过 ±99 显示为 ∞/—∞
+                          const rr = rawRr !== null ? (Math.abs(rawRr) > 99 ? (rawRr > 0 ? Infinity : -Infinity) : rawRr) : null
+                          const rrStr = rr === Infinity ? '∞' : rr === -Infinity ? '—∞' : rr != null ? `${rr.toFixed(1)}:1` : '—'
+                          const hitCnt = num(r, '命中策略数') ?? 0
+                          const srcStr = String(r['来源策略'] ?? '').trim()
+                          const strategies = srcStr ? srcStr.split('/').filter(Boolean) : []
+                          const code = String(r['股票代码'] ?? '').trim().padStart(6, '0')
+                          // 价格偏离度
+                          const priceDev = (buy && latest) ? ((latest / buy - 1) * 100) : null
+
                           return (
-                            <div key={r['股票代码']} className="top-row" onClick={() => { const c = String(r['股票代码'] ?? '').trim(); if (c) { setAnalysisCode(c); setActiveView('analysis'); openAnalysis(c) } }}>
-                              <span className="top-no">{i + 1}</span>
-                              <span className="top-code">{r['股票代码']}</span>
-                              <span className="top-name">{r['股票名称']}</span>
-                              <span className="top-score">{num(r, '综合评分')?.toFixed(1) ?? '--'}</span>
-                              <span className="top-rr">{rr != null ? `盈亏比 ${rr.toFixed(1)}` : '—'}</span>
+                            <div key={r['股票代码']} className="top-row" onClick={() => { if (code && code !== '000000') { setAnalysisCode(code); setActiveView('analysis'); openAnalysis(code) } }}>
+                              <div className="top-left">
+                                <span className={`top-no ${i < 3 ? 'top-no--medal' : ''}`}>{i + 1}</span>
+                                <div className="top-info">
+                                  <div className="top-main">
+                                    <span className="top-code">{code}</span>
+                                    <span className="top-name">{r['股票名称']}</span>
+                                    {/* 策略标签 */}
+                                    {strategies.length > 0 && (
+                                      <div className="top-tags">
+                                        {strategies.map((s) => (
+                                          <span key={s} className={`top-tag top-tag--${s.toLowerCase()}`}>{STRAT_LABEL[s] || s}</span>
+                                        ))}
+                                      </div>
+                                    )}
+                                  </div>
+                                  <div className="top-sub">
+                                    {buy != null && <span className="top-detail">买入 ¥{buy.toFixed(2)}</span>}
+                                    {latest != null && <span className={`top-detail ${priceDev != null ? (priceDev >= 0 ? 'text-up' : 'text-down') : ''}`}>现价 ¥{latest.toFixed(2)}{priceDev != null ? ` (${priceDev >= 0 ? '+' : ''}${priceDev.toFixed(1)}%)` : ''}</span>}
+                                    {num(r, '建议仓位%') != null && <span className="top-detail">仓位 {num(r, '建议仓位%')}%</span>}
+                                  </div>
+                                </div>
+                              </div>
+                              <div className="top-right">
+                                <div className="top-metrics">
+                                  <div className="top-score-wrap">
+                                    <span className="top-score">{num(r, '综合评分')?.toFixed(1) ?? '--'}</span>
+                                    {hitCnt > 1 && <span className="top-hit-badge">{hitCnt}策略</span>}
+                                  </div>
+                                  <span className={`top-rr ${rr != null && !Number.isInfinity(rr) ? (rr >= 2 ? 'text-up' : rr >= 1 ? '' : 'text-down') : (rr === Infinity ? 'text-up' : '')}`}>
+                                    盈亏比 {rrStr}
+                                  </span>
+                                </div>
+                              </div>
                             </div>
                           )
                         })}
@@ -1428,37 +1467,146 @@ function App() {
             </div>
 
             <SectionCard title={`每日自动回测${dailyBacktest?.date ? ` · ${dailyBacktest.date}` : ''}`}>
-              {dailyBacktest?.summary ? (
+              {dailyBacktest?.summary ? (() => {
+                const s = dailyBacktest.summary
+                const ret = Number(s.total_return ?? 0)
+                const dd = Number(s.max_drawdown ?? 0)
+                const wr = Number(s.win_rate ?? 0)
+                const sharpe = Number(s.sharpe ?? 0)
+                const trades = Number(s.num_trades ?? 0)
+
+                // 综合评级算法
+                let grade = 'F', gradeLabel = '', gradeColor = ''
+                let score = 0
+                if (ret > 15) score += 3; else if (ret > 5) score += 2; else if (ret > 0) score += 1
+                if (dd > -3) score += 2; else if (dd > -8) score += 1
+                if (wr > 55) score += 2; else if (wr > 40) score += 1
+                if (sharpe > 1) score += 2; else if (sharpe > 0.5) score += 1
+                if (trades >= 10) score += 1
+
+                if (score >= 9) { grade = 'A+'; gradeColor = '#16a34a' }
+                else if (score >= 7) { grade = 'A'; gradeColor = '#22c55e' }
+                else if (score >= 6) { grade = 'B'; gradeColor = '#84cc16' }
+                else if (score >= 4) { grade = 'C'; gradeColor = '#eab308' }
+                else if (score >= 2) { grade = 'D'; gradeColor = '#f97316' }
+                else { grade = 'F'; gradeColor = '#ef4444' }
+
+                // 解读文案生成
+                const parts = []
+                if (ret >= 5) parts.push(`总收益 ${ret >= 10 ? '强劲' : '正'}(${ret > 0 ? '+' : ''}${ret.toFixed(1)}%)`)
+                else if (ret >= 0) parts.push(`微盈(${ret.toFixed(1)}%)`)
+                else parts.push(`亏损(${ret.toFixed(1)}%)`)
+
+                if (dd <= -10) parts.push(`回撤过大(${dd.toFixed(1)}%)，风控需加强`)
+                else if (dd <= -5) parts.push(`回撤偏深(${dd.toFixed(1)}%)，注意止损纪律`)
+                else if (dd < 0) parts.push(`回撤可控(${dd.toFixed(1)}%)`)
+
+                if (wr >= 50) parts.push(`胜率健康(${wr.toFixed(0)}%)`)
+                else if (wr >= 30) parts.push(`胜率一般(${wr.toFixed(0)}%)，依赖大单盈利`)
+                else parts.push(`胜率偏低(${wr.toFixed(0)}%)`)
+
+                if (sharpe >= 1) parts.push(`夏普优秀(${sharpe.toFixed(2)})`)
+                else if (sharpe >= 0) parts.push(`夏普一般(${sharpe.toFixed(2)})`)
+                else parts.push(`夏普为负(${sharpe.toFixed(2)})，风险调整后收益不佳`)
+
+                // 找最大回撤区间（从 equity 数据中）
+                let worstPeriod = ''
+                const eq = dailyBacktest.equity || []
+                if (eq.length > 5) {
+                  let minVal = Infinity, minIdx = -1, peakBefore = eq[0].equity ?? 0
+                  eq.forEach((e, idx) => {
+                    const val = e.equity ?? 0
+                    if (val > peakBefore) peakBefore = val
+                    const ddFromPeak = peakBefore ? ((val / peakBefore - 1) * 100) : 0
+                    if (ddFromPeak < minVal) { minVal = ddFromPeak; minIdx = idx }
+                  })
+                  if (minIdx >= 0 && eq[minIdx]) {
+                    worstPeriod = `${eq[minIdx].date ?? ''} 附近回撤最深 (${minVal.toFixed(1)}%)`
+                  }
+                }
+
+                // 最佳/最差交易
+                const tList = dailyBacktest.trades || []
+                let bestTrade = null, worstTrade = null
+                tList.forEach(t => {
+                  const rp = Number(t.return_pct ?? 0)
+                  if (!bestTrade || rp > Number(bestTrade.return_pct ?? 0)) bestTrade = t
+                  if (!worstTrade || rp < Number(worstTrade.return_pct ?? 0)) worstTrade = t
+                })
+
+                return (
                 <>
-                  <p className="bt-hint">
-                    每日盘后由 CI 自动对当日全策略清单跑近 90 天多策略回测
-                    （策略：{dailyBacktest.summary.strategies}，共 {dailyBacktest.summary.codes_count ?? '--'} 只标的）。
-                  </p>
-                  <div className="grid grid-cols-3 lg:grid-cols-6 gap-3">
-                    <StatCard label="总收益率" value={`${dailyBacktest.summary.total_return ?? '--'}%`} />
-                    <StatCard label="最大回撤" value={`${dailyBacktest.summary.max_drawdown ?? '--'}%`} />
-                    <StatCard label="胜率" value={`${dailyBacktest.summary.win_rate ?? '--'}%`} />
-                    <StatCard label="交易笔数" value={dailyBacktest.summary.num_trades ?? '--'} />
-                    <StatCard label="夏普比率" value={dailyBacktest.summary.sharpe ?? '--'} />
-                    <StatCard label="期末权益" value={dailyBacktest.summary.ending_total ? `${(dailyBacktest.summary.ending_total / 10000).toFixed(1)}万` : '--'} />
+                  {/* 评级头 */}
+                  <div className="dbt-grade-head">
+                    <div className="dbt-grade" style={{ background: `${gradeColor}15`, color: gradeColor, borderColor: `${gradeColor}40` }}>
+                      <span className="dbt-grade-letter">{grade}</span>
+                      <span className="dbt-grade-label">
+                        {grade.startsWith('A') ? '策略表现优异' : grade === 'B' ? '策略有效' : grade === 'C' ? '策略平庸' : grade === 'D' ? '策略堪忧' : '策略失效'}
+                      </span>
+                    </div>
+                    <p className="bt-hint" style={{ marginBottom: 0 }}>
+                      每日盘后 CI 自动回测 · 策略：{s.strategies} · {s.codes_count ?? '--'} 只标的 · {trades} 笔交易
+                    </p>
                   </div>
-                  <EquityChart equity={dailyBacktest.equity} initialCapital={dailyBacktest.summary.initial_capital ?? 100000} />
-                  {dailyBacktest.trades?.length > 0 ? (
+
+                  {/* 统计卡 — 带语义着色 */}
+                  <div className="grid grid-cols-3 lg:grid-cols-6 gap-3">
+                    <StatCard label="总收益率" value={`${ret > 0 ? '+' : ''}${s.total_return ?? '--'}%`}
+                      className={ret >= 3 ? 'stat-good' : ret >= 0 ? 'stat-neutral' : 'stat-bad'} />
+                    <StatCard label="最大回撤" value={`${dd}%`}
+                      className={dd >= -3 ? 'stat-good' : dd >= -8 ? 'stat-neutral' : 'stat-bad'} />
+                    <StatCard label="胜率" value={`${wr}%`}
+                      className={wr >= 50 ? 'stat-good' : wr >= 35 ? 'stat-neutral' : 'stat-bad'} />
+                    <StatCard label="交易笔数" value={trades} className="stat-neutral" />
+                    <StatCard label="夏普比率" value={sharpe}
+                      className={sharpe >= 1 ? 'stat-good' : sharpe >= 0.3 ? 'stat-neutral' : 'stat-bad'} />
+                    <StatCard label="期末权益"
+                      value={s.ending_total ? `${(s.ending_total / 10000).toFixed(1)}万` : '--'}
+                      className={s.ending_total && s.ending_total >= 100000 ? 'stat-good' : 'stat-neutral'} />
+                  </div>
+
+                  {/* 智能解读段落 */}
+                  <div className="dbt-insight-box">
+                    <div className="dbt-insight-title">📊 回测解读</div>
+                    <p className="dbt-insight-text">{parts.join('；')}。{parts.length > 2 ? '综合评级反映了多维度表现的加权结果。' : ''}</p>
+                    {worstPeriod && <p className="dbt-insight-detail">⚠️ {worstPeriod}</p>}
+                    {bestTrade && (
+                      <p className="dbt-insight-detail text-up">🏆 最佳交易：
+                        {String(bestTrade.code).padStart(6,'0')}
+                        {' '}({bestTrade.buy_date}→{bestTrade.sell_date})
+                        {' '}{Number(bestTrade.return_pct) >= 0 ? '+' : ''}{bestTrade.return_pct}%
+                      </p>
+                    )}
+                    {worstTrade && Math.abs(Number(worstTrade.return_pct)) > 5 && (
+                      <p className="dbt-insight-detail text-down">📉 最差交易：
+                        {String(worstTrade.code).padStart(6,'0')}
+                        {' '}({worstTrade.buy_date}→{worstTrade.sell_date})
+                        {' '}{Number(worstTrade.return_pct) >= 0 ? '+' : ''}{worstTrade.return_pct}%
+                      </p>
+                    )}
+                  </div>
+
+                  {/* 权益曲线 */}
+                  <EquityChart equity={dailyBacktest.equity} initialCapital={s.initial_capital ?? 100000} />
+
+                  {/* 交易明细 */}
+                  {tList.length > 0 ? (
                     <div className="table-shell spaced">
-                      <div className="section-head"><h3>交易明细</h3><span>共 {dailyBacktest.trades.length} 笔</span></div>
-                      {dailyBacktest.trades.slice(0, 10).map((t, i) => (
+                      <div className="section-head"><h3>交易明细</h3><span>共 {tList.length} 笔</span></div>
+                      {tList.slice(0, 10).map((t, i) => (
                         <div key={i} className="table-row">
                           <span>{String(t.code).padStart(6, '0')}</span>
                           <strong>{t.buy_date} → {t.sell_date}</strong>
-                          <em className={cn(t.return_pct >= 0 ? 'text-up' : 'text-down')}>
-                            {t.return_pct >= 0 ? '+' : ''}{t.return_pct}%
+                          <em className={cn(Number(t.return_pct) >= 0 ? 'text-up' : 'text-down')}>
+                            {Number(t.return_pct) >= 0 ? '+' : ''}{t.return_pct}%
                           </em>
                         </div>
                       ))}
                     </div>
                   ) : null}
                 </>
-              ) : (
+                )
+              })() : (
                 <div className="bt-empty">
                   <div className="bt-empty-icon">🌙</div>
                   <div className="bt-empty-title">今日自动回测尚未生成</div>
