@@ -298,6 +298,17 @@ function EquityChart({ equity, initialCapital }) {
   const ch = H - PAD.top - PAD.bottom
 
   const values = equity.map((d) => d.total)
+  // 完全平（全部等于初始资金）= 真实 0 成交：显示说明而非一条水平线，避免用户误以为系统故障
+  const allFlat = values.every((v) => Math.abs(v - initialCapital) < 1e-6)
+  if (allFlat) {
+    return (
+      <div className="bt-empty">
+        <div className="bt-empty-icon">📉</div>
+        <div className="bt-empty-title">该信号日无成交标的</div>
+        <div className="bt-empty-desc">前向 K 线拉取失败或窗口过短，导致 0 笔交易、权益曲线无波动——属正常现象，并非系统错误。</div>
+      </div>
+    )
+  }
   const minY = Math.min(...values, initialCapital) * 0.98
   const maxY = Math.max(...values, initialCapital) * 1.02
 
@@ -399,6 +410,8 @@ function App() {
   const [scanLogs, setScanLogs] = useState([])
   const [dbStatus, setDbStatus] = useState(null)
   const [fullDaily, setFullDaily] = useState(null)
+  const [dailyDate, setDailyDate] = useState(null)        // 当前查看的日报日期(YYYYMMDD)，null=最新
+  const [dailyDates, setDailyDates] = useState([])         // 可选日报日期列表
   const logContainerRef = useRef(null)
 
   // Phase: null | 'candidates' | 'boll' | 'backtest' | 'fusion'
@@ -417,6 +430,7 @@ function App() {
   const [multiStrats, setMultiStrats] = useState({ boll: true, relativity: true, theme: true, cctv: false })
 
   useEffect(() => { loadDailyBacktest() }, [])
+  useEffect(() => { loadDailyDates() }, [])
 
   const isRunning = scanPhase !== null
 
@@ -478,15 +492,30 @@ function App() {
     } catch { setScanPhase(null); setError('融合启动失败') }
   }
 
-  async function reloadArtifacts() {
+  async function reloadArtifacts(date) {
     try {
       const [a, f] = await Promise.all([
         fetch('/api/artifacts/daily-action-list'),
-        fetch('/api/artifacts/daily-action-list/full'),
+        fetch(`/api/artifacts/daily-action-list/full${date ? `?date=${date}` : ''}`),
       ])
       if (a.ok) setArtifacts(await a.json())
-      if (f.ok) setFullDaily(await f.json())
+      if (f.ok) {
+        const d = await f.json()
+        setFullDaily(d)
+        if (date && d.latest?.name) setDailyDate(date)
+      }
     } catch { /* 忽略刷新失败 */ }
+  }
+
+  // 加载全部历史日报日期，供日报页「日期选择器」切换
+  async function loadDailyDates() {
+    try {
+      const resp = await fetch('/api/artifacts/daily-action-list/dates')
+      if (resp.ok) {
+        const d = await resp.json()
+        setDailyDates(d.items || [])
+      }
+    } catch { /* 忽略 */ }
   }
 
   // 手动多策略 Backtrader 回测
@@ -1516,7 +1545,20 @@ function App() {
                       <div className="report-title">每日策略信号日报</div>
                       <div className="report-sub">日期 {fileDate} · 生成于 {genTime}</div>
                     </div>
-                    <div className="report-tag">共 {total} 只标的</div>
+                    <div className="report-tag">
+                      {dailyDates.length > 0 ? (
+                        <select
+                          className="dbt-date-select"
+                          value={dailyDate ?? fileDate}
+                          onChange={(e) => { const v = e.target.value; setDailyDate(v); reloadArtifacts(v) }}
+                        >
+                          {dailyDates.map((it) => (
+                            <option key={it.date} value={it.date}>{it.date}{it.total ? ` · ${it.total}只` : ''}</option>
+                          ))}
+                        </select>
+                      ) : null}
+                      <span>共 {total} 只标的</span>
+                    </div>
                   </div>
 
                   {/* 统计卡 */}
@@ -1902,6 +1944,11 @@ function App() {
                   </div>
 
                   {/* 权益曲线 */}
+                  {trades === 0 && (
+                    <div className="bt-partial-note">
+                      ⏳ 此信号日回测窗口尚未走完（持仓未平仓），曲线显示当前浮盈亏；待持有期满后重跑将更新为完整买卖结果。
+                    </div>
+                  )}
                   <EquityChart equity={dailyBacktest.equity} initialCapital={s.initial_capital ?? 100000} />
 
                   {/* 交易明细 */}
@@ -1910,7 +1957,10 @@ function App() {
                       <div className="section-head"><h3>交易明细</h3><span>共 {tList.length} 笔</span></div>
                       {tList.slice(0, 10).map((t, i) => (
                         <div key={i} className="table-row">
-                          <span>{String(t.code).padStart(6, '0')}</span>
+                          <span className="t-code-wrap">
+                            <span className="t-code">{String(t.code).padStart(6, '0')}</span>
+                            {t.name ? <span className="t-name">{t.name}</span> : null}
+                          </span>
                           <strong>{t.buy_date} → {t.sell_date}</strong>
                           <em className={cn(Number(t.return_pct) >= 0 ? 'text-up' : 'text-down')}>
                             {Number(t.return_pct) >= 0 ? '+' : ''}{t.return_pct}%
@@ -1997,7 +2047,10 @@ function App() {
                       <div className="section-head"><h3>交易明细</h3><span>共 {backtestTrades.length} 笔</span></div>
                       {backtestTrades.slice(0, 10).map((t, i) => (
                         <div key={i} className="table-row">
-                          <span>{String(t.code).padStart(6, '0')}</span>
+                          <span className="t-code-wrap">
+                            <span className="t-code">{String(t.code).padStart(6, '0')}</span>
+                            {t.name ? <span className="t-name">{t.name}</span> : null}
+                          </span>
                           <strong>{t.buy_date} → {t.sell_date}</strong>
                           <em className={cn(t.return_pct >= 0 ? 'text-up' : 'text-down')}>
                             {t.return_pct >= 0 ? '+' : ''}{t.return_pct}%

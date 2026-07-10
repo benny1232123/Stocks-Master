@@ -201,7 +201,9 @@ def run_forward_signal_backtest(
 
     min_sig = min(raw_by_date.keys())
     max_sig = max(raw_by_date.keys())
-    end_pad = max_sig + timedelta(days=hold_days + 15)
+    # 持有期之后的缓冲区间：远端未来无 K 线数据，拉取必失败且易挂起（akshare 限流），
+    # 故 end_pad 不超过「今天 + 5 天」即可覆盖真实持有期，避免无谓的远未来网络请求。
+    end_pad = min(max_sig + timedelta(days=hold_days + 15), date.today() + timedelta(days=5))
 
     # 预拉每只标的 K 线（信号区间 + 持有期 + 缓冲），供盯市与买卖价查询
     price_cache: dict[str, pd.DataFrame] = {}

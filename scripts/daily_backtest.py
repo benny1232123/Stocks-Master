@@ -38,6 +38,10 @@ STRAT_MAP = {
     "cctv": "cctv",
 }
 
+# 回测只取综合评分最高的前 TOP_N 只，避免信号过多把资金摊成数百个迷你仓位、
+# 导致权益曲线近乎水平（「曲线不动」）。TOP_N 个等权仓位每只约 initial/TOP_N，曲线才能看出涨跌。
+TOP_N = 30
+
 
 def _parse_signal_date(name: str) -> date | None:
     m = re.search(r"(\d{8})", name)
@@ -81,6 +85,14 @@ def _backtest_one(path: Path, sd: date, hold_days: int) -> dict | None:
     df = pd.read_csv(path, encoding="utf-8-sig")
     if df.empty or "股票代码" not in df.columns:
         return None
+    # 按综合评分取前 TOP_N，避免信号过多导致仓位被摊薄、权益曲线近乎不动
+    if "综合评分" in df.columns:
+        df = df.copy()
+        df["_s"] = pd.to_numeric(df["综合评分"], errors="coerce")
+        df = df.sort_values("_s", ascending=False)
+        if len(df) > TOP_N:
+            df = df.head(TOP_N)
+        df = df.drop(columns=["_s"])
     codes = [str(c).strip() for c in df["股票代码"].dropna().tolist() if str(c).strip()]
     if not codes:
         return None

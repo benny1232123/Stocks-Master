@@ -702,6 +702,11 @@
 .di-risk.di-caution { color: #3B82F6; background: hsla(229, 87%, 56%, 0.06); }
 .di-risk.di-safe { color: #30A46C; background: hsla(157, 81%, 37%, 0.06); }
 
+/* ── 回测交易明细：代码 + 名称 ── */
+.t-code-wrap { display: inline-flex; align-items: baseline; gap: 6px; min-width: 0; }
+.t-code { font-family: var(--font-mono); font-weight: 600; }
+.t-name { font-size: 0.74rem; color: hsl(var(--muted)); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+
 /* ── 多维评分构成面板 ── */
 .score-breakdown {
   grid-column: 1 / -1;
@@ -743,6 +748,13 @@
   color: hsl(var(--primary)); background: hsl(var(--primary) / 0.08);
   padding: 6px 14px; border-radius: 999px; white-space: nowrap;
 }
+.dbt-date-select {
+  font-family: var(--font-mono); font-size: 0.78rem; font-weight: 600;
+  color: hsl(var(--foreground)); background: hsl(var(--surface-2));
+  border: 1px solid hsl(var(--border)); border-radius: 8px;
+  padding: 5px 10px; margin-right: 8px; cursor: pointer;
+}
+.dbt-date-select:focus { outline: 2px solid hsl(var(--primary) / 0.4); }
 .report-stats { display: grid; grid-template-columns: repeat(4, 1fr); gap: 12px; margin-bottom: 14px; }
 .rs-card {
   background: hsl(var(--card)); border: 1px solid hsl(var(--border));
@@ -1098,6 +1110,12 @@
 .rank-score { font-family: var(--font-mono); font-size: 0.84rem; font-weight: 600; color: hsl(var(--primary)); text-align: right; font-variant-numeric: tabular-nums; }
 
 /* ── Backtest empty state（操作流程指引） ── */
+.bt-partial-note {
+  font-size: 0.82rem; color: hsl(var(--muted));
+  background: hsl(var(--surface-2) / 0.6); border: 1px solid hsl(var(--border));
+  border-radius: 10px; padding: 9px 14px; margin-bottom: 14px; line-height: 1.55;
+}
+
 .bt-empty { text-align: center; padding: 48px 32px 36px; }
 .bt-empty-icon { font-size: 2.4rem; margin-bottom: 12px; }
 .bt-empty-title { font-family: var(--font-display); font-size: 1.15rem; font-weight: 600; color: hsl(var(--foreground)); margin-bottom: 6px; }

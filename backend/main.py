@@ -26,7 +26,7 @@ if str(ROOT) not in sys.path:
 
 os.environ.setdefault("KLINE_BACKEND", "akshare")
 
-from smcore.artifacts import find_latest_file, find_latest_file_any, preview_csv, read_csv_file
+from smcore.artifacts import ArtifactFile, find_latest_file, find_latest_file_any, preview_csv, read_csv_file, STOCK_DATA_DIR
 from smcore.analysis import build_stock_analysis
 from smcore.backtest import run_signal_backtest, run_multi_strategy_backtest
 from smcore.dashboard import build_dashboard_payload, prewarm_dashboard_cache
@@ -165,22 +165,56 @@ def daily_action_list() -> dict:
 
 
 @app.get("/api/artifacts/daily-action-list/full")
-def daily_action_list_full() -> dict:
-    """返回完整日报数据（全部行），供前端「日报」页全量查看。"""
-    latest = find_latest_file("Daily-Action-List-*.csv")
-    if latest is None:
+def daily_action_list_full(date: str = None) -> dict:
+    """返回完整日报数据（全部行），供前端「日报」页全量查看。
+    可选 ?date=YYYYMMDD 指定某天；缺省返回最新一天。"""
+    target = None
+    if date:
+        p = STOCK_DATA_DIR / f"Daily-Action-List-{date}.csv"
+        if p.exists():
+            target = ArtifactFile(name=p.name, path=str(p.relative_to(ROOT)), modified_at=p.stat().st_mtime)
+    if target is None:
+        target = find_latest_file("Daily-Action-List-*.csv")
+    if target is None:
         return {"latest": None, "columns": [], "rows": [], "total": 0}
 
-    frame = read_csv_file(latest.path)
+    frame = read_csv_file(target.path)
     if frame.empty:
-        return {"latest": latest.__dict__, "columns": frame.columns.tolist(), "rows": [], "total": 0}
+        return {"latest": target.__dict__, "columns": frame.columns.tolist(), "rows": [], "total": 0}
 
     return {
-        "latest": latest.__dict__,
+        "latest": target.__dict__,
         "columns": frame.columns.tolist(),
         "rows": frame.to_dict(orient="records"),
         "total": len(frame),
     }
+
+
+@app.get("/api/artifacts/daily-action-list/dates")
+def daily_action_list_dates() -> dict:
+    """返回全部历史日报日期列表，供前端日报页「日期选择器」切换。"""
+    import glob as _glob
+    import re as _re
+
+    files = sorted(_glob.glob(str(STOCK_DATA_DIR / "Daily-Action-List-*.csv")), reverse=True)
+    items = []
+    for f in files:
+        m = _re.search(r"(\d{8})", os.path.basename(f))
+        if not m:
+            continue
+        tag = m.group(1)
+        try:
+            df = read_csv_file(str(Path(f).relative_to(ROOT)))
+        except Exception:
+            df = None
+        items.append({
+            "date": tag,
+            "name": os.path.basename(f),
+            "path": str(Path(f).relative_to(ROOT)),
+            "modified_at": Path(f).stat().st_mtime,
+            "total": len(df) if df is not None else 0,
+        })
+    return {"items": items}
 
 
 
@@ -262,7 +296,20 @@ def daily_latest_backtest() -> dict:
 
         def _read(suffix: str):
             df = read_csv_file(f"stock_data/Multi-Backtest-{date_tag}-{suffix}.csv")
-            return df.to_dict(orient="records") if not df.empty else []
+            recs = df.to_dict(orient="records") if not df.empty else []
+            if suffix == "trades":
+                # 附带股票名称：从当日信号清单读取 代码→名称
+                name_map = {}
+                dal = read_csv_file(f"stock_data/Daily-Action-List-{date_tag}.csv")
+                if not dal.empty and {"股票代码", "股票名称"}.issubset(dal.columns):
+                    for _, nr in dal.iterrows():
+                        c = str(nr.get("股票代码", "")).strip()
+                        if c:
+                            name_map[c] = str(nr.get("股票名称", ""))
+                for rec in recs:
+                    c = str(rec.get("code", "")).strip()
+                    rec["name"] = name_map.get(c, "")
+            return recs
 
         summary_df = read_csv_file(f"stock_data/Multi-Backtest-{date_tag}-summary.csv")
         summary = summary_df.to_dict(orient="records")[0] if not summary_df.empty else None
