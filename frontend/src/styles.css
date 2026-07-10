@@ -769,10 +769,8 @@
   border-radius: 12px; box-shadow: 0 10px 30px rgba(0,0,0,.16);
   padding: 8px; min-width: 200px;
 }
-.dp-grid {
-  display: grid; grid-template-columns: repeat(3, 1fr); gap: 3px;
-  max-height: 260px; overflow-y: auto;
-}
+.dp-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 3px; max-height: 260px; overflow-y: auto; }
+.dp-grid--bt { grid-template-columns: repeat(4, 1fr); }
 .dp-item {
   display: flex; align-items: center; justify-content: space-between; gap: 4px;
   width: 100%; padding: 7px 8px; border: none; border-radius: 8px;

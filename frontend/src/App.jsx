@@ -403,6 +403,7 @@ function App() {
   const [dailyBacktests, setDailyBacktests] = useState([])
   const [dailySummary, setDailySummary] = useState(null)
   const [selDaily, setSelDaily] = useState(0)
+  const [btDateOpen, setBtDateOpen] = useState(false)    // 回测日期选择器是否展开
   const [tradeForm, setTradeForm] = useState({
     date: new Date().toISOString().slice(0, 10),
     code: '', name: '', side: 'buy', price: 0, qty: 100, fee: 0, notes: '',
@@ -1858,15 +1859,42 @@ function App() {
                 <>
                   <div className="dbt-tabs-wrap">
                     <div className="dbt-tabs-label">📅 选择信号日（点击切换）</div>
-                    <div className="dbt-tabs">
-                    {dailyBacktests.map((d, i) => (
-                      <button key={d.date} className={cn("dbt-tab", i === selDaily && "active")}
-                        onClick={() => setSelDaily(i)}>
-                        {d.date.slice(4).replace(/(\d{2})(\d{2})/, "$1-$2")}
-                        {d.summary?.hold_days ? ` ·${d.summary.hold_days}天` : ""}
-                      </button>
-                    ))}
-                  </div>
+                    <div className="date-picker-wrap">
+                      <div
+                        className="date-picker-input"
+                        onClick={() => setBtDateOpen(o => !o)}
+                      >
+                        <span className="dpi-value">
+                          {dailyBacktests[selDaily]?.date
+                            ? `${dailyBacktests[selDaily].date.slice(0,4)}/${dailyBacktests[selDaily].date.slice(4,6)}/${dailyBacktests[selDaily].date.slice(6)}`
+                            : '--'}
+                        </span>
+                        <svg className="dpi-icon" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                          <rect x="3" y="4" width="18" height="18" rx="2" ry="2"/><line x1="16" y1="2" x2="16" y2="6"/><line x1="8" y1="2" x2="8" y2="6"/>
+                          <line x1="3" y1="10" x2="21" y2="10"/>
+                        </svg>
+                      </div>
+                      {btDateOpen && (
+                        <div className="dp-dropdown">
+                          <div className="dp-grid dp-grid--bt">
+                            {dailyBacktests.map((d, i) => {
+                              const active = i === selDaily
+                              return (
+                                <button
+                                  key={d.date}
+                                  type="button"
+                                  className={`dp-item${active ? ' dp-active' : ''}`}
+                                  onClick={() => { setSelDaily(i); setBtDateOpen(false) }}
+                                >
+                                  <span>{d.date.slice(0,4)}/{d.date.slice(4,6)}/{d.date.slice(6)}</span>
+                                  <span className="dp-badge">{d.summary?.hold_days ?? 0}天</span>
+                                </button>
+                              )
+                            })}
+                          </div>
+                        </div>
+                      )}
+                    </div>
                   </div>
                   {dailyBacktests[selDaily]?.summary ? (() => {
                     const dailyBacktest = dailyBacktests[selDaily]
