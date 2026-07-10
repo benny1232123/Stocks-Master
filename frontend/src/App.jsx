@@ -430,7 +430,7 @@ function App() {
   const [multiStrats, setMultiStrats] = useState({ boll: true, relativity: true, theme: true, cctv: false })
 
   useEffect(() => { loadDailyBacktest() }, [])
-  useEffect(() => { loadDailyDates() }, [])
+  useEffect(() => { loadDailyDates(); reloadArtifacts() }, [])
 
   const isRunning = scanPhase !== null
 
