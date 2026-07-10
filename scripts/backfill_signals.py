@@ -55,25 +55,30 @@ BOLL_K = 1.645
 BOLL_NEAR_RATIO = 1.015
 REL_LOOKBACK = 20
 REL_TOP_N = 12
+UNIVERSE_PRICE_LOWER = 5.0
+UNIVERSE_PRICE_UPPER = 30.0
 
 
 def get_universe() -> list[str]:
-    """候选股票池：最新资金流排行（3/5/10 日）正净流入并集 + 现有清单中出现过的代码。
+    """候选股票池（稳健三级兜底，保证即使网络抖动也有完整候选）：
 
-    仅用于缩小 Boll 扫描范围；信号仍按截至 D 的 K 线计算（时点干净）。
+    1. 最新资金流排行（3/5/10 日）正净流入并集（最聚焦，优先）
+    2. 全市场快照（价格 [5,30]）
+    3. 名称映射里的全部主板代码（stock_info_a_code_name 已拉取，最可靠，绝不空）
+    仅用于缩小 Boll/相对强弱扫描范围；信号仍按截至 D 的 K 线计算（时点干净）。
     """
     global _UNIVERSE
     if _UNIVERSE is not None:
         return _UNIVERSE
 
     codes: set[str] = set()
+
+    # 1) 资金流排行（重试多次，该接口偶发瞬断）
     try:
         import akshare as ak
 
-        # 优先：最新资金流排行（3/5/10 日）正净流入并集 —— 仅用于缩小扫描范围。
-        # 该接口偶发「Remote end closed connection」，重试几次。
         for indicator in ("3日", "5日", "10日"):
-            for attempt in range(3):
+            for attempt in range(5):
                 try:
                     df = ak.stock_individual_fund_flow_rank(indicator=indicator)
                     if df is not None and not df.empty:
@@ -88,34 +93,51 @@ def get_universe() -> list[str]:
                                 codes.add(c)
                         break
                 except Exception as e:
-                    if attempt == 2:
+                    if attempt == 4:
                         print(f"[universe] 资金流排行({indicator})失败: {e}")
                     else:
-                        time.sleep(2.0)
+                        time.sleep(3.0)
     except Exception as e:
         print(f"[universe] akshare 不可用: {e}")
 
-    # 兜底：全市场快照（价格 [5,30]），保证即使资金流接口不可用也有完整候选池。
+    # 2) 全市场快照（价格过滤），重试多次
     if not codes:
-        try:
-            import akshare as ak
+        for attempt in range(3):
+            try:
+                import akshare as ak
 
-            spot = ak.stock_zh_a_spot()
-            if spot is not None and not spot.empty and {"代码", "最新价"}.issubset(spot.columns):
-                for raw, price in zip(spot["代码"].tolist(), spot["最新价"].tolist()):
-                    c = format_stock_code(str(raw))
-                    if not c:
-                        continue
-                    if c.startswith(("30", "688", "920")) or c.startswith(("4", "8")):
-                        continue
-                    try:
-                        p = float(price)
-                    except Exception:
-                        continue
-                    if UNIVERSE_PRICE_LOWER <= p <= UNIVERSE_PRICE_UPPER:
-                        codes.add(c)
-        except Exception as e:
-            print(f"[universe] spot 兜底失败: {e}")
+                spot = ak.stock_zh_a_spot()
+                if spot is not None and not spot.empty and {"代码", "最新价"}.issubset(spot.columns):
+                    for raw, price in zip(spot["代码"].tolist(), spot["最新价"].tolist()):
+                        c = format_stock_code(str(raw))
+                        if not c:
+                            continue
+                        if c.startswith(("30", "688", "920")) or c.startswith(("4", "8")):
+                            continue
+                        try:
+                            p = float(price)
+                        except Exception:
+                            continue
+                        if UNIVERSE_PRICE_LOWER <= p <= UNIVERSE_PRICE_UPPER:
+                            codes.add(c)
+                    if codes:
+                        break
+            except Exception as e:
+                if attempt == 2:
+                    print(f"[universe] spot 兜底失败: {e}")
+                else:
+                    time.sleep(3.0)
+
+    # 3) 终极兜底：名称映射里的全部主板代码（绝不空，时点干净的信号仍需 K 线计算）
+    if not codes:
+        print("[universe] 资金流/快照均不可用，回退到全主板代码（来自名称映射）")
+        nm = get_name_map()
+        for c in nm.keys():
+            if c.startswith(("30", "688", "920", "4", "8", "9")):
+                continue
+            if "ST" in (nm.get(c) or "").upper():
+                continue
+            codes.add(c)
 
     # 补充：现有 Daily-Action-List 中出现过的代码（已知关注标的）
     for p in STOCK_DATA_DIR.glob("Daily-Action-List-*.csv"):
@@ -153,16 +175,30 @@ def get_name_map() -> dict[str, str]:
     return m
 
 
-def _scan_universe_asof(universe: list[str], name_map: dict[str, str], D: date):
-    """单次遍历候选池：对每只股票拉取截至 D 的 K 线一次，同时计算 Boll 与相对强弱信号。
+def _filter_to_date(df: pd.DataFrame, D: date) -> pd.DataFrame:
+    """只保留日期 <= D 的行（时点化，避免用到未来数据）。"""
+    if df is None or df.empty:
+        return df
+    dt = pd.to_datetime(df["date"], errors="coerce")
+    mask = dt.dt.date <= D
+    return df[mask.values].copy()
 
-    返回 (boll_hits, rel_hits)。信号均按截至 D 的时点计算，无后视镜偏差。
+
+def _scan_universe_asof(universe: list[str], name_map: dict[str, str], D: date, fetch_end: date):
+    """单次遍历候选池：对每只股票拉取宽窗口 K 线（截至 fetch_end=today）一次填充缓存，
+    再按截至 D 过滤计算 Boll 与相对强弱信号。
+
+    关键优化：所有历史日共用同一份「宽窗口」缓存（fetch_end 统一为今天），
+    第 1 天拉取后，后续 16 天直接命中磁盘缓存，避免 2000+ 只 × N 天重复网络请求。
+    信号本身仍严格按截至 D 的时点计算，无后视镜偏差。
     """
     end = pd.Timestamp(D)
     start = (end - pd.Timedelta(days=90)).date()
     rel_start = (end - pd.Timedelta(days=REL_LOOKBACK + 10)).date()
 
-    idx = fetch_daily_k("000001", rel_start, D)
+    # 指数也用宽窗口拉取一次，后续天复用缓存
+    idx_wide = fetch_daily_k("000001", rel_start, fetch_end)
+    idx = _filter_to_date(idx_wide, D)
     idx_ret = None
     if idx is not None and not idx.empty and len(idx) >= REL_LOOKBACK + 1:
         ic = pd.to_numeric(idx["close"], errors="coerce").reset_index(drop=True)
@@ -174,8 +210,12 @@ def _scan_universe_asof(universe: list[str], name_map: dict[str, str], D: date):
     rel_scored: list[tuple[str, float, float]] = []
     for code in universe:
         try:
-            kdf = fetch_daily_k(code, start, D)
-            if kdf is None or kdf.empty:
+            # 宽窗口拉取（填充缓存）；计算时严格过滤到 D 当天及之前
+            kdf_wide = fetch_daily_k(code, start, fetch_end)
+            if kdf_wide is None or kdf_wide.empty:
+                continue
+            kdf = _filter_to_date(kdf_wide, D)
+            if kdf.empty:
                 continue
             n = len(kdf)
             if n >= BOLL_WINDOW:
@@ -208,10 +248,10 @@ def _scan_universe_asof(universe: list[str], name_map: dict[str, str], D: date):
     return boll_hits, rel_hits
 
 
-def build_list(D: date) -> pd.DataFrame | None:
+def build_list(D: date, fetch_end: date) -> pd.DataFrame | None:
     universe = get_universe()
     name_map = get_name_map()
-    boll, rel = _scan_universe_asof(universe, name_map, D)
+    boll, rel = _scan_universe_asof(universe, name_map, D, fetch_end)
     print(f"[回填] {D} · Boll 命中 {len(boll)} · 相对强弱命中 {len(rel)}")
 
     by_code: dict[str, dict] = {}
@@ -265,8 +305,9 @@ def main() -> int:
 
     print(f"待回填 {len(days)} 天: " + ", ".join(d.strftime("%Y%m%d") for d in days))
     ok = 0
+    fetch_end = today  # 宽窗口终点统一为今天，最大化缓存复用
     for D in days:
-        df = build_list(D)
+        df = build_list(D, fetch_end)
         if df is None or df.empty:
             print(f"[回填] {D} 无信号，跳过")
             continue

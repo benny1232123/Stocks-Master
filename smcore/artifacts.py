@@ -1,6 +1,7 @@
 """Helpers for locating generated artifact files under stock_data/ and archive/."""
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Iterable
@@ -25,27 +26,41 @@ def _candidate_paths(pattern: str) -> Iterable[Path]:
         yield from archive_dir.rglob(pattern)
 
 
-def find_latest_file(pattern: str) -> ArtifactFile | None:
-    """Find the newest file matching a glob pattern under stock_data/ and archive/."""
-    latest_path: Path | None = None
-    latest_mtime = -1.0
+def _extract_date_tag(name: str) -> str | None:
+    """从文件名提取 YYYYMMDD 日期标签（如 Daily-Action-List-20260709.csv → 20260709）。"""
+    m = re.search(r"(\d{8})", name)
+    return m.group(1) if m else None
 
+
+def find_latest_file(pattern: str) -> ArtifactFile | None:
+    """Find the newest file matching a glob pattern under stock_data/ and archive/.
+
+    排序规则：文件名含 YYYYMMDD 日期标签的，按日期降序优先（如 Daily-Action-List 的日常日报，
+    git 拉取后 mtime 会被重置，必须按日期而非 mtime 选最新）；不含日期的按 mtime 降序（保持原行为）。
+    """
+    candidates: list[tuple[int, str, float, Path]] = []
     for path in _candidate_paths(pattern):
         try:
             mtime = path.stat().st_mtime
         except FileNotFoundError:
             continue
-        if mtime > latest_mtime:
-            latest_path = path
-            latest_mtime = mtime
+        date_tag = _extract_date_tag(path.name)
+        # 优先级 1=含日期（按日期字符串降序），0=无日期（按 mtime 字符串降序）
+        priority = 1 if date_tag else 0
+        sort_key = date_tag if date_tag else f"{mtime:018.6f}"
+        candidates.append((priority, sort_key, mtime, path))
 
-    if latest_path is None:
+    if not candidates:
         return None
+
+    # reverse=True：含日期者(priority=1)恒优先；同组内日期/ mtime 降序
+    candidates.sort(key=lambda x: (x[0], x[1]), reverse=True)
+    _, _, mtime, latest_path = candidates[0]
 
     return ArtifactFile(
         name=latest_path.name,
         path=str(latest_path.relative_to(PROJECT_ROOT)),
-        modified_at=latest_mtime,
+        modified_at=mtime,
     )
 
 
