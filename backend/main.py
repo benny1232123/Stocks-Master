@@ -245,26 +245,37 @@ def latest_backtest() -> dict:
 
 @app.get("/api/backtests/daily-latest")
 def daily_latest_backtest() -> dict:
-    """读取每日 CI 自动对全策略清单跑出的多策略回测结果（Multi-Backtest-*）。"""
-    latest = find_latest_file("Multi-Backtest-*-summary.csv")
-    if latest is None:
-        return {"latest": None, "date": None, "summary": None, "equity": [], "trades": []}
-    name = latest.name
-    date_tag = name[len("Multi-Backtest-"):-len("-summary.csv")]
+    """读取每日 CI 自动对全策略清单跑出的前向信号回测结果（Multi-Backtest-*）。
 
-    def _read(suffix: str):
-        df = read_csv_file(f"stock_data/Multi-Backtest-{date_tag}-{suffix}.csv")
-        return df.to_dict(orient="records") if not df.empty else []
+    返回全部历史批次（按信号日倒序），前端以「信号日选择器」形式展示，
+    每个信号日对应一次独立的「从历史某天开始 → 往后持有 N 天」的前向回测。
+    """
+    import glob as _glob
 
-    summary_df = read_csv_file(f"stock_data/Multi-Backtest-{date_tag}-summary.csv")
-    summary = summary_df.to_dict(orient="records")[0] if not summary_df.empty else None
-    return {
-        "latest": latest.__dict__,
-        "date": date_tag,
-        "summary": summary,
-        "equity": _read("equity"),
-        "trades": _read("trades"),
-    }
+    from smcore.artifacts import STOCK_DATA_DIR
+
+    files = sorted(_glob.glob(str(STOCK_DATA_DIR / "Multi-Backtest-*-summary.csv")), reverse=True)
+    items = []
+    for f in files:
+        name = os.path.basename(f)
+        date_tag = name[len("Multi-Backtest-"):-len("-summary.csv")]
+
+        def _read(suffix: str):
+            df = read_csv_file(f"stock_data/Multi-Backtest-{date_tag}-{suffix}.csv")
+            return df.to_dict(orient="records") if not df.empty else []
+
+        summary_df = read_csv_file(f"stock_data/Multi-Backtest-{date_tag}-summary.csv")
+        summary = summary_df.to_dict(orient="records")[0] if not summary_df.empty else None
+        if summary is None:
+            continue
+        items.append({
+            "date": date_tag,
+            "summary": summary,
+            "equity": _read("equity"),
+            "trades": _read("trades"),
+        })
+    latest = items[0] if items else None
+    return {"items": items, "latest": latest}
 
 
 @app.post("/api/backtests/run-latest")

@@ -152,6 +152,7 @@ jobs:
         env:
           KLINE_BACKEND: akshare
           HOLD_DAYS: "10"
+          LOOKBACK_DAYS: "30"
           SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
           SUPABASE_KEY: ${{ secrets.SUPABASE_KEY }}
         run: python scripts/daily_backtest.py

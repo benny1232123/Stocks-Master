@@ -243,7 +243,8 @@ function App() {
   const [selectionScan, setSelectionScan] = useState(null)
   const [fusionResult, setFusionResult] = useState(null)
   const [backtestRun, setBacktestRun] = useState(null)
-  const [dailyBacktest, setDailyBacktest] = useState(null)
+  const [dailyBacktests, setDailyBacktests] = useState([])
+  const [selDaily, setSelDaily] = useState(0)
   const [tradeForm, setTradeForm] = useState({
     date: new Date().toISOString().slice(0, 10),
     code: '', name: '', side: 'buy', price: 0, qty: 100, fee: 0, notes: '',
@@ -297,11 +298,15 @@ function App() {
     } catch { setScanPhase(null); setError('回测启动失败') }
   }
 
-  // 加载每日 CI 自动回测结果
+  // 加载每日 CI 自动回测结果（全部历史信号日前向回测批次）
   async function loadDailyBacktest() {
     try {
       const resp = await fetch('/api/backtests/daily-latest')
-      if (resp.ok) setDailyBacktest(await resp.json())
+      if (resp.ok) {
+        const data = await resp.json()
+        setDailyBacktests(data.items || [])
+        setSelDaily(0)
+      }
     } catch { /* 忽略加载失败 */ }
   }
 
@@ -1466,8 +1471,26 @@ function App() {
               <p>每日 CI 自动回测当日全策略清单，或手动运行多策略回测</p>
             </div>
 
-            <SectionCard title={`每日自动回测${dailyBacktest?.date ? ` · ${dailyBacktest.date}` : ''}`}>
-              {dailyBacktest?.summary ? (() => {
+            <SectionCard title="每日自动回测 · 前向信号回测">
+              {dailyBacktests.length === 0 ? (
+                <div className="bt-empty">
+                  <div className="bt-empty-icon">🌙</div>
+                  <div className="bt-empty-title">尚无每日前向回测数据</div>
+                  <div className="bt-empty-desc">每日盘后 CI 会对近一个月的每个历史信号日分别做「从信号日往后持有」的前向回测，结果将出现在这里。</div>
+                </div>
+              ) : (
+                <>
+                  <div className="dbt-tabs">
+                    {dailyBacktests.map((d, i) => (
+                      <button key={d.date} className={cn("dbt-tab", i === selDaily && "active")}
+                        onClick={() => setSelDaily(i)}>
+                        {d.date.slice(4).replace(/(\d{2})(\d{2})/, "$1-$2")}
+                        {d.summary?.hold_days ? ` ·${d.summary.hold_days}天` : ""}
+                      </button>
+                    ))}
+                  </div>
+                  {dailyBacktests[selDaily]?.summary ? (() => {
+                    const dailyBacktest = dailyBacktests[selDaily]
                 const s = dailyBacktest.summary
                 const ret = Number(s.total_return ?? 0)
                 const dd = Number(s.max_drawdown ?? 0)
@@ -1606,13 +1629,16 @@ function App() {
                   ) : null}
                 </>
                 )
-              })() : (
-                <div className="bt-empty">
-                  <div className="bt-empty-icon">🌙</div>
-                  <div className="bt-empty-title">今日自动回测尚未生成</div>
-                  <div className="bt-empty-desc">每日盘后 CI 会自动对当日全策略清单跑近 90 天多策略回测，结果将出现在这里。</div>
-                </div>
-              )}
+                })() : (
+                  <div className="bt-empty">
+                    <div className="bt-empty-icon">🌙</div>
+                    <div className="bt-empty-title">该信号日暂无有效回测</div>
+                    <div className="bt-empty-desc">可能没有可用 K 线数据（网络不可达）。</div>
+                  </div>
+                )
+                }
+              </>
+            )}
             </SectionCard>
 
             <SectionCard title="手动多策略回测">
