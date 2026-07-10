@@ -746,15 +746,44 @@
 .report-tag {
   font-family: var(--font-mono); font-size: 0.8rem; font-weight: 600;
   color: hsl(var(--primary)); background: hsl(var(--primary) / 0.08);
-  padding: 6px 14px; border-radius: 999px; white-space: nowrap;
+  padding: 10px 16px; border-radius: 12px; white-space: normal;
+  display: flex; align-items: center; gap: 8px; flex-wrap: wrap;
 }
-.dbt-date-select {
-  font-family: var(--font-mono); font-size: 0.78rem; font-weight: 600;
-  color: hsl(var(--foreground)); background: hsl(var(--surface-2));
-  border: 1px solid hsl(var(--border)); border-radius: 8px;
-  padding: 5px 10px; margin-right: 8px; cursor: pointer;
+/* 日报日期复选框网格 */
+.date-checkbox-grid {
+  display: flex; align-items: center; gap: 4px; flex-wrap: wrap;
 }
-.dbt-date-select:focus { outline: 2px solid hsl(var(--primary) / 0.4); }
+.dcg-label { font-size: 0.78rem; margin-right: 4px; opacity: 0.7; }
+.date-cb-item {
+  display: inline-flex; align-items: center; gap: 3px;
+  padding: 3px 8px 3px 5px; border-radius: 6px;
+  background: hsl(var(--surface-1)); border: 1px solid hsl(var(--border));
+  cursor: pointer; user-select: none; transition: all 0.15s;
+  font-family: var(--font-mono); font-size: 0.75rem; line-height: 1.4;
+}
+.date-cb-item:hover { border-color: hsl(var(--primary) / 0.5); }
+.date-cb-item.checked {
+  background: hsl(var(--primary) / 0.12);
+  border-color: hsl(var(--primary) / 0.5);
+  color: hsl(var(--primary));
+}
+.date-cb-item input[type="radio"] { display: none; }
+.date-cb-box {
+  display: inline-flex; justify-content: center; align-items: center;
+  width: 15px; height: 15px; border-radius: 3px;
+  border: 1.5px solid hsl(var(--border)); font-size: 0.65rem;
+  background: hsl(var(--background));
+  transition: all 0.15s;
+}
+.date-cb-item.checked .date-cb-box {
+  background: hsl(var(--primary));
+  border-color: hsl(var(--primary));
+  color: white;
+}
+.date-cb-text { font-weight: 600; }
+.date-cb-count {
+  font-size: 0.68rem; opacity: 0.55; font-weight: 400;
+}
 .report-stats { display: grid; grid-template-columns: repeat(4, 1fr); gap: 12px; margin-bottom: 14px; }
 .rs-card {
   background: hsl(var(--card)); border: 1px solid hsl(var(--border));

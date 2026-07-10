@@ -1528,7 +1528,7 @@ function App() {
               const avgScore = total ? rows.reduce((s, r) => s + (num(r, '综合评分') || 0), 0) / total : 0
               // 策略分布
               const stratMap = {}
-              rows.forEach((r) => { const k = r['来源策略'] ?? '未知'; stratMap[k] = (stratMap[k] || 0) + 1 })
+              rows.forEach((r) => { const k = (r['来源策略'] ?? '未知').split('/').map(s=>s.trim()).filter(Boolean).join('/'); stratMap[k] = (stratMap[k] || 0) + 1 })
               const stratList = Object.entries(stratMap).sort((a, b) => b[1] - a[1])
               // 重点推荐 Top5（按综合评分）
               const top = [...rows].sort((a, b) => (num(b, '综合评分') || 0) - (num(a, '综合评分') || 0)).slice(0, 5)
@@ -1547,15 +1547,26 @@ function App() {
                     </div>
                     <div className="report-tag">
                       {dailyDates.length > 0 ? (
-                        <select
-                          className="dbt-date-select"
-                          value={dailyDate ?? fileDate}
-                          onChange={(e) => { const v = e.target.value; setDailyDate(v); reloadArtifacts(v) }}
-                        >
-                          {dailyDates.map((it) => (
-                            <option key={it.date} value={it.date}>{it.date}{it.total ? ` · ${it.total}只` : ''}</option>
-                          ))}
-                        </select>
+                        <div className="date-checkbox-grid">
+                          <span className="dcg-label">📅 选择日期：</span>
+                          {dailyDates.map((it) => {
+                            const checked = (dailyDate ?? fileDate) === it.date
+                            return (
+                              <label key={it.date} className={`date-cb-item${checked ? ' checked' : ''}`}>
+                                <input
+                                  type="radio"
+                                  name="daily-date"
+                                  value={it.date}
+                                  checked={checked}
+                                  onChange={(e) => { const v = e.target.value; setDailyDate(v); reloadArtifacts(v) }}
+                                />
+                                <span className="date-cb-box">✓</span>
+                                <span className="date-cb-text">{it.date.slice(4,6)}-{it.date.slice(6)}</span>
+                                {it.total != null && <span className="date-cb-count">{it.total}</span>}
+                              </label>
+                            )
+                          })}
+                        </div>
                       ) : null}
                       <span>共 {total} 只标的</span>
                     </div>
