@@ -1665,8 +1665,17 @@ function App() {
                 </>
               )
             })() : (
-              <div className="empty-state">
-                {fullDaily === null ? '加载中...' : '暂无日报文件，去「选股」跑完流程后这里会显示完整信号'}
+              <div className="empty-state" style={{ padding: '60px 24px' }}>
+                <div style={{ fontSize: '2.4rem', marginBottom: 12 }}>📋</div>
+                <div style={{ fontSize: '1rem', fontWeight: 600, color: 'hsl(var(--foreground))', marginBottom: 6 }}>
+                  {fullDaily === null ? '正在加载日报数据...' : '暂无日报文件'}
+                </div>
+                <div style={{ fontSize: '0.84rem', color: 'hsl(var(--muted))', lineHeight: 1.7 }}>
+                  {fullDaily === null
+                    ? '首次加载可能需要几秒钟，请稍候'
+                    : '运行「选股」跑完融合流程后，这里会显示完整每日信号日报'
+                  }
+                </div>
               </div>
             )}
           </>
