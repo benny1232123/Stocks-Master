@@ -1643,7 +1643,7 @@ function App() {
                                     <span className="top-score">{num(r, '综合评分')?.toFixed(1) ?? '--'}</span>
                                     {hitCnt > 1 && <span className="top-hit-badge">{hitCnt}策略</span>}
                                   </div>
-                                  <span className={`top-rr ${rr != null && !Number.isInfinity(rr) ? (rr >= 2 ? 'text-up' : rr >= 1 ? '' : 'text-down') : (rr === Infinity ? 'text-up' : '')}`}>
+                                  <span className={`top-rr ${rr != null && isFinite(rr) ? (rr >= 2 ? 'text-up' : rr >= 1 ? '' : 'text-down') : (rr === Infinity ? 'text-up' : '')}`}>
                                     盈亏比 {rrStr}
                                   </span>
                                 </div>
