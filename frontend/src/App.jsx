@@ -1070,7 +1070,90 @@ function App() {
                         // 带宽颜色
                         const bwWarn = bw != null && bw < 8
 
+                        // ── 总体总结：综合 5 大指标多空力度 ──
+                        const scoreDetail = []
+                        let s = 0
+                        if (rsi != null) {
+                          if (rsi > 80) { s -= 2; scoreDetail.push(['RSI', '严重超买', 'bear']) }
+                          else if (rsi > 70) { s -= 1; scoreDetail.push(['RSI', '偏强高位', 'bear']) }
+                          else if (rsi < 20) { s += 2; scoreDetail.push(['RSI', '严重超卖', 'bull']) }
+                          else if (rsi < 30) { s += 1; scoreDetail.push(['RSI', '超卖区', 'bull']) }
+                          else if (rsi > 55) { s += 1; scoreDetail.push(['RSI', '偏强', 'bull']) }
+                          else if (rsi < 45) { s -= 1; scoreDetail.push(['RSI', '偏弱', 'bear']) }
+                          else scoreDetail.push(['RSI', '中性', 'neutral'])
+                        }
+                        if (dif != null && dea != null) {
+                          if (dif > dea && macdH > 0) { s += 2; scoreDetail.push(['MACD', '金叉红柱', 'bull']) }
+                          else if (dif > dea && macdH <= 0) { scoreDetail.push(['MACD', '多头动能弱', 'neutral']) }
+                          else if (dif < dea && macdH < 0) { s -= 2; scoreDetail.push(['MACD', '死叉绿柱', 'bear']) }
+                          else if (dif < dea && macdH >= 0) { scoreDetail.push(['MACD', '空头柱收窄', 'neutral']) }
+                          else scoreDetail.push(['MACD', '缠绕', 'neutral'])
+                        }
+                        if (kV != null && dV != null) {
+                          if (jV != null && jV > 100) { s -= 2; scoreDetail.push(['KDJ', '极端超买', 'bear']) }
+                          else if (jV != null && jV < 0) { s += 2; scoreDetail.push(['KDJ', '极端超卖', 'bull']) }
+                          else if (kV > dV) { s += 1; scoreDetail.push(['KDJ', '金叉', 'bull']) }
+                          else if (kV < dV) { s -= 1; scoreDetail.push(['KDJ', '死叉', 'bear']) }
+                          else scoreDetail.push(['KDJ', '中性', 'neutral'])
+                        }
+                        if (ma5 != null && ma10 != null && ma20 != null) {
+                          if (ma5 > ma10 && ma10 > ma20) { s += 2; scoreDetail.push(['均线', '多头排列', 'bull']) }
+                          else if (ma5 < ma10 && ma10 < ma20) { s -= 2; scoreDetail.push(['均线', '空头排列', 'bear']) }
+                          else if (ma5 > ma20) { s += 1; scoreDetail.push(['均线', '短期偏强', 'bull']) }
+                          else if (ma5 < ma20) { s -= 1; scoreDetail.push(['均线', '短期偏弱', 'bear']) }
+                          else scoreDetail.push(['均线', '中性', 'neutral'])
+                        }
+                        if (close != null && lower != null) {
+                          if (close < lower) { s += 1; scoreDetail.push(['布林', '跌破下轨', 'bull']) }
+                          else if (distLo != null && distLo < 2) { s += 1; scoreDetail.push(['布林', '极近下轨', 'bull']) }
+                          else if (distHi != null && distHi > -2) { s -= 1; scoreDetail.push(['布林', '极近上轨', 'bear']) }
+                          else if (distLo != null && distLo < 5) { scoreDetail.push(['布林', '近下轨', 'neutral']) }
+                          else if (distHi != null && distHi > -5) { scoreDetail.push(['布林', '近上轨', 'neutral']) }
+                          else scoreDetail.push(['布林', '中部', 'neutral'])
+                        }
+                        const bullN = scoreDetail.filter((x) => x[2] === 'bull').length
+                        const bearN = scoreDetail.filter((x) => x[2] === 'bear').length
+                        let verdict, verdictColor
+                        if (s >= 4) { verdict = '强烈看多'; verdictColor = 'bull' }
+                        else if (s >= 1) { verdict = '偏多'; verdictColor = 'bull' }
+                        else if (s <= -4) { verdict = '强烈看空'; verdictColor = 'bear' }
+                        else if (s <= -1) { verdict = '偏空'; verdictColor = 'bear' }
+                        else { verdict = '中性震荡'; verdictColor = 'neutral' }
+                        const nearUpper = distHi != null && distHi > -5
+                        const nearLower = distLo != null && distLo < 5
+                        const belowLower = close != null && lower != null && close < lower
+                        const aboveUpper = close != null && upper != null && close > upper
+                        let advice
+                        if (verdictColor === 'bull') {
+                          if (nearUpper || aboveUpper) advice = '技术面偏多，但价格已逼近/突破布林上轨，追高性价比低，建议等回踩中轨再介入'
+                          else if (nearLower || belowLower) advice = '多项指标看多且价格贴近布林下轨（超卖），安全边际较高，可逢低分批建仓，止损设于下轨下方'
+                          else advice = '技术面偏多，可持股或轻仓参与，以中轨为参考止盈、下轨为止损'
+                        } else if (verdictColor === 'bear') {
+                          if (nearLower || belowLower) advice = '技术面偏弱但价格已超卖（近下轨），或有技术反弹，不宜盲目杀跌，可等反抽减仓'
+                          else if (nearUpper || aboveUpper) advice = '多项指标转空且价格处于高位，风险较大，建议减仓回避'
+                          else advice = '技术面偏弱，控制仓位、以观望为主，反弹至中轨附近可考虑减仓'
+                        } else {
+                          advice = '多空信号交织、方向不明，建议观望，等待均线或 MACD 给出明确拐点'
+                        }
+
                         return (
+                          <>
+                          <div className="analysis-summary">
+                            <div className="as-head">
+                              <span className="as-title">📋 总体总结</span>
+                              <span className={cn('as-verdict', `as-${verdictColor}`)}>{verdict}</span>
+                              <span className="as-score">综合强度 {s > 0 ? '+' : ''}{s} · 多 {bullN} / 空 {bearN}</span>
+                            </div>
+                            <div className="as-bars">
+                              {scoreDetail.map(([nm, txt, side]) => (
+                                <div key={nm} className={cn('as-bar', `as-${side}`)}>
+                                  <span className="as-bar-name">{nm}</span>
+                                  <span className="as-bar-txt">{txt}</span>
+                                </div>
+                              ))}
+                            </div>
+                            <div className="as-advice">💡 操作建议：{advice}</div>
+                          </div>
                           <div className="ind-grid">
                             {/* ① RSI */}
                             <div className="ind-card">
@@ -1247,6 +1330,7 @@ function App() {
                               <span className="ind-txt">{posTxt}</span>
                             </div>
                           </div>
+                          </>
                         )
                       })()}
                     </>

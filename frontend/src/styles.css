@@ -1138,6 +1138,40 @@
 /* ═══════════════════════════════════════════
    INDICATOR DASHBOARD — 多指标解读面板
    ═════════════════════════════════════════ */
+/* ── 个股分析 · 总体总结卡片 ── */
+.analysis-summary {
+  background: hsl(var(--card));
+  border: 1px solid hsl(var(--border));
+  border-radius: 12px;
+  padding: 16px 18px;
+  margin-bottom: 20px;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+.as-head { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }
+.as-title { font-size: 0.95rem; font-weight: 600; color: hsl(var(--foreground)); }
+.as-verdict { font-size: 1.05rem; font-weight: 700; padding: 2px 14px; border-radius: 999px; }
+.as-bull { color: hsl(3 80% 50%); background: hsl(3 80% 50% / 0.12); }      /* 看多=红(涨) */
+.as-bear { color: hsl(157 81% 33%); background: hsl(157 81% 33% / 0.12); }  /* 看空=绿(跌) */
+.as-neutral { color: hsl(var(--muted-foreground)); background: hsl(var(--muted) / 0.18); }
+.as-score { font-size: 0.82rem; color: hsl(var(--muted-foreground)); margin-left: auto; font-family: var(--font-mono); }
+.as-bars { display: flex; flex-wrap: wrap; gap: 8px; }
+.as-bar {
+  display: flex; align-items: center; gap: 8px;
+  padding: 6px 12px; border-radius: 8px; font-size: 0.82rem;
+  border: 1px solid transparent;
+}
+.as-bar-name { font-weight: 700; }
+.as-bar.as-bull { background: hsl(3 80% 50% / 0.10); border-color: hsl(3 80% 50% / 0.28); color: hsl(3 80% 50%); }
+.as-bar.as-bear { background: hsl(157 81% 33% / 0.10); border-color: hsl(157 81% 33% / 0.28); color: hsl(157 81% 33%); }
+.as-bar.as-neutral { background: hsl(var(--muted) / 0.12); border-color: hsl(var(--border)); color: hsl(var(--muted-foreground)); }
+.as-bar-txt { color: hsl(var(--foreground)); opacity: 0.85; }
+.as-advice {
+  font-size: 0.88rem; line-height: 1.55; color: hsl(var(--foreground));
+  background: hsl(var(--secondary) / 0.4); border-radius: 8px; padding: 10px 12px;
+}
+
 .ind-grid {
   display: grid;
   grid-template-columns: repeat(3, 1fr);
