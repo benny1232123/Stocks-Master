@@ -1,2 +1,2 @@
 ﻿num_trades,initial_capital,ending_total,total_return,max_drawdown,win_rate,avg_return,sharpe,strategies,signal_mode,date,run_date,signal_start,signal_end,hold_days,signals_days,codes_count,start,end
-0,100000.0,99903.5,-0.1,-1.18,0.0,0.0,-0.41,"boll,relativity,theme",forward,20260708,20260710,2026-07-08,2026-07-08,2,1,15,2026-07-08,2026-07-10
+0,100000.0,99903.5,-0.1,-1.18,0.0,0.0,-0.41,"boll,relativity,theme",forward,20260708,20260711,2026-07-08,2026-07-08,3,1,15,2026-07-08,2026-07-11

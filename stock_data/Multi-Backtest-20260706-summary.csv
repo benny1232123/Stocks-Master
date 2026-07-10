@@ -1,2 +1,2 @@
 ﻿num_trades,initial_capital,ending_total,total_return,max_drawdown,win_rate,avg_return,sharpe,strategies,signal_mode,date,run_date,signal_start,signal_end,hold_days,signals_days,codes_count,start,end
-0,100000.0,99914.71,-0.09,-0.17,0.0,0.0,-4.0,boll,forward,20260706,20260710,2026-07-06,2026-07-06,10,1,182,2026-07-06,2026-07-16
+0,100000.0,98921.78,-1.08,-3.0,0.0,0.0,-2.4,boll,forward,20260706,20260711,2026-07-06,2026-07-06,5,1,30,2026-07-06,2026-07-11
