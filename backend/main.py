@@ -307,8 +307,8 @@ def daily_latest_backtest() -> dict:
                         if c:
                             name_map[c] = str(nr.get("股票名称", ""))
                 for rec in recs:
-                    c = str(rec.get("code", "")).strip()
-                    rec["name"] = name_map.get(c, "")
+                    c = str(rec.get("code", "")).strip().zfill(6)
+                    rec["name"] = name_map.get(c, "") or name_map.get(c.lstrip("0"), "")
             return recs
 
         summary_df = read_csv_file(f"stock_data/Multi-Backtest-{date_tag}-summary.csv")

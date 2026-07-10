@@ -412,6 +412,7 @@ function App() {
   const [fullDaily, setFullDaily] = useState(null)
   const [dailyDate, setDailyDate] = useState(null)        // 当前查看的日报日期(YYYYMMDD)，null=最新
   const [dailyDates, setDailyDates] = useState([])         // 可选日报日期列表
+  const [dateOpen, setDateOpen] = useState(false)          // 日期下拉框是否展开
   const logContainerRef = useRef(null)
 
   // Phase: null | 'candidates' | 'boll' | 'backtest' | 'fusion'
@@ -1547,25 +1548,34 @@ function App() {
                     </div>
                     <div className="report-tag">
                       {dailyDates.length > 0 ? (
-                        <div className="date-checkbox-grid">
-                          <span className="dcg-label">📅 选择日期：</span>
-                          {dailyDates.map((it) => {
-                            const checked = (dailyDate ?? fileDate) === it.date
-                            return (
-                              <label key={it.date} className={`date-cb-item${checked ? ' checked' : ''}`}>
-                                <input
-                                  type="radio"
-                                  name="daily-date"
-                                  value={it.date}
-                                  checked={checked}
-                                  onChange={(e) => { const v = e.target.value; setDailyDate(v); reloadArtifacts(v) }}
-                                />
-                                <span className="date-cb-box">✓</span>
-                                <span className="date-cb-text">{it.date.slice(4,6)}-{it.date.slice(6)}</span>
-                                {it.total != null && <span className="date-cb-count">{it.total}</span>}
-                              </label>
-                            )
-                          })}
+                        <div className="date-dropdown">
+                          <button
+                            className="date-dd-btn"
+                            onClick={() => setDateOpen(o => !o)}
+                            type="button"
+                          >
+                            <span className="date-dd-icon">📅</span>
+                            <span>{(dailyDate ?? fileDate).slice(4,6)}-{(dailyDate ?? fileDate).slice(6)}</span>
+                            <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"><path d="m6 9 6 6 6-6"/></svg>
+                          </button>
+                          {dateOpen && (
+                            <div className="date-dd-menu">
+                              {dailyDates.map((it) => {
+                                const active = (dailyDate ?? fileDate) === it.date
+                                return (
+                                  <button
+                                    key={it.date}
+                                    type="button"
+                                    className={`date-dd-opt${active ? ' active' : ''}`}
+                                    onClick={() => { setDailyDate(it.date); setDateOpen(false); reloadArtifacts(it.date) }}
+                                  >
+                                    <span>{it.date.slice(4,6)}-{it.date.slice(6)}</span>
+                                    {it.total != null ? <span className="dd-opt-count">{it.total}只</span> : null}
+                                  </button>
+                                )
+                              })}
+                            </div>
+                          )}
                         </div>
                       ) : null}
                       <span>共 {total} 只标的</span>

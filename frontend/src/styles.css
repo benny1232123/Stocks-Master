@@ -749,40 +749,39 @@
   padding: 10px 16px; border-radius: 12px; white-space: normal;
   display: flex; align-items: center; gap: 8px; flex-wrap: wrap;
 }
-/* 日报日期复选框网格 */
-.date-checkbox-grid {
-  display: flex; align-items: center; gap: 4px; flex-wrap: wrap;
-}
-.dcg-label { font-size: 0.78rem; margin-right: 4px; opacity: 0.7; }
-.date-cb-item {
-  display: inline-flex; align-items: center; gap: 3px;
-  padding: 3px 8px 3px 5px; border-radius: 6px;
+/* ═══ 日报日期下拉选择器 ═══ */
+.date-dropdown { position: relative; display: inline-flex; }
+.date-dd-btn {
+  display: inline-flex; align-items: center; gap: 6px;
+  padding: 6px 12px; border-radius: 8px;
   background: hsl(var(--surface-1)); border: 1px solid hsl(var(--border));
-  cursor: pointer; user-select: none; transition: all 0.15s;
-  font-family: var(--font-mono); font-size: 0.75rem; line-height: 1.4;
+  cursor: pointer; font-family: var(--font-mono); font-size: 0.82rem;
+  color: hsl(var(--foreground)); transition: all 0.15s;
 }
-.date-cb-item:hover { border-color: hsl(var(--primary) / 0.5); }
-.date-cb-item.checked {
+.date-dd-btn:hover { border-color: hsl(var(--primary) / 0.5); }
+.date-dd-icon { font-size: 0.9rem; }
+.date-dd-btn svg { opacity: 0.5; }
+.date-dd-menu {
+  position: absolute; top: calc(100% + 4px); left: 0; z-index: 50;
+  min-width: 180px; max-height: 280px; overflow-y: auto;
+  background: hsl(var(--card)); border: 1px solid hsl(var(--border));
+  border-radius: 10px; box-shadow: 0 8px 24px rgba(0,0,0,.14);
+  padding: 5px; display: flex; flex-direction: column; gap: 1px;
+}
+.date-dd-opt {
+  display: flex; align-items: center; justify-content: space-between;
+  gap: 10px; width: 100%; padding: 7px 10px;
+  border: none; border-radius: 6px; background: transparent;
+  cursor: pointer; font-family: var(--font-mono); font-size: 0.8rem;
+  color: hsl(var(--foreground)); text-align: left; transition: all 0.12s;
+}
+.date-dd-opt:hover { background: hsl(var(--primary) / 0.08); }
+.date-dd-opt.active {
   background: hsl(var(--primary) / 0.12);
-  border-color: hsl(var(--primary) / 0.5);
-  color: hsl(var(--primary));
+  color: hsl(var(--primary)); font-weight: 700;
 }
-.date-cb-item input[type="radio"] { display: none; }
-.date-cb-box {
-  display: inline-flex; justify-content: center; align-items: center;
-  width: 15px; height: 15px; border-radius: 3px;
-  border: 1.5px solid hsl(var(--border)); font-size: 0.65rem;
-  background: hsl(var(--background));
-  transition: all 0.15s;
-}
-.date-cb-item.checked .date-cb-box {
-  background: hsl(var(--primary));
-  border-color: hsl(var(--primary));
-  color: white;
-}
-.date-cb-text { font-weight: 600; }
-.date-cb-count {
-  font-size: 0.68rem; opacity: 0.55; font-weight: 400;
+.dd-opt-count {
+  font-size: 0.7rem; opacity: 0.55; font-weight: 400;
 }
 .report-stats { display: grid; grid-template-columns: repeat(4, 1fr); gap: 12px; margin-bottom: 14px; }
 .rs-card {
@@ -796,8 +795,8 @@
 
 /* 策略分布 */
 .strat-list { display: flex; flex-direction: column; gap: 10px; }
-.strat-row { display: grid; grid-template-columns: 72px 1fr 34px; align-items: center; gap: 10px; }
-.strat-name { font-family: var(--font-mono); font-size: 0.8rem; }
+.strat-row { display: grid; grid-template-columns: minmax(80px, auto) 1fr 34px; align-items: center; gap: 10px; }
+.strat-name { font-family: var(--font-mono); font-size: 0.8rem; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; min-width: 0; }
 .strat-bar { height: 8px; background: hsl(var(--secondary)); border-radius: 4px; overflow: hidden; }
 .strat-bar-fill { display: block; height: 100%; background: hsl(var(--primary)); border-radius: 4px; }
 .strat-cnt { font-family: var(--font-mono); font-size: 0.8rem; text-align: right; font-weight: 600; }
