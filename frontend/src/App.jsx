@@ -208,6 +208,7 @@ function App() {
   const [selectionScan, setSelectionScan] = useState(null)
   const [fusionResult, setFusionResult] = useState(null)
   const [backtestRun, setBacktestRun] = useState(null)
+  const [dailyBacktest, setDailyBacktest] = useState(null)
   const [tradeForm, setTradeForm] = useState({
     date: new Date().toISOString().slice(0, 10),
     code: '', name: '', side: 'buy', price: 0, qty: 100, fee: 0, notes: '',
@@ -233,6 +234,8 @@ function App() {
   const [multiEnd, setMultiEnd] = useState(_today)
   const [multiStrats, setMultiStrats] = useState({ boll: true, relativity: true, theme: true, cctv: false })
 
+  useEffect(() => { loadDailyBacktest() }, [])
+
   const isRunning = scanPhase !== null
 
   async function cancelTask(taskId) {
@@ -257,6 +260,14 @@ function App() {
       const { task_id } = await resp.json()
       setBtTaskId(task_id)
     } catch { setScanPhase(null); setError('回测启动失败') }
+  }
+
+  // 加载每日 CI 自动回测结果
+  async function loadDailyBacktest() {
+    try {
+      const resp = await fetch('/api/backtests/daily-latest')
+      if (resp.ok) setDailyBacktest(await resp.json())
+    } catch { /* 忽略加载失败 */ }
   }
 
   async function startFusion() {
@@ -892,19 +903,6 @@ function App() {
             <div className="analysis-single">
               <SectionCard title="个股分析" className="max-w-none">
                 <div className="analysis-top" style={{ marginBottom: 16 }}>
-                  {analysisList.length > 0 ? (
-                    <select
-                      className="analysis-select"
-                      value={analysisCode}
-                      onChange={(e) => openAnalysis(e.target.value)}
-                    >
-                      {analysisList.map((item) => (
-                        <option key={item.code} value={item.code}>
-                          {item.code} {item.name ? `- ${item.name}` : ''} {item.score != null ? `(${Number(item.score).toFixed(1)})` : ''}
-                        </option>
-                      ))}
-                    </select>
-                  ) : null}
                   <div className="analysis-form">
                     <input value={analysisCode} onChange={(e) => setAnalysisCode(e.target.value)}
                       placeholder="输入股票代码，例如 000001"
@@ -1012,7 +1010,7 @@ function App() {
                               <span className="ind-txt">{rsiTxt}</span>
                             </div>
 
-                            {/* ② MACD */}
+                            {/* ② MACD — 零轴柱状图 */}
                             <div className="ind-card">
                               <span className="ind-label">MACD(12,26,9)</span>
                               <div className="ind-row-val">
@@ -1020,10 +1018,32 @@ function App() {
                                 <span>DEA <strong className={cn(dea != null && dea > 0 ? 'text-up' : dea != null ? 'text-down' : '')}>{dea != null ? dea.toFixed(3) : '--'}</strong></span>
                                 <span>柱 <strong className={cn(macdH != null && macdH > 0 ? 'text-up' : macdH != null ? 'text-down' : '')}>{macdH != null ? macdH.toFixed(3) : '--'}</strong></span>
                               </div>
+                              {dif != null && dea != null ? (
+                                <div className="macd-viz">
+                                  <div className="macd-zero-line" />
+                                  <div className="macd-hist-bar">
+                                    <div className="macd-hist-fill" style={{
+                                      height: macdH != null ? `${Math.min(50, Math.abs(macdH) * 400)}%` : '0%',
+                                      bottom: macdH >= 0 ? '50%' : 'auto',
+                                      top: macdH < 0 ? '50%' : 'auto',
+                                      background: macdH >= 0 ? 'hsla(3, 80%, 50%, 0.75)' : 'hsla(157, 81%, 37%, 0.75)',
+                                    }} />
+                                  </div>
+                                  <div className="macd-marker" style={{ bottom: `${50 - Math.min(48, Math.max(-48, dif * 300))}%` }} title={`DIF ${dif.toFixed(3)}`}>
+                                    <div className="macd-m-dot macd-dif-dot" />
+                                  </div>
+                                  <div className="macd-marker" style={{ bottom: `${50 - Math.min(48, Math.max(-48, dea * 300))}%` }} title={`DEA ${dea.toFixed(3)}`}>
+                                    <div className="macd-m-dot macd-dea-dot" />
+                                  </div>
+                                  <div className="macd-viz-labels">
+                                    <span>DIF</span><span>0</span><span>DEA</span>
+                                  </div>
+                                </div>
+                              ) : null}
                               <span className="ind-txt">{macdTxt}</span>
                             </div>
 
-                            {/* ③ KDJ */}
+                            {/* ③ KDJ — 三线仪表盘 */}
                             <div className="ind-card">
                               <span className="ind-label">KDJ(9,3,3)</span>
                               <div className="ind-row-val">
@@ -1031,10 +1051,33 @@ function App() {
                                 <span>D <strong>{dV != null ? dV.toFixed(1) : '--'}</strong></span>
                                 <span>J <strong className={cn(jV != null && jV > 100 ? 'text-up' : jV != null && jV < 0 ? 'text-down' : '')}>{jV != null ? jV.toFixed(1) : '--'}</strong></span>
                               </div>
+                              {kV != null && dV != null ? (
+                                <div className="kdj-gauge">
+                                  <div className="kg-track">
+                                    <div className="kg-zone kg-os" style={{ width: '20%' }} />
+                                    <div className="kg-zone kg-neutral" style={{ width: '60%' }} />
+                                    <div className="kg-zone kg-ob" style={{ width: '20%' }} />
+                                    {/* K pointer */}
+                                    <div className="kg-pointer" style={{ left: `${Math.min(100, Math.max(0, kV))}%` }} title={`K ${kV.toFixed(1)}`}>
+                                      <div className="kg-pin kg-k-pin" />
+                                    </div>
+                                    {/* D pointer */}
+                                    <div className="kg-pointer" style={{ left: `${Math.min(100, Math.max(0, dV))}%` }} title={`D ${dV.toFixed(1)}`}>
+                                      <div className="kg-pin kg-d-pin" />
+                                    </div>
+                                    {jV != null ? (
+                                      <div className={cn('kg-pointer', jV > 100 || jV < 0 ? 'kg-extreme' : '')} style={{ left: `${Math.min(100, Math.max(0, jV))}%` }} title={`J ${jV.toFixed(1)}`}>
+                                        <div className="kg-pin kg-j-pin" />
+                                      </div>
+                                    ) : null}
+                                  </div>
+                                  <div className="kg-labels"><em>0</em><em>20</em><em>80</em><em>100</em></div>
+                                </div>
+                              ) : null}
                               <span className="ind-txt">{kdjTxt}</span>
                             </div>
 
-                            {/* ④ 均线系统 */}
+                            {/* ④ 均线系统 — 排列梯形图 */}
                             <div className="ind-card">
                               <span className="ind-label">均线系统</span>
                               <div className="ind-ma-row">
@@ -1043,6 +1086,42 @@ function App() {
                                 <span className="ind-ma-item">MA20 <strong>{ma20 != null ? ma20.toFixed(2) : '--'}</strong></span>
                                 {ma60 != null ? <span className="ind-ma-item">MA60 <strong>{ma60.toFixed(2)}</strong></span> : null}
                               </div>
+                              {(ma5 != null && ma10 != null && ma20 != null) ? (
+                                <div className="ma-ladder">
+                                  {[ma5, ma10, ma20].sort((a, b) => b - a).map((val, idx) => {
+                                    const labels = { [ma5]: 'MA5', [ma10]: 'MA10', [ma20]: 'MA20', [ma60 ?? 0]: 'MA60' }
+                                    const label = labels[val] || `M${idx}`
+                                    const colors = { [ma5]: '#3B82F6', [ma10]: '#8B5CF6', [ma20]: '#F59E0B', [ma60 ?? 0]: '#6B7280' }
+                                    const maxVal = Math.max(ma5, ma10, ma20, ma60 ?? 0)
+                                    const minVal = Math.min(ma5, ma10, ma20, ma60 ?? 0)
+                                    const range = maxVal - minVal || 1
+                                    return (
+                                      <div key={label} className="ma-ladder-row">
+                                        <span className="ma-ladder-label" style={{ color: colors[val] || 'inherit' }}>{label}</span>
+                                        <div className="ma-ladder-track">
+                                          <div className="ma-ladder-fill" style={{
+                                            width: `${((val - minVal) / range) * 100}%`,
+                                            background: colors[val] || 'hsl(var(--foreground))',
+                                          }} />
+                                        </div>
+                                        <span className="ma-ladder-val">{val.toFixed(2)}</span>
+                                      </div>
+                                    )
+                                  })}
+                                  {ma60 != null ? (
+                                    <div className="ma-ladder-row">
+                                      <span className="ma-ladder-label" style={{ color: '#6B7280' }}>MA60</span>
+                                      <div className="ma-ladder-track">
+                                        <div className="ma-ladder-fill" style={{
+                                          width: `${((ma60 - Math.min(ma5, ma10, ma20, ma60)) / (Math.max(ma5, ma10, ma20, ma60) - Math.min(ma5, ma10, ma20, ma60) || 1)) * 100}%`,
+                                          background: '#6B7280',
+                                        }} />
+                                      </div>
+                                      <span className="ma-ladder-val">{ma60.toFixed(2)}</span>
+                                    </div>
+                                  ) : null}
+                                </div>
+                              ) : null}
                               {/* 均线排列箭头 */}
                               {(ma5 != null && ma10 != null && ma20 != null) ? (
                                 <div className="ind-ma-arrows">
@@ -1280,8 +1359,48 @@ function App() {
           <>
             <div className="page-header">
               <h2>回测结果</h2>
-              <p>运行手动多策略回测，或选股后自动生成权益曲线</p>
+              <p>每日 CI 自动回测当日全策略清单，或手动运行多策略回测</p>
             </div>
+
+            <SectionCard title={`每日自动回测${dailyBacktest?.date ? ` · ${dailyBacktest.date}` : ''}`}>
+              {dailyBacktest?.summary ? (
+                <>
+                  <p className="bt-hint">
+                    每日盘后由 CI 自动对当日全策略清单跑近 90 天多策略回测
+                    （策略：{dailyBacktest.summary.strategies}，共 {dailyBacktest.summary.codes_count ?? '--'} 只标的）。
+                  </p>
+                  <div className="grid grid-cols-3 lg:grid-cols-6 gap-3">
+                    <StatCard label="总收益率" value={`${dailyBacktest.summary.total_return ?? '--'}%`} />
+                    <StatCard label="最大回撤" value={`${dailyBacktest.summary.max_drawdown ?? '--'}%`} />
+                    <StatCard label="胜率" value={`${dailyBacktest.summary.win_rate ?? '--'}%`} />
+                    <StatCard label="交易笔数" value={dailyBacktest.summary.num_trades ?? '--'} />
+                    <StatCard label="夏普比率" value={dailyBacktest.summary.sharpe ?? '--'} />
+                    <StatCard label="期末权益" value={dailyBacktest.summary.ending_total ? `${(dailyBacktest.summary.ending_total / 10000).toFixed(1)}万` : '--'} />
+                  </div>
+                  <EquityChart equity={dailyBacktest.equity} initialCapital={dailyBacktest.summary.initial_capital ?? 100000} />
+                  {dailyBacktest.trades?.length > 0 ? (
+                    <div className="table-shell spaced">
+                      <div className="section-head"><h3>交易明细</h3><span>共 {dailyBacktest.trades.length} 笔</span></div>
+                      {dailyBacktest.trades.slice(0, 10).map((t, i) => (
+                        <div key={i} className="table-row">
+                          <span>{t.code}</span>
+                          <strong>{t.buy_date} → {t.sell_date}</strong>
+                          <em className={cn(t.return_pct >= 0 ? 'text-up' : 'text-down')}>
+                            {t.return_pct >= 0 ? '+' : ''}{t.return_pct}%
+                          </em>
+                        </div>
+                      ))}
+                    </div>
+                  ) : null}
+                </>
+              ) : (
+                <div className="bt-empty">
+                  <div className="bt-empty-icon">🌙</div>
+                  <div className="bt-empty-title">今日自动回测尚未生成</div>
+                  <div className="bt-empty-desc">每日盘后 CI 会自动对当日全策略清单跑近 90 天多策略回测，结果将出现在这里。</div>
+                </div>
+              )}
+            </SectionCard>
 
             <SectionCard title="手动多策略回测">
               <div className="bt-form">

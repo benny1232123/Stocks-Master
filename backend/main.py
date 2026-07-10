@@ -243,6 +243,30 @@ def latest_backtest() -> dict:
     return {"latest": latest.__dict__, "preview": preview_csv(latest.path)}
 
 
+@app.get("/api/backtests/daily-latest")
+def daily_latest_backtest() -> dict:
+    """读取每日 CI 自动对全策略清单跑出的多策略回测结果（Multi-Backtest-*）。"""
+    latest = find_latest_file("Multi-Backtest-*-summary.csv")
+    if latest is None:
+        return {"latest": None, "date": None, "summary": None, "equity": [], "trades": []}
+    name = latest.name
+    date_tag = name[len("Multi-Backtest-"):-len("-summary.csv")]
+
+    def _read(suffix: str):
+        df = read_csv_file(f"stock_data/Multi-Backtest-{date_tag}-{suffix}.csv")
+        return df.to_dict(orient="records") if not df.empty else []
+
+    summary_df = read_csv_file(f"stock_data/Multi-Backtest-{date_tag}-summary.csv")
+    summary = summary_df.to_dict(orient="records")[0] if not summary_df.empty else None
+    return {
+        "latest": latest.__dict__,
+        "date": date_tag,
+        "summary": summary,
+        "equity": _read("equity"),
+        "trades": _read("trades"),
+    }
+
+
 @app.post("/api/backtests/run-latest")
 def run_latest_backtest(payload: dict | None = None) -> dict:
     payload = payload or {}

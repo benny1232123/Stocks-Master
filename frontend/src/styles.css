@@ -1016,6 +1016,147 @@
   font-weight: 600;
 }
 
+/* ── MACD 零轴柱状图 ── */
+.macd-viz {
+  position: relative;
+  height: 52px;
+  margin: 2px 0;
+}
+.macd-zero-line {
+  position: absolute;
+  left: 0; right: 0;
+  top: 50%;
+  height: 1px;
+  background: hsl(var(--muted));
+  transform: translateY(-50%);
+  z-index: 1;
+}
+.macd-hist-bar {
+  position: absolute;
+  left: 50%;
+  transform: translateX(-50%);
+  width: 28px;
+  top: 4px; bottom: 4px;
+  background: hsl(var(--surface-2));
+  border-radius: 3px;
+  overflow: hidden;
+}
+.macd-hist-fill {
+  position: absolute;
+  left: 0; right: 0;
+  border-radius: 3px;
+  transition: all 0.35s ease;
+  min-height: 2px;
+}
+.macd-marker {
+  position: absolute;
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: 2;
+}
+.macd-m-dot {
+  width: 8px; height: 8px;
+  border-radius: 50%;
+  border: 2px solid white;
+  box-shadow: 0 1px 3px rgba(0,0,0,0.25);
+  margin-left: -16px;
+}
+.macd-dif-dot { background: #3B82F6; }
+.macd-dea-dot { background: #F59E0B; }
+.macd-viz-labels {
+  position: absolute;
+  right: 0; top: 0; bottom: 0;
+  display: flex; flex-direction: column;
+  justify-content: space-between;
+  font-family: var(--font-mono);
+  font-size: 0.55rem;
+  color: hsl(var(--muted));
+  line-height: 1;
+}
+
+/* ── KDJ 三线仪表盘 ── */
+.kdj-gauge { display: flex; flex-direction: column; gap: 2px; }
+.kg-track {
+  position: relative;
+  height: 10px;
+  border-radius: 5px;
+  display: flex;
+  overflow: hidden;
+  background: #E5E7EB;
+}
+.kg-zone { height: 100%; }
+.kg-os { background: linear-gradient(90deg, #30A46C, rgba(48,164,108,0.30)); }
+.kg-neutral { background: #E5E7EB; }
+.kg-ob { background: linear-gradient(90deg, rgba(229,72,78,0.30), #E5484D); }
+.kg-pointer {
+  position: absolute;
+  top: -3px; bottom: -3px;
+  z-index: 2;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+.kg-extreme { /* J 超出范围时高亮 */ }
+.kg-pin {
+  width: 4px;
+  height: 16px;
+  border-radius: 2px;
+  border: 1px solid white;
+  box-shadow: 0 0 0 1px rgba(0,0,0,0.15), 0 1px 3px rgba(0,0,0,0.2);
+  transition: left 0.3s ease;
+}
+.kg-k-pin { background: #3B82F6; }
+.kg-d-pin { background: #F59E0B; }
+.kg-j-pin { background: #EF4444; }
+.kg-extreme .kg-j-pin {
+  box-shadow: 0 0 0 1px rgba(239,68,68,0.5), 0 0 8px rgba(239,68,68,0.4), 0 1px 3px rgba(0,0,0,0.2);
+}
+.kg-labels {
+  display: flex; justify-content: space-between;
+  font-family: var(--font-mono);
+  font-size: 0.60rem;
+  color: hsl(var(--muted));
+}
+
+/* ── 均线排列梯形图 ── */
+.ma-ladder {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+  padding: 4px 0;
+}
+.ma-ladder-row {
+  display: grid;
+  grid-template-columns: 38px 1fr 56px;
+  align-items: center;
+  gap: 8px;
+}
+.ma-ladder-label {
+  font-family: var(--font-mono);
+  font-size: 0.70rem;
+  font-weight: 600;
+  text-align: right;
+  white-space: nowrap;
+}
+.ma-ladder-track {
+  height: 7px;
+  border-radius: 4px;
+  background: hsl(var(--surface-2));
+  overflow: hidden;
+}
+.ma-ladder-fill {
+  height: 100%;
+  border-radius: 4px;
+  transition: width 0.35s ease;
+  min-width: 3px;
+}
+.ma-ladder-val {
+  font-family: var(--font-mono);
+  font-size: 0.68rem;
+  color: hsl(var(--muted));
+  text-align: right;
+}
+
 /* RSI gauge */
 .ind-gauge { display: flex; flex-direction: column; gap: 2px; }
 .ig-track {

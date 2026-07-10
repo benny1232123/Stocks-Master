@@ -146,6 +146,15 @@ jobs:
           KLINE_BACKEND: akshare
         run: python scripts/prewarm_dashboard.py
 
+      - name: 每日清单多策略回测
+        continue-on-error: true
+        timeout-minutes: 40
+        env:
+          KLINE_BACKEND: akshare
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_KEY: ${{ secrets.SUPABASE_KEY }}
+        run: python scripts/daily_backtest.py
+
       # 前端由 Render 在部署时自行构建（见 render.yaml buildCommand），
       # 此处只负责生成/提交数据，不再构建前端或生成静态 JSON。
 
@@ -155,6 +164,7 @@ jobs:
           git config user.email "github-actions[bot]@users.noreply.github.com"
           git add -f stock_data/daily_cache/
           git add -f stock_data/Daily-Action-List-*.csv
+          git add -f stock_data/Multi-Backtest-*.csv
           if git diff --cached --quiet; then
             echo "无变更，跳过提交"
           else
