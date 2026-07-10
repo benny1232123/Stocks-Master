@@ -749,39 +749,45 @@
   padding: 10px 16px; border-radius: 12px; white-space: normal;
   display: flex; align-items: center; gap: 8px; flex-wrap: wrap;
 }
-/* ═══ 日报日期下拉选择器 ═══ */
-.date-dropdown { position: relative; display: inline-flex; }
-.date-dd-btn {
-  display: inline-flex; align-items: center; gap: 6px;
-  padding: 6px 12px; border-radius: 8px;
-  background: hsl(var(--surface-1)); border: 1px solid hsl(var(--border));
-  cursor: pointer; font-family: var(--font-mono); font-size: 0.82rem;
+/* ═══ 日报日期选择器（输入框式） ═══ */
+.date-picker-wrap { position: relative; display: inline-flex; }
+.date-picker-input {
+  display: inline-flex; align-items: center; gap: 8px;
+  padding: 7px 14px; border-radius: 10px;
+  background: hsl(var(--background)); border: 1.5px solid hsl(var(--border));
+  cursor: pointer; font-family: var(--font-mono); font-size: 0.88rem;
   color: hsl(var(--foreground)); transition: all 0.15s;
+  min-width: 140px;
 }
-.date-dd-btn:hover { border-color: hsl(var(--primary) / 0.5); }
-.date-dd-icon { font-size: 0.9rem; }
-.date-dd-btn svg { opacity: 0.5; }
-.date-dd-menu {
-  position: absolute; top: calc(100% + 4px); left: 0; z-index: 50;
-  min-width: 180px; max-height: 280px; overflow-y: auto;
+.date-picker-input:hover { border-color: hsl(var(--primary) / 0.5); }
+.dpi-value { font-weight: 600; letter-spacing: 0.5px; }
+.dpi-icon { opacity: 0.5; flex-shrink: 0; }
+
+.dp-dropdown {
+  position: absolute; top: calc(100% + 6px); left: 0; z-index: 50;
   background: hsl(var(--card)); border: 1px solid hsl(var(--border));
-  border-radius: 10px; box-shadow: 0 8px 24px rgba(0,0,0,.14);
-  padding: 5px; display: flex; flex-direction: column; gap: 1px;
+  border-radius: 12px; box-shadow: 0 10px 30px rgba(0,0,0,.16);
+  padding: 8px; min-width: 200px;
 }
-.date-dd-opt {
-  display: flex; align-items: center; justify-content: space-between;
-  gap: 10px; width: 100%; padding: 7px 10px;
-  border: none; border-radius: 6px; background: transparent;
-  cursor: pointer; font-family: var(--font-mono); font-size: 0.8rem;
+.dp-grid {
+  display: grid; grid-template-columns: repeat(3, 1fr); gap: 3px;
+  max-height: 260px; overflow-y: auto;
+}
+.dp-item {
+  display: flex; align-items: center; justify-content: space-between; gap: 4px;
+  width: 100%; padding: 7px 8px; border: none; border-radius: 8px;
+  background: transparent; cursor: pointer;
+  font-family: var(--font-mono); font-size: 0.76rem;
   color: hsl(var(--foreground)); text-align: left; transition: all 0.12s;
 }
-.date-dd-opt:hover { background: hsl(var(--primary) / 0.08); }
-.date-dd-opt.active {
-  background: hsl(var(--primary) / 0.12);
+.dp-item:hover { background: hsl(var(--primary) / 0.08); }
+.dp-item.dp-active {
+  background: hsl(var(--primary) / 0.14);
   color: hsl(var(--primary)); font-weight: 700;
 }
-.dd-opt-count {
-  font-size: 0.7rem; opacity: 0.55; font-weight: 400;
+.dp-badge {
+  font-size: 0.68rem; opacity: 0.5; font-weight: 500;
+  background: hsl(var(--secondary)); padding: 1px 5px; border-radius: 4px;
 }
 .report-stats { display: grid; grid-template-columns: repeat(4, 1fr); gap: 12px; margin-bottom: 14px; }
 .rs-card {

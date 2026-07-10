@@ -134,7 +134,8 @@ function DailyExpandableList({ rows, onCodeClick }) {
     <div className="daily-list">
       {rows.map((row, i) => {
         const code = String(row['股票代码'] ?? row['代码'] ?? '--').padStart(6, '0')
-        const name = row['股票名称'] ?? '--'
+        const name = (row['股票名称'] ?? '--').trim()
+        const displayName = (!name || name === '--' || name.toLowerCase() === 'nan') ? '--' : name
         const score = num(row, '综合评分')
         const strategies = row['来源策略'] ?? '--'
         const stratList = strategies.split('/').map(s => s.trim()).filter(Boolean)
@@ -170,7 +171,7 @@ function DailyExpandableList({ rows, onCodeClick }) {
                 <span className="daily-expander">{isOpen ? '▼' : '▶'}</span>
                 {rankBadge(i)}
                 <span className="daily-code" onClick={(e) => { e.stopPropagation(); onCodeClick(code) }}>{code}</span>
-                <span className="daily-name">{name}</span>
+                <span className="daily-name">{displayName}</span>
                 {/* 策略彩色标签 */}
                 <div className="strat-badges">
                   {stratList.map((s, si) => {
@@ -432,6 +433,15 @@ function App() {
 
   useEffect(() => { loadDailyBacktest() }, [])
   useEffect(() => { loadDailyDates(); reloadArtifacts() }, [])
+  // 日期选择器：点击外部关闭
+  useEffect(() => {
+    if (!dateOpen) return
+    const handler = (e) => {
+      if (!e.target.closest('.date-picker-wrap')) setDateOpen(false)
+    }
+    document.addEventListener('mousedown', handler)
+    return () => document.removeEventListener('mousedown', handler)
+  }, [dateOpen])
 
   const isRunning = scanPhase !== null
 
@@ -1548,32 +1558,37 @@ function App() {
                     </div>
                     <div className="report-tag">
                       {dailyDates.length > 0 ? (
-                        <div className="date-dropdown">
-                          <button
-                            className="date-dd-btn"
+                        <div className="date-picker-wrap">
+                          <div
+                            className="date-picker-input"
                             onClick={() => setDateOpen(o => !o)}
-                            type="button"
                           >
-                            <span className="date-dd-icon">📅</span>
-                            <span>{(dailyDate ?? fileDate).slice(4,6)}-{(dailyDate ?? fileDate).slice(6)}</span>
-                            <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"><path d="m6 9 6 6 6-6"/></svg>
-                          </button>
+                            <span className="dpi-value">
+                              {(dailyDate ?? fileDate).slice(0,4)}/{(dailyDate ?? fileDate).slice(4,6)}/{(dailyDate ?? fileDate).slice(6)}
+                            </span>
+                            <svg className="dpi-icon" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                              <rect x="3" y="4" width="18" height="18" rx="2" ry="2"/><line x1="16" y1="2" x2="16" y2="6"/><line x1="8" y1="2" x2="8" y2="6"/>
+                              <line x1="3" y1="10" x2="21" y2="10"/>
+                            </svg>
+                          </div>
                           {dateOpen && (
-                            <div className="date-dd-menu">
-                              {dailyDates.map((it) => {
-                                const active = (dailyDate ?? fileDate) === it.date
-                                return (
-                                  <button
-                                    key={it.date}
-                                    type="button"
-                                    className={`date-dd-opt${active ? ' active' : ''}`}
-                                    onClick={() => { setDailyDate(it.date); setDateOpen(false); reloadArtifacts(it.date) }}
-                                  >
-                                    <span>{it.date.slice(4,6)}-{it.date.slice(6)}</span>
-                                    {it.total != null ? <span className="dd-opt-count">{it.total}只</span> : null}
-                                  </button>
-                                )
-                              })}
+                            <div className="dp-dropdown">
+                              <div className="dp-grid">
+                                {dailyDates.map((it) => {
+                                  const active = (dailyDate ?? fileDate) === it.date
+                                  return (
+                                    <button
+                                      key={it.date}
+                                      type="button"
+                                      className={`dp-item${active ? ' dp-active' : ''}`}
+                                      onClick={() => { setDailyDate(it.date); setDateOpen(false); reloadArtifacts(it.date) }}
+                                    >
+                                      <span>{it.date.slice(0,4)}/{it.date.slice(4,6)}/{it.date.slice(6)}</span>
+                                      <span className="dp-badge">{it.total ?? 0}</span>
+                                    </button>
+                                  )
+                                })}
+                              </div>
                             </div>
                           )}
                         </div>
