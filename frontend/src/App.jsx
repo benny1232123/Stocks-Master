@@ -58,11 +58,15 @@ function DailyExpandableList({ rows, onCodeClick }) {
   return (
     <div className="daily-list">
       {rows.map((row, i) => {
-        const code = row['股票代码'] ?? row['代码'] ?? '--'
+        const code = String(row['股票代码'] ?? row['代码'] ?? '--').padStart(6, '0')
         const name = row['股票名称'] ?? '--'
         const score = num(row, '综合评分')
         const strategies = row['来源策略'] ?? '--'
         const buyPrice = num(row, '建议买入价')
+        const latestP = num(row, '最新价')
+        const stopP = num(row, '止损价(下轨)')
+        const tpP = num(row, '止盈价(上轨)')
+        const ma20V = num(row, 'MA20')
         const isOpen = expanded.has(i)
         return (
           <div key={i} className={cn('daily-item', isOpen && 'open')}>
@@ -83,10 +87,41 @@ function DailyExpandableList({ rows, onCodeClick }) {
                 <div className="dd-cell"><span>命中策略数</span><strong>{row['命中策略数'] ?? '--'}</strong></div>
                 <div className="dd-cell"><span>建议仓位%</span><strong>{row['建议仓位%'] != null ? `${Number(row['建议仓位%'])}%` : '--'}</strong></div>
                 <div className="dd-cell"><span>建议金额</span><strong>{row['建议金额'] != null ? `¥${Number(row['建议金额']).toFixed(0)}` : '--'}</strong></div>
-                <div className="dd-cell"><span>最新价</span><strong>{row['最新价'] != null ? Number(row['最新价']).toFixed(2) : '--'}</strong></div>
-                <div className="dd-cell"><span>止损价(下轨)</span><strong>{row['止损价(下轨)'] != null ? Number(row['止损价(下轨)']).toFixed(2) : '--'}</strong></div>
-                <div className="dd-cell"><span>止盈价(上轨)</span><strong>{row['止盈价(上轨)'] != null ? Number(row['止盈价(上轨)']).toFixed(2) : '--'}</strong></div>
-                <div className="dd-cell"><span>MA20</span><strong>{row['MA20'] != null ? Number(row['MA20']).toFixed(2) : '--'}</strong></div>
+                <div className="dd-cell"><span>最新价</span><strong className={buyPrice > 0 && latestP > buyPrice ? 'text-up' : buyPrice > 0 && latestP < buyPrice ? 'text-down' : ''}>{latestP != null && !isNaN(latestP) ? latestP.toFixed(2) : '--'}</strong></div>
+                <div className="dd-cell"><span>建议买入价</span><strong>{!isNaN(buyPrice) ? buyPrice.toFixed(2) : '--'}</strong></div>
+                <div className="dd-cell"><span>止损价(下轨)</span><strong className={stopP != null && !isNaN(stopP) ? 'text-down' : ''}>{stopP != null && !isNaN(stopP) ? stopP.toFixed(2) : '--'}</strong></div>
+                <div className="dd-cell"><span>止盈价(上轨)</span><strong className={tpP != null && !isNaN(tpP) ? 'text-up' : ''}>{tpP != null && !isNaN(tpP) ? tpP.toFixed(2) : '--'}</strong></div>
+                <div className="dd-cell"><span>MA20</span><strong>{ma20V != null && !isNaN(ma20V) ? ma20V.toFixed(2) : '--'}</strong></div>
+                {/* 智能解读行 */}
+                <div className="daily-insight">
+                  {!isNaN(latestP) && !isNaN(buyPrice) && buyPrice > 0 ? (
+                    <span className={cn('di-tag', latestP >= buyPrice ? 'di-profit' : 'di-loss')}>
+                      相对买入价 {latestP >= buyPrice ? `+${((latestP/buyPrice-1)*100).toFixed(2)}% 盈` : `${((latestP/buyPrice-1)*100).toFixed(2)}% 亏`}
+                    </span>
+                  ) : null}
+                  {!isNaN(latestP) && !isNaN(stopP) && stopP > 0 ? (
+                    <span className={cn('di-tag', (latestP - stopP) / stopP * 100 < 3 ? 'di-danger' : '')}>
+                      距止损 {((latestP - stopP) / stopP * 100).toFixed(2)}%
+                    </span>
+                  ) : null}
+                  {!isNaN(latestP) && !isNaN(tpP) && tpP > 0 ? (
+                    <span className="di-tag">
+                      距止盈 +${((tpP - latestP) / latestP * 100).toFixed(2)}%
+                    </span>
+                  ) : null}
+                  {!isNaN(stopP) && !isNaN(tpP) && stopP > 0 && tpP > 0 ? (
+                    <span className="di-tag">盈亏比 {(tpP / stopP - 1).toFixed(2)}:1</span>
+                  ) : null}
+                  {/* 综合风险评级 */}
+                  {(() => {
+                    const toStop = (!isNaN(latestP) && !isNaN(stopP) && stopP > 0) ? (latestP - stopP) / stopP * 100 : null
+                    if (toStop != null && toStop < 2) return <span className="di-risk di-danger">🔴 极高风险 — 接近止损位</span>
+                    if (toStop != null && toStop < 5) return <span className="di-risk di-warn">⚠️ 高风险 — 止损较近</span>
+                    if (toStop != null && toStop < 10) return <span className="di-risk di-caution">🟡 中等风险</span>
+                    if (toStop != null) return <span className="di-risk di-safe">🟢 低风险 — 止损空间充足</span>
+                    return null
+                  })()}
+                </div>
               </div>
             ) : null}
           </div>
@@ -952,41 +987,71 @@ function App() {
                         const distHi = M.dist_to_upper_pct != null ? Number(M.dist_to_upper_pct) : null
                         const bw = M.bandwidth != null ? Number(M.bandwidth) : null
 
-                        // RSI 解读
+                        // RSI 解读 —— 带具体数值区间和操作建议
                         const rsiTxt = rsi == null ? '--'
-                          : rsi > 70 ? `超买区（${rsi.toFixed(1)}），短期回调风险较高`
-                          : rsi < 30 ? `超卖区（${rsi.toFixed(1)}），可能存在反弹机会`
-                          : rsi > 55 ? `偏强（${rsi.toFixed(1)}），多头略占优`
-                          : rsi < 45 ? `偏弱（${rsi.toFixed(1)}），空头略占优`
-                          : `中性（${rsi.toFixed(1)}），多空均衡`
-                        // MACD 解读
+                          : rsi > 80 ? `严重超买（${rsi.toFixed(1)}），短期回调概率极高，建议减仓或观望`
+                          : rsi > 70 ? `超买区（${rsi.toFixed(1)}），动能偏强但接近高位，追高需谨慎`
+                          : rsi < 20 ? `严重超卖（${rsi.toFixed(1)}），超卖极值区域，可关注反弹机会`
+                          : rsi < 30 ? `超卖区（${rsi.toFixed(1)}），卖压释放充分，逢低布局时机`
+                          : rsi > 55 ? `偏强（${rsi.toFixed(1)}），多头略占优，持股待涨`
+                          : rsi < 45 ? `偏弱（${rsi.toFixed(1)}），空头主导，不宜急于入场`
+                          : `中性震荡（${rsi.toFixed(1)}），等待方向突破`
+                        // MACD 解读 —— 结合柱值大小、零轴位置、给出具体建议
+                        const macdAbs = macdH != null ? Math.abs(macdH) : 0
+                        const macdStrength = macdAbs > 0.15 ? '强' : macdAbs > 0.05 ? '中' : macdAbs > 0.01 ? '弱' : '极弱'
                         const macdTxt = (dif == null || dea == null) ? '--'
-                          : dif > dea && macdH > 0 ? `金叉确认，DIF(${dif.toFixed(2)})>DEA(${dea.toFixed(2)})，红柱放大`
-                          : dif > dea && macdH <= 0 ? `多头趋势但动能减弱，DIF>DEA 柱转绿/平`
-                          : dif < dea && macdH < 0 ? `死叉确认，DIF(${dif.toFixed(2)})<DEA(${dea.toFixed(2)})，绿柱`
-                          : dif < dea && macdH >= 0 ? `空头趋势但动能衰减，DIF<DEA 柱转红/平`
-                          : `DIF≈DEA，方向待选择`
-                        // KDJ 解读
+                          : dif > dea && macdH > 0 ? `金叉+红柱（柱值${macdH.toFixed(3)}，${macdStrength}）↑ DIF>${dea.toFixed(3)}，多头加速中，可持仓`
+                          : dif > dea && macdH <= 0 ? `多头但柱转绿（柱值${macdH.toFixed(3)}）⚠ DIF>DEA 但动能减弱，警惕拐头`
+                          : dif < dea && macdH < 0 ? `死叉+绿柱（柱值${macdH.toFixed(3)}，${macdStrength}）↓ DIF<${dea.toFixed(3)}，空头主导，宜观望`
+                          : dif < dea && macdH >= 0 ? `空头但柱转红（柱值${macdH.toFixed(3)}）⚠ DIF<DEA 但绿柱收窄，可能有反抽`
+                          : `DIF≈DEA（差值仅${Math.abs(dif-dea).toFixed(4)}），方向选择中`
+                        // KDJ 解读 —— 结合J值极端程度、KD间距、给出级别
+                        const kdjGap = kV != null && dV != null ? Math.abs(kV - dV).toFixed(1) : '--'
                         const kdjTxt = (kV == null || dV == null) ? '--'
-                          : jV != null && jV > 100 ? `极端超买 J=${jV.toFixed(1)}>100，注意回落`
-                          : jV != null && jV < 0 ? `极端超卖 J=${jV.toFixed(1)}<0，可能反弹`
-                          : kV > dV ? `K(${kV.toFixed(1)})>D(${dV.toFixed(1)}) 金叉形态，偏多`
-                          : kV < dV ? `K(${kV.toFixed(1)})<D(${dV.toFixed(1)}) 死叉形态，偏空`
-                          : `K≈D 震荡缠绕`
-                        // 均线解读
+                          : jV != null && jV > 110 ? `🔴 极端超买 J=${jV.toFixed(1)}>100，KD差${kdjGap}，强烈建议回避`
+                          : jV != null && jV > 100 ? `⚠️ 超买警戒 J=${jV.toFixed(1)}，短线获利盘重，注意止盈`
+                          : jV != null && jV < -10 ? `🟢 极端超卖 J=${jV.toFixed(1)}<0，KD差${kdjGap}，超跌反弹窗口`
+                          : jV != null && jV < 0 ? `⚠️ 超卖区 J=${jV.toFixed(1)}，卖压过度释放，可轻仓试探`
+                          : kV > dV + 5 ? `金叉偏强 K>D（差+${kdjGap}），J=${jV?.toFixed(1) ?? '--'}，短线偏多`
+                          : kV > dV ? `金叉形态 K>D（差+${kdjGap}），J=${jV?.toFixed(1) ?? '--'}，温和偏多`
+                          : kV + 5 < dV ? `死叉偏弱 K<D（差-${kdjGap}），J=${jV?.toFixed(1) ?? '--'}，短线承压`
+                          : kV < dV ? `死叉形态 K<D（差-${kdjGap}），J=${jV?.toFixed(1) ?? '--'}，偏空`
+                          : `K≈D 缠绕（K${kV.toFixed(1)}/D${dV.toFixed(1)}），方向不明`
+                        // 均线解读 —— 加入间距百分比、趋势强度、具体价位
+                        const ma5_10_gap = (ma5 != null && ma10 != null) ? ((ma5 / ma10 - 1) * 100).toFixed(2) : '--'
+                        const ma5_20_gap = (ma5 != null && ma20 != null) ? ((ma5 / ma20 - 1) * 100).toFixed(2) : '--'
                         const maTxt = (ma5 == null || ma10 == null || ma20 == null) ? '--'
-                          : ma5 > ma10 && ma10 > ma20 && ma20 > (ma60 ?? 0) ? `完美多头排列 ↑ 短中长期均线全部向上发散`
-                          : ma5 < ma10 && ma10 < ma20 && (ma20 < (ma60 ?? 999)) ? `空头排列 ↓ 均线依次向下压制`
-                          : ma5 > ma20 ? `短期偏强，MA5(${ma5.toFixed(2)})在MA20(${ma20.toFixed(2)})上方`
-                          : ma5 < ma20 ? `短期偏弱，MA5(${ma5.toFixed(2)})在MA20(${ma20.toFixed(2)})下方`
-                          : `均线纠缠，方向不明等待突破`
-                        // 价格位置解读
+                          : (() => {
+                            if (ma5 > ma10 && ma10 > ma20 && ma20 > (ma60 ?? 0)) {
+                              const extra = (ma60 != null && ma20 > ma60) ? '>MA60' : ''
+                              return '完美多头排列 ↑ MA5>MA10(+' + ma5_10_gap + '%)>MA20(+' + ma5_20_gap + '%' + extra + ')，趋势强劲'
+                            }
+                            if (ma5 < ma10 && ma10 < ma20 && (ma20 < (ma60 ?? 999))) {
+                              const extra = (ma60 != null && ma20 < ma60) ? '<MA60' : ''
+                              return '空头排列 ↓ MA5<MA10(' + ma5_10_gap + '%)<MA20(' + ma5_20_gap + '%' + extra + ')，全线压制'
+                            }
+                            if (ma5 > ma20) {
+                              const sub = (ma5 > ma10) ? ',MA5>MA10' : '但MA5<MA10'
+                              return '短期偏强 ↑ MA5在MA20上方(+' + ma5_20_gap + '%)' + sub + '，短线有支撑'
+                            }
+                            const sub2 = (ma5 < ma10) ? ',且MA5<MA10' : ''
+                            return '短期偏弱 ↓ MA5在MA20下方(' + ma5_20_gap + '%)' + sub2 + '，上方均线形成压力'
+                          })()
+                        // 价格位置解读 —— 加入盈亏比/风险收益评估
                         const posTxt = (distLo == null && lower == null) ? '--'
-                          : close != null && lower != null && close < lower ? `已跌破下轨（${(close/lower*100-100).toFixed(2)}%），超卖信号`
-                          : distLo != null && distLo < 3 ? `接近下轨（距${distLo.toFixed(2)}%），支撑位附近`
-                          : distHi != null && distHi > -3 ? `接近上轨（距${Math.abs(distHi).toFixed(2)}%），压力位附近`
-                          : close != null && upper != null && close > upper ? `已突破上轨（${((close/upper-1)*100).toFixed(2)}%），强势但注意回调`
-                          : `位于布林带中部区间${bw != null ? `，带宽${bw.toFixed(1)}%${bw < 8 ? ' 收窄→变盘前兆' : ''}` : ''}`
+                          : close != null && lower != null && close < lower
+                            ? `⚠ 已跌破下轨（${(close/lower*100-100).toFixed(2)}%），超卖信号，但需警惕趋势性破位`
+                          : distLo != null && distLo < 2
+                            ? `🔴 极近下轨（仅距${distLo.toFixed(2)}%），止损风险极高，若未持仓可关注反弹`
+                          : distLo != null && distLo < 5
+                            ? `接近下轨支撑（距${distLo.toFixed(2)}%），布林下轨${lower?.toFixed(2) ?? '--'}附近有承接`
+                          : distHi != null && distHi > -2
+                            ? `🟢 极近上轨（距上轨仅${Math.abs(distHi).toFixed(2)}%），注意止盈，上轨${upper?.toFixed(2) ?? '--'}`
+                          : distHi != null && distHi > -5
+                            ? `接近上轨压力（距${Math.abs(distHi).toFixed(2)}%），上轨${upper?.toFixed(2) ?? '--'}可能受阻`
+                          : close != null && upper != null && close > upper
+                            ? `已突破上轨（+${((close/upper-1)*100).toFixed(2)}%），强势突破但谨防假突破回踩`
+                          : `位于布林带中部区间，距下轨${distLo!=null?`+${distLo.toFixed(2)}%`:'--'} / 距上轨${distHi!=null?`${distHi.toFixed(2)}%`:'--'}${bw != null ? ` · 带宽${bw.toFixed(1)}%${bw < 8 ? ' ⚠收窄→变盘在即' : bw > 25 ? ' 📐扩张→波动加大' : ''}` : ''}`
                         // 带宽颜色
                         const bwWarn = bw != null && bw < 8
 
@@ -1383,7 +1448,7 @@ function App() {
                       <div className="section-head"><h3>交易明细</h3><span>共 {dailyBacktest.trades.length} 笔</span></div>
                       {dailyBacktest.trades.slice(0, 10).map((t, i) => (
                         <div key={i} className="table-row">
-                          <span>{t.code}</span>
+                          <span>{String(t.code).padStart(6, '0')}</span>
                           <strong>{t.buy_date} → {t.sell_date}</strong>
                           <em className={cn(t.return_pct >= 0 ? 'text-up' : 'text-down')}>
                             {t.return_pct >= 0 ? '+' : ''}{t.return_pct}%
@@ -1466,7 +1531,7 @@ function App() {
                       <div className="section-head"><h3>交易明细</h3><span>共 {backtestTrades.length} 笔</span></div>
                       {backtestTrades.slice(0, 10).map((t, i) => (
                         <div key={i} className="table-row">
-                          <span>{t.code}</span>
+                          <span>{String(t.code).padStart(6, '0')}</span>
                           <strong>{t.buy_date} → {t.sell_date}</strong>
                           <em className={cn(t.return_pct >= 0 ? 'text-up' : 'text-down')}>
                             {t.return_pct >= 0 ? '+' : ''}{t.return_pct}%

@@ -588,6 +588,45 @@
   font-variant-numeric: tabular-nums;
 }
 
+/* ── Daily Insight 智能解读行 ── */
+.daily-insight {
+  grid-column: 1 / -1;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  padding-top: 10px;
+  border-top: 1px dashed hsl(var(--border) / 0.5);
+  margin-top: 4px;
+}
+.di-tag {
+  display: inline-flex;
+  align-items: center;
+  padding: 3px 10px;
+  border-radius: 6px;
+  font-family: var(--font-mono);
+  font-size: 0.72rem;
+  font-weight: 600;
+  background: hsl(var(--surface-2));
+  color: hsl(var(--muted));
+  white-space: nowrap;
+}
+.di-tag.di-profit { color: var(--up); background: hsla(3, 80%, 50%, 0.08); }
+.di-tag.di-loss { color: var(--down); background: hsla(157, 81%, 37%, 0.08); }
+.di-tag.di-danger { color: #E5484D; background: hsla(0, 80%, 55%, 0.1); font-weight: 700; }
+.di-risk {
+  display: inline-flex;
+  align-items: center;
+  padding: 3px 10px;
+  border-radius: 6px;
+  font-size: 0.74rem;
+  font-weight: 600;
+  white-space: nowrap;
+}
+.di-risk.di-danger { color: #E5484D; background: hsla(0, 80%, 55%, 0.08); }
+.di-risk.di-warn { color: #F59E0B; background: hsla(38, 92%, 50%, 0.08); }
+.di-risk.di-caution { color: #3B82F6; background: hsla(229, 87%, 56%, 0.06); }
+.di-risk.di-safe { color: #30A46C; background: hsla(157, 81%, 37%, 0.06); }
+
 /* ── 邮件式日报摘要 ── */
 .report-head {
   display: flex; align-items: center; justify-content: space-between;
