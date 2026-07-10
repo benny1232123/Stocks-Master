@@ -69,6 +69,61 @@ function DailyExpandableList({ rows, onCodeClick }) {
     return { label: 'D', cls: 'ds-d', bar: 20 }
   }
 
+  // 多维评分构成：用每行已有字段（买入价/止损/止盈/MA20/策略）推导 5 个可解释子维度 + 加权综合分。
+  // 相比后端单一「综合评分」数字，这里把评级拆开，让用户看到每个维度如何贡献，避免「黑箱一个数」。
+  const scoreBreakdown = (row) => {
+    const clamp = (v, lo = 0, hi = 100) => Math.max(lo, Math.min(hi, v))
+    const buy = num(row, '建议买入价')
+    const latest = num(row, '最新价')
+    const lower = num(row, '止损价(下轨)')
+    const tp = num(row, '止盈价(上轨)')
+    const ma20 = num(row, 'MA20')
+    const stratStr = String(row['来源策略'] ?? '')
+    const hit = Number(row['命中策略数'] ?? stratStr.split('/').filter(Boolean).length) || 1
+    const hasRS = stratStr.includes('Relativity')
+
+    // 1) 超卖深度：价格越贴近/跌破下轨，反弹赔率越好
+    let oversold = 50
+    if (!isNaN(buy) && !isNaN(lower) && lower > 0) {
+      const dist = (buy - lower) / lower * 100
+      if (dist <= 0) oversold = 100
+      else if (dist <= 5) oversold = 100 - dist * 4        // 100 → 80
+      else if (dist <= 15) oversold = 80 - (dist - 5) * 4  // 80 → 40
+      else oversold = Math.max(20, 40 - (dist - 15) * 1.5)
+    }
+    // 2) 盈亏比：止盈空间 / 止损空间
+    let rr = 50
+    if (!isNaN(buy) && !isNaN(lower) && !isNaN(tp) && lower > 0 && tp > lower) {
+      const denom = buy - lower
+      if (denom > 0) {
+        const ratio = (tp - buy) / denom
+        rr = ratio >= 3 ? 100 : ratio >= 2 ? 80 : ratio >= 1.5 ? 65 : ratio >= 1 ? 45 : 25
+      }
+    }
+    // 3) 趋势强度：现价相对 MA20（站上均线上方更稳）
+    let trend = 50
+    if (!isNaN(latest) && !isNaN(ma20) && ma20 > 0) {
+      const p = (latest - ma20) / ma20 * 100
+      trend = p >= 0 ? clamp(70 + p * 2, 70, 92) : clamp(50 + p * 2, 30, 70)
+    }
+    // 4) 策略共振：命中策略越多越可信
+    const reso = hit >= 3 ? 96 : hit === 2 ? 85 : 50
+    // 5) 相对强弱：跑赢指数（Relativity）额外加分
+    const rs = hasRS ? 88 : 60
+
+    const composite = Math.round(
+      oversold * 0.30 + rr * 0.25 + trend * 0.20 + reso * 0.15 + rs * 0.10
+    )
+    const rows = [
+      { key: '超卖深度', val: Math.round(oversold), hint: '贴近下轨' },
+      { key: '盈亏比', val: Math.round(rr), hint: '止盈/止损' },
+      { key: '趋势强度', val: Math.round(trend), hint: '价 vs MA20' },
+      { key: '策略共振', val: Math.round(reso), hint: `${hit} 策略命中` },
+      { key: '相对强弱', val: Math.round(rs), hint: hasRS ? '跑赢指数' : '仅价格信号' },
+    ]
+    return [rows, composite]
+  }
+
   const toggle = (i) => setExpanded((prev) => {
     const next = new Set(prev)
     if (next.has(i)) next.delete(i)
@@ -95,6 +150,8 @@ function DailyExpandableList({ rows, onCodeClick }) {
 
         const sg = scoreGrade(score)
         const sc = getStratColor(primaryStrat)
+        const [sbRows, sbComposite] = scoreBreakdown(row)
+        const sbCls = sbComposite >= 80 ? 'sb-excellent' : sbComposite >= 60 ? 'sb-good' : sbComposite >= 40 ? 'sb-mid' : 'sb-weak'
         const pnlPct = (!isNaN(latestP) && !isNaN(buyPrice) && buyPrice > 0) ? ((latestP / buyPrice - 1) * 100) : NaN
         const isOpen = expanded.has(i)
 
@@ -191,6 +248,24 @@ function DailyExpandableList({ rows, onCodeClick }) {
                     if (toStop != null) return <span className="di-risk di-safe">🟢 低风险 — 止损空间充足</span>
                     return null
                   })()}
+                </div>
+                {/* 多维评分构成 */}
+                <div className="score-breakdown">
+                  <div className="sb-head">
+                    <span className="sb-title">评分构成（多维推导）</span>
+                    <span className={cn('sb-composite', sbCls)}>加权综合 {sbComposite}</span>
+                  </div>
+                  {sbRows.map((d) => {
+                    const vCls = d.val >= 80 ? 'sb-excellent' : d.val >= 60 ? 'sb-good' : d.val >= 40 ? 'sb-mid' : 'sb-weak'
+                    return (
+                      <div className="sb-row" key={d.key}>
+                        <span className="sb-label">{d.key}</span>
+                        <span className="sb-track"><span className={cn('sb-fill', vCls)} style={{ width: `${d.val}%` }} /></span>
+                        <span className="sb-val">{d.val}</span>
+                        <span className="sb-hint">{d.hint}</span>
+                      </div>
+                    )
+                  })}
                 </div>
               </div>
             ) : null}
