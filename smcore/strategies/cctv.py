@@ -14,6 +14,7 @@ import akshare as ak
 import pandas as pd
 
 from smcore.config.defaults import PROJECT_ROOT, STOCK_DATA_DIR
+from smcore.data.kline import fetch_daily_k
 
 
 TOP_N = 15
@@ -742,20 +743,17 @@ def _next_day_return(code, signal_date):
     try:
         start = datetime.datetime.strptime(signal_date, "%Y%m%d")
         end = start + datetime.timedelta(days=20)
-        hist = _call_with_timeout(
-            lambda: ak.stock_zh_a_hist(
-                symbol=str(code),
-                period="daily",
-                start_date=start.strftime("%Y%m%d"),
-                end_date=end.strftime("%Y%m%d"),
-                adjust="qfq",
-            ),
-            AK_API_TIMEOUT,
+        # 用 fetch_daily_k（东财-free：优先 baostock，回退新浪）替代东财 stock_zh_a_hist
+        df = fetch_daily_k(
+            code,
+            start.strftime("%Y-%m-%d"),
+            end.strftime("%Y-%m-%d"),
+            adjust="qfq",
         )
-        if hist is None or len(hist) < 2:
+        if df is None or len(df) < 2:
             return None
-        c0 = float(hist.iloc[0]["收盘"])
-        c1 = float(hist.iloc[1]["收盘"])
+        c0 = float(df.iloc[0]["close"])
+        c1 = float(df.iloc[1]["close"])
         if c0 == 0:
             return None
         return (c1 - c0) / c0

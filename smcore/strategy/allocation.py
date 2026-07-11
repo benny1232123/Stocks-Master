@@ -31,7 +31,7 @@ def normalize_weight_map(weights: dict) -> dict:
 
     total = sum(normalized.values())
     if total <= 0:
-        return {"boll": 40, "theme": 25, "cctv": 10, "relativity": 15, "cash": 10}
+        return {"boll": 35, "theme": 20, "cctv": 8, "relativity": 20, "momentum": 17, "cash": 0}
 
     scaled = {key: int(round(val * 100.0 / total)) for key, val in normalized.items()}
     delta = 100 - sum(scaled.values())
@@ -82,37 +82,41 @@ def build_strategy_allocation(regime, *, boll_rows_count, theme_rows_count, has_
     """
     if regime == "趋势上行":
         base_weights = {
-            "theme": env_int_percent("ALLOC_UP_THEME", 35),
-            "cctv": env_int_percent("ALLOC_UP_CCTV", 15),
-            "boll": env_int_percent("ALLOC_UP_BOLL", 25),
-            "relativity": env_int_percent("ALLOC_UP_RELATIVITY", 20),
+            "theme": env_int_percent("ALLOC_UP_THEME", 30),
+            "cctv": env_int_percent("ALLOC_UP_CCTV", 10),
+            "boll": env_int_percent("ALLOC_UP_BOLL", 20),
+            "relativity": env_int_percent("ALLOC_UP_RELATIVITY", 15),
+            "momentum": env_int_percent("ALLOC_UP_MOMENTUM", 20),
             "cash": env_int_percent("ALLOC_UP_CASH", 5),
         }
-        priority_line = "- 执行优先级: 题材热度确认 > Boll回踩确认 > Relativity 强势过滤"
+        priority_line = "- 执行优先级: 题材热度确认 > 动量强势确认 > Boll回踩确认 > Relativity 强弱过滤"
     elif regime == "下行防御":
         base_weights = {
-            "cash": env_int_percent("ALLOC_DOWN_CASH", 60),
+            "cash": env_int_percent("ALLOC_DOWN_CASH", 55),
             "boll": env_int_percent("ALLOC_DOWN_BOLL", 25),
             "relativity": env_int_percent("ALLOC_DOWN_RELATIVITY", 10),
             "theme": env_int_percent("ALLOC_DOWN_THEME", 5),
             "cctv": env_int_percent("ALLOC_DOWN_CCTV", 0),
+            "momentum": env_int_percent("ALLOC_DOWN_MOMENTUM", 5),
         }
-        priority_line = "- 执行优先级: 先控回撤，再做小仓位试错；题材策略明显降权。"
+        priority_line = "- 执行优先级: 先控回撤，再做小仓位试错；题材策略明显降权，动量仅留少量强势仓。"
     else:
         theme_weight = 30 if theme_rows_count >= 20 else 25
         cctv_weight = 15 if has_cctv_hot else 10
-        boll_weight = 35 if boll_rows_count >= 10 else 40
-        relativity_weight = 20 if macro_level != "high" else 15
-        cash_weight = 100 - theme_weight - cctv_weight - boll_weight - relativity_weight
+        boll_weight = 30 if boll_rows_count >= 10 else 35
+        relativity_weight = 15 if macro_level != "high" else 12
+        momentum_weight = 15
+        cash_weight = 100 - theme_weight - cctv_weight - boll_weight - relativity_weight - momentum_weight
 
         base_weights = {
             "boll": env_int_percent("ALLOC_SIDE_BOLL", boll_weight),
             "theme": env_int_percent("ALLOC_SIDE_THEME", theme_weight),
             "cctv": env_int_percent("ALLOC_SIDE_CCTV", cctv_weight),
             "relativity": env_int_percent("ALLOC_SIDE_RELATIVITY", relativity_weight),
+            "momentum": env_int_percent("ALLOC_SIDE_MOMENTUM", momentum_weight),
             "cash": env_int_percent("ALLOC_SIDE_CASH", cash_weight),
         }
-        priority_line = "- 执行优先级: Boll定节奏，题材/CCTV找方向，Relativity做强弱确认。"
+        priority_line = "- 执行优先级: Boll定节奏，题材/CCTV找方向，Relativity做强弱确认，Momentum补强势维度。"
 
     normalized = normalize_weight_map(base_weights)
     final_weights = rebalance_for_signal_availability(
@@ -128,6 +132,7 @@ def build_strategy_allocation(regime, *, boll_rows_count, theme_rows_count, has_
         f"题材轮动 {final_weights.get('theme', 0)}% | "
         f"CCTV跟随 {final_weights.get('cctv', 0)}% | "
         f"Relativity过滤 {final_weights.get('relativity', 0)}% | "
+        f"Momentum强势 {final_weights.get('momentum', 0)}% | "
         f"现金观察 {final_weights.get('cash', 0)}%"
     )
 
@@ -137,6 +142,7 @@ def build_strategy_allocation(regime, *, boll_rows_count, theme_rows_count, has_
         f"题材 {format_position_units(final_weights.get('theme', 0))} | "
         f"CCTV {format_position_units(final_weights.get('cctv', 0))} | "
         f"Relativity {format_position_units(final_weights.get('relativity', 0))} | "
+        f"Momentum {format_position_units(final_weights.get('momentum', 0))} | "
         f"现金 {format_position_units(final_weights.get('cash', 0))}"
     )
 

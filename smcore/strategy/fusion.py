@@ -31,10 +31,12 @@ from smcore.utils.format import fmt_num, to_float
 
 # 各策略在综合评分中的权重（命中该策略即得基础分，多策略叠加加分）
 # 2026-07-11 重定：CCTV 为纯舆情噪声、与 10 日收益几乎零相关，权重从 15 降到 10；
-# Relativity 含指数相对强弱（抗跌/跟涨），比纯超卖更稳健，从 25 升到 30。
+# Relativity 含指数相对强弱（抗跌/跟涨），比纯超卖更稳健，从 25 升到 30；
+# Momentum 为新增「买强势」维度，权重暂定 25，待 measure_strategy_edge.py 测量后定稿。
 STRATEGY_BASE_SCORE = {
     "boll": 40,       # Boll 是主策略（超卖均值回归），命中即得 40 分
     "relativity": 30,  # 相对强弱命中 +30（指数相对强度，更稳健）
+    "momentum": 25,    # 动量/相对强度命中 +25（买中期上升趋势的强势股）
     "theme": 20,       # 题材命中 +20
     "cctv": 10,        # CCTV 舆情命中 +10（噪声大，降权）
 }
@@ -187,6 +189,25 @@ def _load_cctv_picks(date_yyyymmdd: str, *, max_stale_days: int = 3) -> tuple[di
     return picks, actual_date
 
 
+def _load_momentum_picks(date_yyyymmdd: str, *, max_stale_days: int = 3) -> tuple[dict, Optional[str]]:
+    """读取动量策略结果，返回 ({code: {...}}, 实际数据日期)。缺失则空（fail-soft）。"""
+    found = _find_strategy_csv("Stock-Selection-Momentum", date_yyyymmdd, max_stale_days=max_stale_days)
+    if not found:
+        return {}, None
+    path, actual_date = found
+    picks = {}
+    with path.open("r", encoding="utf-8-sig", newline="") as f:
+        for row in csv.DictReader(f):
+            code = format_stock_code(row.get("股票代码", ""))
+            if not code:
+                continue
+            picks[code] = {
+                "name": (row.get("股票名称") or "").strip(),
+                "momentum": to_float(row.get("动量分")),
+            }
+    return picks, actual_date
+
+
 def _compute_boll_levels(code: str) -> dict:
     """拉前复权 K 线算 Boll 水位（止损=下轨，止盈=上轨）。"""
     end = date.today()
@@ -229,16 +250,18 @@ def fuse_signals(
     relativity, rel_date = _load_relativity_picks(date_yyyymmdd, max_stale_days=max_stale_days)
     theme, theme_date = _load_theme_picks(date_yyyymmdd, max_stale_days=max_stale_days)
     cctv, cctv_date = _load_cctv_picks(date_yyyymmdd, max_stale_days=max_stale_days)
+    momentum, mom_date = _load_momentum_picks(date_yyyymmdd, max_stale_days=max_stale_days)
 
     source_dates = {
         "Boll": boll_date,
         "Relativity": rel_date,
         "Theme": theme_date,
         "CCTV": cctv_date,
+        "Momentum": mom_date,
     }
 
     # 合并所有代码
-    all_codes = set(boll) | set(relativity) | set(theme) | set(cctv)
+    all_codes = set(boll) | set(relativity) | set(theme) | set(cctv) | set(momentum)
     if not all_codes:
         return pd.DataFrame(), "今日无任何策略命中，无可操作清单。"
 
@@ -279,6 +302,10 @@ def fuse_signals(
             hit_strategies.append("CCTV")
             score += STRATEGY_BASE_SCORE["cctv"]
             name = cctv[code]["name"] or name
+        if code in momentum:
+            hit_strategies.append("Momentum")
+            score += STRATEGY_BASE_SCORE["momentum"]
+            name = momentum[code]["name"] or name
 
         # 多策略命中加分
         if len(hit_strategies) > 1:
@@ -291,6 +318,7 @@ def fuse_signals(
             "relativity": len(relativity),
             "theme": len(theme),
             "cctv": len(cctv),
+            "momentum": len(momentum),
         }
         # 取命中策略中权重最高者
         best_weight = 0
@@ -347,6 +375,7 @@ def fuse_signals(
         len(relativity),
         len(theme),
         len(cctv),
+        len(momentum),
         source_dates=source_dates,
         max_stale_days=max_stale_days,
     )
@@ -362,6 +391,7 @@ def _build_report_text(
     n_relativity: int,
     n_theme: int,
     n_cctv: int,
+    n_momentum: int = 0,
     *,
     source_dates: dict[str, Optional[str]] | None = None,
     max_stale_days: int = 3,
@@ -375,7 +405,7 @@ def _build_report_text(
 
     lines = [
         f"\n## 今日操作清单（{date_yyyymmdd}）",
-        f"- 信号来源: Boll {n_boll} | Relativity {n_relativity} | Theme {n_theme} | CCTV {n_cctv}",
+        f"- 信号来源: Boll {n_boll} | Relativity {n_relativity} | Momentum {n_momentum} | Theme {n_theme} | CCTV {n_cctv}",
         f"- 融合后候选: {len(df)} 只（按综合评分排序）",
     ]
     stale_notes = _format_source_date_notes(date_yyyymmdd, source_dates or {}, max_stale_days=max_stale_days)

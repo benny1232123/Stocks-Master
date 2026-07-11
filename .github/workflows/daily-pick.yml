@@ -97,6 +97,20 @@ jobs:
           python -m smcore.strategies.relativity --max-workers 1
           python scripts/strategy_cache.py push relativity $TODAY
 
+      - name: 策略5 动量/相对强度
+        id: momentum
+        continue-on-error: true
+        timeout-minutes: 25
+        env:
+          KLINE_BACKEND: akshare
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_KEY: ${{ secrets.SUPABASE_KEY }}
+        run: |
+          TODAY=$(date +%Y%m%d)
+          python scripts/strategy_cache.py pull momentum $TODAY && echo "skip=true" >> $GITHUB_OUTPUT && exit 0
+          python -m smcore.strategies.momentum
+          python scripts/strategy_cache.py push momentum $TODAY
+
       - name: 生成操作清单 + 上传 COS
         env:
           KLINE_BACKEND: akshare
@@ -137,6 +151,7 @@ jobs:
             stock_data/Stock-Selection-Relativity-*.csv
             stock_data/Stock-Selection-Ashare-Theme-Turnover-*.csv
             stock_data/CCTV-Sector-Stock-Pool-*.csv
+            stock_data/Stock-Selection-Momentum-*.csv
             stock_data/Daily-Action-List-*.csv
           retention-days: 30
 
