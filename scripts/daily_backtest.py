@@ -30,6 +30,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from smcore.artifacts import PROJECT_ROOT, STOCK_DATA_DIR
 from smcore.backtest import run_forward_signal_backtest
+from smcore.utils.code import format_stock_code
 
 STRAT_MAP = {
     "boll": "boll",
@@ -93,7 +94,7 @@ def _backtest_one(path: Path, sd: date, hold_days: int) -> dict | None:
         if len(df) > TOP_N:
             df = df.head(TOP_N)
         df = df.drop(columns=["_s"])
-    codes = [str(c).strip() for c in df["股票代码"].dropna().tolist() if str(c).strip()]
+    codes = [format_stock_code(c) for c in df["股票代码"].dropna().tolist() if format_stock_code(c)]
     if not codes:
         return None
 

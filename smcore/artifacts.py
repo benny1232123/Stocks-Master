@@ -98,6 +98,14 @@ def read_csv_file(path: str) -> pd.DataFrame:
     if not csv_path.exists():
         return pd.DataFrame()
     try:
-        return pd.read_csv(csv_path, encoding="utf-8-sig")
+        df = pd.read_csv(csv_path, encoding="utf-8-sig")
     except Exception:
         return pd.DataFrame()
+    # 股票代码列：pandas 会把 '000915' 推断成 int 915 丢前导零，导致下游
+    # fetch_daily_k('915') 拉不到数据、前端显示成 915。统一归一为 6 位字符串。
+    from smcore.utils.code import format_stock_code
+
+    for col in df.columns:
+        if "股票代码" in col or col == "代码":
+            df[col] = df[col].map(lambda x: format_stock_code(x))
+    return df

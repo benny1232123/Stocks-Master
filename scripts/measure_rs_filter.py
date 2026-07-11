@@ -27,6 +27,7 @@ os.environ.setdefault("KLINE_BACKEND", "baostock")
 from smcore.backtest.engine import run_forward_signal_backtest
 import smcore.data.kline as kline_mod
 from smcore.strategy.fusion import _passes_relative_strength_filter, _index_20d_return
+from smcore.utils.code import format_stock_code
 
 STUDY_DIR = "stock_data"
 TODAY = date.today()
@@ -45,7 +46,7 @@ def _signal_date_from_name(path: str) -> date | None:
 def _stock_20d_return(code: str, sd: date, cached_fetch) -> float | None:
     """信号日 sd 当日的近 20 日收益率。"""
     end = sd.strftime("%Y-%m-%d")
-    start = (sd - timedelta(days=25)).strftime("%Y-%m-%d")
+    start = (sd - timedelta(days=45)).strftime("%Y-%m-%d")
     df = cached_fetch(code, start, end)
     if df is None or len(df) < 22:
         return None
@@ -77,7 +78,7 @@ def main() -> int:
         df = pd.read_csv(f)
         sd_str = sd.strftime("%Y-%m-%d")
         for _, r in df.iterrows():
-            code = str(r.get("股票代码", "")).strip()
+            code = format_stock_code(r.get("股票代码", ""))
             if not code:
                 continue
             unique_codes.add(code)

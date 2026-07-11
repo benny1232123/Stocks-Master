@@ -29,6 +29,7 @@ os.environ.setdefault("KLINE_BACKEND", "baostock")
 
 from smcore.backtest.engine import run_forward_signal_backtest
 import smcore.data.kline as kline_mod
+from smcore.utils.code import format_stock_code
 
 STUDY_DIR = "stock_data"
 TODAY = date.today()
@@ -67,7 +68,7 @@ def main() -> int:
         df = pd.read_csv(f)
         sd_str = sd.strftime("%Y-%m-%d")
         for _, r in df.iterrows():
-            code = str(r.get("股票代码", "")).strip()
+            code = format_stock_code(r.get("股票代码", ""))
             if not code:
                 continue
             unique_codes.add(code)
