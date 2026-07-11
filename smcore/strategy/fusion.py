@@ -49,6 +49,13 @@ MULTI_HIT_BONUS = 5  # 每多命中一个策略额外 +5
 # 但剔除明显破位（如单日 -20%+ 的崩盘股），从信号层防尾部巨亏。
 TREND_GUARD_BELOW_MA20 = 0.12
 
+# 相对大盘强度过滤（针对根因：大盘涨、选出的超卖票仍跑输）。
+# 候选近 RS_LOOKBACK 日收益若跑输沪深300 同期收益超 RS_TOL，则剔除（除非该票本身是动量票）。
+# 动量票已要求 ret20>0 且 MA20 上行，豁免本过滤以免误杀强势股。
+RS_LOOKBACK = 20
+RS_TOL = 0.03
+RS_APPLY_TO_MOMENTUM = False
+
 
 def _passes_trend_guard(price, ma20) -> bool:
     """趋势守卫：价格远低于 MA20 则剔除（破位/下降通道）；数据缺失则保守保留。"""
@@ -94,6 +101,69 @@ def _detect_market_regime() -> str:
         return "震荡轮动"
     except Exception:
         return "震荡轮动"
+
+
+_HS300_CLOSE_CACHE: Optional[pd.Series] = None
+
+
+def _get_hs300_close() -> Optional[pd.Series]:
+    """缓存沪深300 收盘价序列（新浪指数，东财-free）。失败返回 None。"""
+    global _HS300_CLOSE_CACHE
+    if _HS300_CLOSE_CACHE is not None:
+        return _HS300_CLOSE_CACHE
+    try:
+        import akshare as ak
+        from smcore.data.kline import _call_with_timeout
+
+        df = _call_with_timeout(lambda: ak.stock_zh_index_daily(symbol="sh000300"), 30)
+        if df is None or len(df) < 22:
+            return None
+        close = pd.to_numeric(df["close"], errors="coerce")
+        dts = pd.to_datetime(df["date"], errors="coerce")
+        s = pd.Series(close.values.astype(float), index=dts)
+        s = s[~s.index.isna()].sort_index()
+        _HS300_CLOSE_CACHE = s
+        return s
+    except Exception:
+        return None
+
+
+def _index_20d_return(as_of_yyyymmdd: str) -> Optional[float]:
+    """沪深300 在 as_of_yyyymmdd 当日相对其前 RS_LOOKBACK 日的收益率。失败返回 None。"""
+    s = _get_hs300_close()
+    if s is None:
+        return None
+    try:
+        target = pd.Timestamp(as_of_yyyymmdd)
+    except Exception:
+        return None
+    prior = s.loc[:target]
+    if len(prior) < RS_LOOKBACK + 1:
+        return None
+    price_now = prior.values[-1]
+    price_prev = prior.values[-(RS_LOOKBACK + 1)]
+    if price_prev == 0:
+        return None
+    return price_now / price_prev - 1
+
+
+def _passes_relative_strength_filter(
+    hit_strategies: list[str],
+    stock_ret: Optional[float],
+    index_ret: Optional[float],
+    tol: float = RS_TOL,
+    apply_to_momentum: bool = RS_APPLY_TO_MOMENTUM,
+) -> bool:
+    """相对大盘强度过滤：跑输大盘超 tol 的候选剔除（动量票豁免）。
+
+    根因：0606-0626 窗口沪深300 其实在上行，但选出的超卖票仍亏 → 策略 alpha 弱。
+    直接剔除「大盘涨、个股仍明显跑输」的票，是比趋势闸门更对症的修复。
+    """
+    if "Momentum" in hit_strategies and not apply_to_momentum:
+        return True
+    if stock_ret is None or index_ret is None:
+        return True  # 数据缺失，保守保留
+    return stock_ret >= index_ret - tol - 1e-9
 
 
 def _extract_date_from_filename(path: Path) -> Optional[str]:
@@ -242,20 +312,36 @@ def _load_momentum_picks(date_yyyymmdd: str, *, max_stale_days: int = 3) -> tupl
     return picks, actual_date
 
 
-def _compute_boll_levels(code: str) -> dict:
-    """拉前复权 K 线算 Boll 水位（止损=下轨，止盈=上轨）。"""
-    end = date.today()
+def _compute_boll_levels(code: str, as_of_date: Optional[str] = None) -> dict:
+    """拉前复权 K 线算 Boll 水位（止损=下轨，止盈=上轨）+ 近 RS_LOOKBACK 日收益率。
+
+    as_of_date: 指定截止日期 YYYYMMDD（默认今天）。用于历史回测/测量时点对齐。
+    """
+    if as_of_date:
+        try:
+            end = datetime.strptime(as_of_date, "%Y%m%d").date()
+        except (ValueError, TypeError):
+            end = date.today()
+    else:
+        end = date.today()
     start = end - timedelta(days=120)  # 120 天前
     df = fetch_daily_k(code, start, end, adjust="qfq")
     if len(df) < DEFAULT_WINDOW:
         return {}
     boll = calc_bollinger(df, window=DEFAULT_WINDOW, k=DEFAULT_K)
     last = boll.iloc[-1]
+    close = pd.to_numeric(df["close"], errors="coerce").dropna()
+    ret20 = None
+    if len(close) >= RS_LOOKBACK + 1:
+        prev = close.iloc[-(RS_LOOKBACK + 1)]
+        if prev and not pd.isna(prev):
+            ret20 = float(close.iloc[-1]) / float(prev) - 1
     return {
         "close": float(last["close"]),
         "lower": float(last["Lower"]) if pd.notna(last.get("Lower")) else None,
         "upper": float(last["Upper"]) if pd.notna(last.get("Upper")) else None,
         "ma20": float(last["MA"]) if pd.notna(last.get("MA")) else None,
+        "ret20": ret20,
     }
 
 
@@ -267,6 +353,7 @@ def fuse_signals(
     fetch_levels: bool = True,
     trend_guard: bool = True,
     market_gate: bool = True,
+    relative_strength_filter: bool = True,
     max_stale_days: int = 3,
 ) -> tuple[pd.DataFrame, str]:
     """融合四策略信号，输出今日操作清单。
@@ -314,7 +401,10 @@ def fuse_signals(
 
     rows = []
     gated_out = 0
+    rs_filtered_out = 0
     for code in all_codes:
+        # 拉 K 线：fetch_levels 需算止损止盈；relative_strength_filter 需近20日收益（复用同一次拉取）
+        levels = _compute_boll_levels(code, date_yyyymmdd) if (fetch_levels or relative_strength_filter) else {}
         hit_strategies = []
         score = 0
         name = ""
@@ -355,6 +445,14 @@ def fuse_signals(
             gated_out += 1
             continue
 
+        # 相对大盘强度过滤：剔除「大盘涨、个股仍明显跑输」的票（针对根因 alpha 弱）。
+        if relative_strength_filter:
+            stock_ret = levels.get("ret20")
+            index_ret = _index_20d_return(date_yyyymmdd)
+            if not _passes_relative_strength_filter(hit_strategies, stock_ret, index_ret):
+                rs_filtered_out += 1
+                continue
+
         # 仓位分配：按命中策略中权重最大的那个分配，单票取该策略权重的 1/N（N=该策略候选数）
         # 避免大池子策略（如 CCTV 673只）把仓位稀释到 0
         strategy_pick_counts = {
@@ -387,13 +485,11 @@ def fuse_signals(
             "建议金额": round(position_amount, 0),
         }
 
-        if fetch_levels:
-            levels = _compute_boll_levels(code)
-            if levels:
-                row["最新价"] = levels.get("close")
-                row["止损价(下轨)"] = levels.get("lower")
-                row["止盈价(上轨)"] = levels.get("upper")
-                row["MA20"] = levels.get("ma20")
+        if levels:
+            row["最新价"] = levels.get("close")
+            row["止损价(下轨)"] = levels.get("lower")
+            row["止盈价(上轨)"] = levels.get("upper")
+            row["MA20"] = levels.get("ma20")
 
         rows.append(row)
 
@@ -430,6 +526,8 @@ def fuse_signals(
             report += f"\n- 🚦 趋势闸门触发（市场下行防御）：剔除 {gated_out} 只纯均值回归候选（Boll/Relativity），仅留顺势策略"
         else:
             report += f"\n- 🚦 市场状态：{regime}（趋势闸门生效）"
+    if rs_filtered_out:
+        report += f"\n- 📉 相对强度过滤剔除 {rs_filtered_out} 只跑输大盘超 {RS_TOL * 100:.0f}% 的票（alpha 弱，直接不治本）"
     return df, report
 
 
