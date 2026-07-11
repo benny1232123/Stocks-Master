@@ -33,8 +33,20 @@ def _build_summary(equity_df: pd.DataFrame, trades_df: pd.DataFrame, initial_cap
     if not trades_df.empty:
         win = round(float((trades_df["return_pct"] > 0).mean() * 100), 1)
         avg = round(float(trades_df["return_pct"].mean()), 2)
+        wins = trades_df.loc[trades_df["return_pct"] > 0, "return_pct"]
+        losses = trades_df.loc[trades_df["return_pct"] < 0, "return_pct"]
+        avg_win = round(float(wins.mean()), 2) if len(wins) else 0.0
+        avg_loss = round(float(losses.mean()), 2) if len(losses) else 0.0
+        gross_profit = float(wins.sum())
+        gross_loss = float(-losses.sum())
+        if gross_loss > 0:
+            profit_factor = round(gross_profit / gross_loss, 2)
+        elif gross_profit > 0:
+            profit_factor = 99.99  # 无亏损，盈亏比视作极高
+        else:
+            profit_factor = 0.0
     else:
-        win, avg = 0.0, 0.0
+        win, avg, avg_win, avg_loss, profit_factor = 0.0, 0.0, 0.0, 0.0, 0.0
 
     sharpe = 0.0
     if len(equity_df) > 1:
@@ -50,6 +62,9 @@ def _build_summary(equity_df: pd.DataFrame, trades_df: pd.DataFrame, initial_cap
         "max_drawdown": max_dd,
         "win_rate": win,
         "avg_return": avg,
+        "avg_win": avg_win,
+        "avg_loss": avg_loss,
+        "profit_factor": profit_factor,
         "sharpe": sharpe,
         "strategies": None,  # 由 run_multi_strategy_backtest 回填
     }
@@ -166,15 +181,25 @@ def run_forward_signal_backtest(
     initial_capital: float = 100000.0,
     max_positions: int = 200,
     slippage: float = 0.001,
+    enable_exits: bool = False,
+    use_signal_bands: bool = False,
+    stop_loss_pct: Optional[float] = None,
+    take_profit_pct: Optional[float] = None,
+    trailing_stop_pct: Optional[float] = None,
 ) -> "BacktestResult":
-    """前向信号回测：锁定历史某天的信号清单，从信号日起往后持有 hold_days 天，回测真实表现。
+    """前向信号回测：锁定历史某天的信号清单，从信号日起往后持有，回测真实表现。
 
     与 run_multi_strategy_backtest（在历史区间里重跑策略引擎重新派生信号）不同，
     本函数直接使用信号清单里的标的与信号日，模拟：
       - 信号日次日开盘买入（真实往前走，不用未来数据）
-      - 持有 hold_days 个日历日后卖出
       - 按交易日盯市（收盘价）生成平滑权益曲线
-    语义 = 「从历史某一天开始策略 → 往后回测」。
+
+    退出规则（enable_exits=True 时生效）：
+      - 止盈：优先 Boll 上轨（清单「止盈价(上轨)」列，均值回归目标），其次固定比例
+      - 止损：固定比例 stop_loss_pct（Boll 下轨≈入场价、过紧易频繁假止损，不单独用作止损）
+      - 移动止盈 trailing_stop_pct（从持仓期间最高收盘价回撤超阈值即离场，锁定利润）
+      - 持有满 hold_days 个日历日强制平仓（兜底上限）
+    默认 enable_exits=False 时行为与改动前一致（仅按持有天数平仓），保证向后兼容。
     """
     from collections import defaultdict
 
@@ -184,7 +209,15 @@ def run_forward_signal_backtest(
         return BacktestResult(summary={"error": "信号文件为空"}, equity=pd.DataFrame(), trades=pd.DataFrame())
 
     norm = signals.copy()
-    rename_map = {"日期": "date", "代码": "code", "建议买入价": "price"}
+    rename_map = {
+        "日期": "date",
+        "代码": "code",
+        "建议买入价": "price",
+        "止损价(下轨)": "stop_price",
+        "止盈价(上轨)": "take_price",
+        "止损价": "stop_price",
+        "止盈价": "take_price",
+    }
     norm = norm.rename(columns=rename_map)
     if "date" not in norm.columns or "code" not in norm.columns:
         return BacktestResult(summary={"error": "信号文件缺少「日期」或「代码」列"}, equity=pd.DataFrame(), trades=pd.DataFrame())
@@ -194,10 +227,23 @@ def run_forward_signal_backtest(
     if norm.empty:
         return BacktestResult(summary={"error": "信号文件无有效行"}, equity=pd.DataFrame(), trades=pd.DataFrame())
 
-    # 按信号日分组
+    def _to_f(x):
+        try:
+            if x is None or (isinstance(x, float) and pd.isna(x)):
+                return None
+            v = float(x)
+            return None if pd.isna(v) else v
+        except (TypeError, ValueError):
+            return None
+
+    # 按信号日分组，并记录每只标的的止损/止盈水位（来自操作清单）
     raw_by_date: dict[date, list[str]] = defaultdict(list)
+    level_map: dict[tuple[date, str], tuple[Optional[float], Optional[float]]] = {}
     for _, row in norm.iterrows():
-        raw_by_date[row["date"].date()].append(str(row["code"]).strip())
+        sd = row["date"].date()
+        code = str(row["code"]).strip()
+        raw_by_date[sd].append(code)
+        level_map[(sd, code)] = (_to_f(row.get("stop_price")), _to_f(row.get("take_price")))
 
     min_sig = min(raw_by_date.keys())
     max_sig = max(raw_by_date.keys())
@@ -237,7 +283,7 @@ def run_forward_signal_backtest(
 
     # 买入调度：每个信号日 → 其「之后第一个交易日」作为买入处理日（即信号日次日开盘买入）。
     # 信号日本身可能不是交易日（周末/休市），不能直接用信号日作为交易日历中的 key。
-    buy_schedule: dict[date, list[str]] = defaultdict(list)
+    buy_schedule: dict[date, list[tuple[date, str]]] = defaultdict(list)
     for sd, codes in raw_by_date.items():
         proc = None
         for d in cal:
@@ -245,7 +291,8 @@ def run_forward_signal_backtest(
                 proc = d
                 break
         if proc is not None:
-            buy_schedule[proc].extend(codes)
+            for code in codes:
+                buy_schedule[proc].append((sd, code))
 
     cash = float(initial_capital)
     holdings: dict[str, dict] = {}
@@ -253,8 +300,65 @@ def run_forward_signal_backtest(
     trades: list[dict] = []
 
     for d in cal:
-        # 1) 卖出到期持仓
-        to_sell = [c for c, h in holdings.items() if (d - h["buy_date"]).days >= hold_days]
+        # 1) 信号日次日开盘买入（处理日 = 信号日后第一个交易日，用其开盘价）
+        if d in buy_schedule:
+            candidates = [(sd, c) for (sd, c) in buy_schedule[d] if c not in holdings]
+            avail = max_positions - len(holdings)
+            n_buy = min(avail, len(candidates))
+            per = cash / max(n_buy, 1)  # 按当日实际买入数量均分资金
+            for sd, c in candidates[:avail]:
+                buy_price = _px(c, d, "open")
+                if buy_price is None:
+                    continue
+                buy_price *= (1 + slippage)
+                qty = int(per / buy_price / 100) * 100
+                if qty < 100:
+                    continue
+                cost = buy_price * qty
+                if cost > cash:
+                    continue
+                cash -= cost
+                stop, take = level_map.get((sd, c), (None, None))
+                holdings[c] = {
+                    "buy_date": d,
+                    "buy_price": buy_price,
+                    "qty": qty,
+                    "stop": stop,
+                    "take": take,
+                    "peak": buy_price,
+                    "sd": sd,
+                }
+                avail -= 1
+
+        # 2) 退出检查（基于当日收盘价）：止盈 / 止损 / 移动止盈 / 持有期满
+        for c, h in holdings.items():
+            close = _px(c, d, "close")
+            if close is None:
+                continue  # 缺数据则暂不处理
+            h["peak"] = max(h.get("peak", close), close)
+            exit_reason = None
+            if enable_exits:
+                ret = close / h["buy_price"] - 1
+                # 止盈：优先 Boll 上轨（均值回归目标），其次固定比例
+                if use_signal_bands and h.get("take") is not None and close >= h["take"]:
+                    exit_reason = "take_band"
+                elif take_profit_pct is not None and ret >= abs(take_profit_pct):
+                    exit_reason = "take_pct"
+                # 止损：固定比例（Boll 下轨≈入场价、过紧易频繁假止损，不单独用作止损）
+                elif stop_loss_pct is not None and ret <= -abs(stop_loss_pct):
+                    exit_reason = "stop_pct"
+                # 移动止盈：从峰值回撤锁定利润
+                elif trailing_stop_pct is not None and h["peak"] > 0 and (close / h["peak"] - 1) <= -abs(trailing_stop_pct):
+                    exit_reason = "trailing"
+                # 最后防线：仅当 Boll 下轨明显低于入场价（>3%）时才用作硬止损
+                elif use_signal_bands and h.get("stop") is not None and h["stop"] < h["buy_price"] * 0.97 and close <= h["stop"]:
+                    exit_reason = "stop_band"
+            if exit_reason is None and (d - h["buy_date"]).days >= hold_days:
+                exit_reason = "max_hold"  # 持有期满兜底
+            if exit_reason is not None:
+                h["exit_reason"] = exit_reason
+
+        to_sell = [c for c, h in holdings.items() if "exit_reason" in h]
         for c in to_sell:
             h = holdings.pop(c)
             sell_price = _px(c, d, "close")
@@ -271,29 +375,9 @@ def run_forward_signal_backtest(
                     "sell_price": round(sell_price, 3),
                     "qty": h["qty"],
                     "return_pct": round((sell_price / h["buy_price"] - 1) * 100, 2),
+                    "exit_reason": h.get("exit_reason", "max_hold"),
                 }
             )
-
-        # 2) 信号日次日开盘买入（处理日 = 信号日后第一个交易日，用其开盘价）
-        if d in buy_schedule:
-            candidates = [c for c in buy_schedule[d] if c not in holdings]
-            avail = max_positions - len(holdings)
-            n_buy = min(avail, len(candidates))
-            per = cash / max(n_buy, 1)  # 按当日实际买入数量均分资金
-            for c in candidates[:avail]:
-                buy_price = _px(c, d, "open")
-                if buy_price is None:
-                    continue
-                buy_price *= (1 + slippage)
-                qty = int(per / buy_price / 100) * 100
-                if qty < 100:
-                    continue
-                cost = buy_price * qty
-                if cost > cash:
-                    continue
-                cash -= cost
-                holdings[c] = {"buy_date": d, "buy_price": buy_price, "qty": qty}
-                avail -= 1
 
         # 3) 按日盯市（仅对已买入持仓计价；买入前的持仓不计入）
         hv = 0.0

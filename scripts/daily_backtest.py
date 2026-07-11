@@ -100,6 +100,10 @@ def _backtest_one(path: Path, sd: date, hold_days: int) -> dict | None:
     sub = pd.DataFrame({"日期": [sd.strftime("%Y-%m-%d")] * len(codes), "代码": codes})
     if "建议买入价" in df.columns:
         sub["建议买入价"] = df["建议买入价"].values[: len(codes)]
+    if "止损价(下轨)" in df.columns:
+        sub["止损价(下轨)"] = df["止损价(下轨)"].values[: len(codes)]
+    if "止盈价(上轨)" in df.columns:
+        sub["止盈价(上轨)"] = df["止盈价(上轨)"].values[: len(codes)]
 
     strategies = derive_strategies(df["来源策略"]) if "来源策略" in df.columns else "boll,relativity,theme"
 
@@ -108,6 +112,11 @@ def _backtest_one(path: Path, sd: date, hold_days: int) -> dict | None:
         hold_days=hold_days,
         initial_capital=100000.0,
         max_positions=200,
+        # 开启退出逻辑：止盈=Boll上轨、止损=固定8%、移动止盈=8%回撤，真正回测策略的止损止盈
+        enable_exits=True,
+        use_signal_bands=True,
+        stop_loss_pct=0.08,
+        trailing_stop_pct=0.08,
     )
     if result.summary.get("error"):
         return None
@@ -122,6 +131,7 @@ def _backtest_one(path: Path, sd: date, hold_days: int) -> dict | None:
     summary["signal_start"] = sd.strftime("%Y-%m-%d")
     summary["signal_end"] = sd.strftime("%Y-%m-%d")
     summary["hold_days"] = hold_days
+    summary["exit_mode"] = "boll_upper_take+stop8%+trailing8%"
     summary["signals_days"] = 1
     summary["codes_count"] = len(sub)
     summary["strategies"] = strategies
