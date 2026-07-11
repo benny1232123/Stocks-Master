@@ -8,6 +8,13 @@ import {
   ArrowUpRight,
   ArrowDownRight,
   FileText,
+  TrendingUp,
+  TrendingDown,
+  Target,
+  Percent,
+  BarChart3,
+  Trophy,
+  AlertTriangle,
 } from 'lucide-react'
 import { Button } from './components/ui/button'
 import { cn } from './lib/utils'
@@ -1806,45 +1813,83 @@ function App() {
                     <span className="dbt-summary-sub">近 {dailySummary.count} 个信号日前向回测（平均持有 {dailySummary.avg_hold_days} 天）的整体表现</span>
                   </div>
                   <div className="dbt-summary-grid">
-                    <div className="dbt-summary-cell">
-                      <div className="dbt-summary-label">平均总收益</div>
-                      <div className={cn("dbt-summary-val", dailySummary.avg_return >= 0 ? "stat-good" : "stat-bad")}>
-                        {dailySummary.avg_return >= 0 ? "+" : ""}{dailySummary.avg_return}%
+                    {/* 平均总收益 */}
+                    <div className={cn("dbt-summary-cell", dailySummary.avg_return >= 0 ? "dbt-cell-good" : "dbt-cell-bad")}>
+                      <div className="dbt-cell-icon-wrap dbt-icon-green">
+                        <TrendingUp className="dbt-cell-icon" />
                       </div>
-                      <div className="dbt-summary-hint">中位 {dailySummary.median_return >= 0 ? "+" : ""}{dailySummary.median_return}%</div>
-                    </div>
-                    <div className="dbt-summary-cell">
-                      <div className="dbt-summary-label">平均最大回撤</div>
-                      <div className="dbt-summary-val stat-bad">{dailySummary.avg_drawdown}%</div>
-                      <div className="dbt-summary-hint">中位 {dailySummary.median_drawdown}%</div>
-                    </div>
-                    <div className="dbt-summary-cell">
-                      <div className="dbt-summary-label">正收益天数</div>
-                      <div className={cn("dbt-summary-val", dailySummary.positive_ratio >= 50 ? "stat-good" : "stat-bad")}>
-                        {dailySummary.positive_days}/{dailySummary.count}
+                      <div className="dbt-cell-body">
+                        <div className="dbt-summary-label">平均总收益</div>
+                        <div className="dbt-summary-val">{dailySummary.avg_return >= 0 ? "+" : ""}{dailySummary.avg_return}%</div>
+                        <div className="dbt-summary-hint">中位 {dailySummary.median_return >= 0 ? "+" : ""}{dailySummary.median_return}%</div>
                       </div>
-                      <div className="dbt-summary-hint">占比 {dailySummary.positive_ratio}%</div>
                     </div>
-                    <div className="dbt-summary-cell">
-                      <div className="dbt-summary-label">平均胜率</div>
-                      <div className="dbt-summary-val">{dailySummary.avg_win_rate}%</div>
-                      <div className="dbt-summary-hint">中位 {dailySummary.median_win_rate}%</div>
-                    </div>
-                    <div className="dbt-summary-cell">
-                      <div className="dbt-summary-label">平均夏普</div>
-                      <div className={cn("dbt-summary-val", dailySummary.avg_sharpe >= 0 ? "stat-good" : "stat-bad")}>
-                        {dailySummary.avg_sharpe}
+                    {/* 平均最大回撤 */}
+                    <div className="dbt-summary-cell dbt-cell-bad">
+                      <div className="dbt-cell-icon-wrap dbt-icon-red">
+                        <TrendingDown className="dbt-cell-icon" />
                       </div>
-                      <div className="dbt-summary-hint">累计成交 {dailySummary.total_trades} 笔</div>
-                    </div>
-                    <div className="dbt-summary-cell">
-                      <div className="dbt-summary-label">最佳 / 最差信号日</div>
-                      <div className="dbt-summary-val">
-                        <span className="stat-good">{dailySummary.best_day.date?.slice(4).replace(/(\d{2})(\d{2})/, "$1-$2")} +{dailySummary.best_day.return}%</span>
-                        <span className="dbt-summary-sep"> / </span>
-                        <span className="stat-bad">{dailySummary.worst_day.date?.slice(4).replace(/(\d{2})(\d{2})/, "$1-$2")} {dailySummary.worst_day.return}%</span>
+                      <div className="dbt-cell-body">
+                        <div className="dbt-summary-label">平均最大回撤</div>
+                        <div className="dbt-summary-val">{dailySummary.avg_drawdown}%</div>
+                        <div className="dbt-summary-hint">中位 {dailySummary.median_drawdown}%</div>
                       </div>
-                      <div className="dbt-summary-hint">整体稳健度参考</div>
+                    </div>
+                    {/* 正收益天数 */}
+                    <div className={cn("dbt-summary-cell", dailySummary.positive_ratio >= 50 ? "dbt-cell-good" : "dbt-cell-bad")}>
+                      <div className="dbt-cell-icon-wrap dbt-icon-blue">
+                        <Target className="dbt-cell-icon" />
+                      </div>
+                      <div className="dbt-cell-body">
+                        <div className="dbt-summary-label">正收益天数</div>
+                        <div className="dbt-summary-val">{dailySummary.positive_days}<span className="dbt-val-slash">/</span>{dailySummary.count}</div>
+                        <div className="dbt-summary-hint">占比 {dailySummary.positive_ratio}%</div>
+                      </div>
+                    </div>
+                    {/* 平均胜率 */}
+                    <div className={cn("dbt-summary-cell", dailySummary.avg_win_rate >= 50 ? "dbt-cell-good" : dailySummary.avg_win_rate >= 35 ? "dbt-cell-neutral" : "dbt-cell-bad")}>
+                      <div className="dbt-cell-icon-wrap dbt-icon-purple">
+                        <Percent className="dbt-cell-icon" />
+                      </div>
+                      <div className="dbt-cell-body">
+                        <div className="dbt-summary-label">平均胜率</div>
+                        <div className="dbt-summary-val">{dailySummary.avg_win_rate}%</div>
+                        <div className="dbt-summary-hint">中位 {dailySummary.median_win_rate}%</div>
+                      </div>
+                    </div>
+                    {/* 平均夏普 */}
+                    <div className={cn("dbt-summary-cell", dailySummary.avg_sharpe >= 0 ? "dbt-cell-good" : "dbt-cell-bad")}>
+                      <div className="dbt-cell-icon-wrap dbt-icon-amber">
+                        <BarChart3 className="dbt-cell-icon" />
+                      </div>
+                      <div className="dbt-cell-body">
+                        <div className="dbt-summary-label">平均夏普</div>
+                        <div className="dbt-summary-val">{dailySummary.avg_sharpe}</div>
+                        <div className="dbt-summary-hint">累计成交 {dailySummary.total_trades} 笔</div>
+                      </div>
+                    </div>
+                    {/* 最佳 / 最差信号日 */}
+                    <div className="dbt-summary-cell dbt-cell-bestworst">
+                      <div className="dbt-bw-row">
+                        <div className="dbt-bw-item dbt-bw-best">
+                          <Trophy className="dbt-bw-icon" />
+                          <div>
+                            <div className="dbt-bw-label">最佳日</div>
+                            <div className="dbt-bw-val">{dailySummary.best_day.date?.slice(4).replace(/(\d{2})(\d{2})/, "$1-$2")}</div>
+                            <div className="dbt-bw-ret stat-good">+{dailySummary.best_day.return}%</div>
+                          </div>
+                        </div>
+                        <div className="dbt-bw-divider"></div>
+                        <div className="dbt-bw-item dbt-bw-worst">
+                          <AlertTriangle className="dbt-bw-icon" />
+                          <div>
+                            <div className="dbt-bw-label">最差日</div>
+                            <div className="dbt-bw-val">{dailySummary.worst_day.date?.slice(4).replace(/(\d{2})(\d{2})/, "$1-$2")}</div>
+                            <div className="dbt-bw-ret stat-bad">{dailySummary.worst_day.return}%</div>
+                          </div>
+                        </div>
+                      </div>
+                      <div className="dbt-summary-hint dbt-bw-hint">整体稳健度参考</div>
                     </div>
                   </div>
                 </div>

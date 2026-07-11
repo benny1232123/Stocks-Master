@@ -1153,34 +1153,173 @@
 .bt-empty-title { font-family: var(--font-display); font-size: 1.15rem; font-weight: 600; color: hsl(var(--foreground)); margin-bottom: 6px; }
 .bt-empty-desc { font-size: 0.84rem; color: hsl(var(--muted)); margin-bottom: 28px; max-width: 420px; margin-left: auto; margin-right: auto; line-height: 1.6; }
 
-/* ── 每日回测：总体总结卡片 ── */
+/* ── 每日回测：总体总结卡片（升级版） ── */
 .dbt-summary {
-  background: hsl(var(--secondary));
-  border: 0.5px solid hsl(var(--border) / 0.4);
+  background: linear-gradient(135deg, hsl(var(--secondary)), hsl(var(--secondary) / 0.6));
+  border: 1px solid hsl(var(--border) / 0.5);
   border-radius: var(--radius-lg);
-  padding: 16px 18px;
-  margin-bottom: 20px;
+  padding: 22px 24px;
+  margin-bottom: 24px;
+  box-shadow:
+    0 1px 2px hsl(0 0% 0% / 0.04),
+    0 4px 16px hsl(0 0% 0% / 0.04);
 }
-.dbt-summary-head { display: flex; align-items: baseline; gap: 10px; margin-bottom: 14px; flex-wrap: wrap; }
-.dbt-summary-title { font-size: 1rem; font-weight: 600; color: hsl(var(--foreground)); }
-.dbt-summary-sub { font-size: 0.8rem; color: hsl(var(--muted)); }
+.dbt-summary-head {
+  display: flex;
+  align-items: baseline;
+  gap: 12px;
+  margin-bottom: 18px;
+  flex-wrap: wrap;
+}
+.dbt-summary-title {
+  font-size: 1.05rem;
+  font-weight: 700;
+  color: hsl(var(--foreground));
+  letter-spacing: -0.01em;
+}
+.dbt-summary-sub { font-size: 0.81rem; color: hsl(var(--muted)); }
 .dbt-summary-grid {
   display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
-  gap: 12px;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 14px;
 }
+@media (min-width: 1024px) {
+  .dbt-summary-grid { grid-template-columns: repeat(6, 1fr); }
+}
+
+/* 单元格基础 */
 .dbt-summary-cell {
+  position: relative;
   background: hsl(var(--background));
   border-radius: var(--radius-md);
-  padding: 12px 14px;
+  padding: 16px 16px 14px;
   min-width: 0;
+  border: 1px solid hsl(var(--border) / 0.5);
+  box-shadow: 0 1px 3px hsl(0 0% 0% / 0.03);
+  transition: transform 0.2s ease, box-shadow 0.2s ease, border-color 0.2s ease;
+  overflow: hidden;
 }
-.dbt-summary-label { font-size: 0.78rem; color: hsl(var(--muted)); margin-bottom: 4px; }
-.dbt-summary-val { font-size: 1.3rem; font-weight: 600; line-height: 1.2; color: hsl(var(--foreground)); }
-.dbt-summary-hint { font-size: 0.72rem; color: hsl(var(--muted)); margin-top: 3px; }
-.dbt-summary-sep { color: hsl(var(--muted)); font-weight: 400; }
-.stat-good { color: hsl(var(--success)) !important; }
-.stat-bad { color: hsl(var(--danger)) !important; }
+.dbt-summary-cell:hover {
+  transform: translateY(-2px);
+  box-shadow: 0 6px 20px hsl(0 0% 0% / 0.07);
+  border-color: hsl(var(--border));
+}
+
+/* 左侧色条（语义着色） */
+.dbt-cell-good    { border-left: 3.5px solid #16a34a; }
+.dbt-cell-bad     { border-left: 3.5px solid #dc2626; }
+.dbt-cell-neutral { border-left: 3.5px solid hsl(var(--muted)); }
+
+/* 图标 + 内容横排布局 */
+.dbt-summary-cell:not(.dbt-cell-bestworst) {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+}
+.dbt-cell-icon-wrap {
+  flex-shrink: 0;
+  width: 36px;
+  height: 36px;
+  border-radius: 10px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  margin-top: -2px;
+}
+.dbt-cell-icon { width: 18px; height: 18px; }
+.dbt-icon-green  { background: rgba(22,163,74,0.10); color: #16a34a; }
+.dbt-icon-red    { background: rgba(220,38,38,0.10); color: #dc2626; }
+.dbt-icon-blue   { background: rgba(37,99,235,0.10); color: #2563eb; }
+.dbt-icon-purple { background: rgba(147,51,234,0.10); color: #9333ea; }
+.dbt-icon-amber  { background: rgba(217,119,6,0.10); color: #d97706; }
+
+.dbt-cell-body { flex: 1; min-width: 0; }
+
+/* 文字层次 */
+.dbt-summary-label {
+  font-size: 0.75rem;
+  color: hsl(var(--muted));
+  margin-bottom: 4px;
+  font-weight: 500;
+  letter-spacing: 0.02em;
+}
+.dbt-summary-val {
+  font-size: 1.35rem;
+  font-weight: 700;
+  line-height: 1.25;
+  color: hsl(var(--foreground));
+  font-variant-numeric: tabular-nums;
+  letter-spacing: -0.02em;
+}
+.dbt-val-slash {
+  font-size: 1rem;
+  opacity: 0.4;
+  margin: 0 1px;
+  font-weight: 400;
+}
+.dbt-summary-hint {
+  font-size: 0.72rem;
+  color: hsl(var(--muted));
+  margin-top: 4px;
+  opacity: 0.8;
+}
+.dbt-summary-sep { color: hsl(var(--border)); font-weight: 400; }
+
+/* 语义文字色 */
+.stat-good { color: #16a34a !important; }
+.stat-bad  { color: #dc2626 !important; }
+
+/* 最佳/最差信号日（双栏布局） */
+.dbt-cell-bestworst {
+  grid-column: span 2;
+  padding: 14px 16px;
+}
+@media (max-width: 767px) {
+  .dbt-cell-bestworst { grid-column: span 3; }
+}
+.dbt-bw-row {
+  display: flex;
+  align-items: stretch;
+  gap: 0;
+}
+.dbt-bw-item {
+  flex: 1;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 10px;
+  border-radius: 8px;
+}
+.dbt-bw-best  { background: rgba(22,163,74,0.05); }
+.dbt-bw-worst { background: rgba(220,38,38,0.05); }
+.dbt-bw-icon { width: 16px; height: 16px; flex-shrink: 0; margin-top: 1px; }
+.dbt-bw-best .dbt-bw-icon  { color: #16a34a; }
+.dbt-bw-worst .dbt-bw-icon { color: #dc2626; }
+.dbt-bw-divider {
+  width: 1px;
+  background: hsl(var(--border) / 0.5);
+  margin: 4px 4px;
+}
+.dbt-bw-label {
+  font-size: 0.68rem;
+  color: hsl(var(--muted));
+  font-weight: 600;
+  letter-spacing: 0.03em;
+  text-transform: uppercase;
+}
+.dbt-bw-val {
+  font-size: 0.85rem;
+  font-weight: 600;
+  color: hsl(var(--foreground));
+  font-variant-numeric: tabular-nums;
+  line-height: 1.2;
+}
+.dbt-bw-ret {
+  font-size: 0.88rem;
+  font-weight: 700;
+  line-height: 1.2;
+}
+.dbt-bw-hint { margin-top: 8px !important; }
 
 /* ── 每日回测：信号日选择器（输入框式） ── */
 .dbt-tabs-wrap { margin-bottom: 18px; }
