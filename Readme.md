@@ -1,6 +1,6 @@
 # Stocks-Master
 
-A 股多策略选股系统 —— 以 Boll 布林带为主，融合题材热度 / 相对强弱 / CCTV 舆情，支持**本地运行**与**全云端自动运行**。
+A 股多策略选股系统 —— 以 Boll 布林带为主，融合题材热度 / 相对强弱 / CCTV 舆情 / 动量，支持**本地运行**与**全云端自动运行**。
 
 ---
 
@@ -13,7 +13,8 @@ A 股多策略选股系统 —— 以 Boll 布林带为主，融合题材热度 
 │    ├─ 策略1 Boll 布林带扫描      (timeout 25min)             │
 │    ├─ 策略2 题材热度             (timeout 20min)             │
 │    ├─ 策略3 CCTV 板块舆情        (timeout 25min)             │
-│    └─ 策略4 相对强弱             (timeout 20min, 单线程)      │
+│    ├─ 策略4 相对强弱             (timeout 20min, 单线程)      │
+│    └─ 策略5 动量/相对强度        (timeout 20min, 东财-free)   │
 │         ↓ 每个策略先 pull 缓存，命中则跳过；跑完 push 缓存   │
 └───────────────────────────┬─────────────────────────────────┘
                             ↓ 写入
@@ -66,7 +67,8 @@ Stocks-Master/
 │   │   ├── boll.py              #   Boll 多因子选股（策略1，run_boll）
 │   │   ├── theme.py             #   题材换手策略（策略2，run_theme）
 │   │   ├── relativity.py        #   相对强弱策略（策略4，run_relativity；--max-workers 控制并发）
-│   │   └── cctv.py              #   CCTV 舆论板块策略（策略3，run_cctv；含 API 超时 + 本地回退）
+│   │   ├── cctv.py              #   CCTV 舆论板块策略（策略3，run_cctv；含 API 超时 + 本地回退）
+│   │   └── momentum.py          #   动量/相对强度策略（策略5，run_momentum；东财-free）
 │
 ├── scripts/                    # 工具脚本
 │   ├── strategy_cache.py       # ⭐ Supabase 缓存 pull / push
@@ -155,7 +157,9 @@ python Frequently-Used-Program/auto_notify_boll.py
 ### GitHub Actions 选股（`daily-pick.yml`）
 
 - **触发**：工作日 21:30 北京时间（cron `30 13 * * 1-5` UTC，约 5–15 分钟延迟）
-- **K 线后端**：akshare 东财接口（不依赖 baostock，规避境外连国内服务器问题）
+- **K 线后端**：新浪 `stock_zh_a_daily` / baostock 双后端（**已全面去除东财依赖**，见下「数据链路去东财」）
+
+> **数据链路去东财（2026-07-11）**：原动量策略快照用东财 `stock_zh_a_spot_em`、CCTV 自评估用东财 `stock_zh_a_hist`，均已替换为**新浪 `stock_zh_a_spot` + `fetch_daily_k`（baostock/新浪后端）**，沙箱/海外均可达、无需东财。动量快照偶发空加 3 次重试；`MOMENTUM_USE_EASTMONEY=1` 仅作兜底（15s 线程超时防挂）。
 - **流程**：每个策略先 `strategy_cache.py pull` 查缓存 → 命中则 `exit 0` 跳过 → 否则跑选股 → `push` 上传
 - **超时**（单 step）：Boll 25min / 题材 20min / CCTV 25min / 相对强弱 20min；总 job 90min
 - **费用**：私有仓库 2000 分钟/月免费，选股约 660 分钟/月，够用（0 元）
@@ -192,8 +196,10 @@ python Frequently-Used-Program/auto_notify_boll.py
 - `smcore/indicators/boll.py`：Boll 带计算与信号判定（唯一实现）
 - `smcore/data/kline.py`：前复权日 K 线获取 + 文件缓存（akshare / baostock 双后端）
 - `smcore/data/quote.py`：全市场实时报价（双层缓存，5 分钟 TTL）
-- `smcore/strategy/fusion.py`：四策略信号融合 → 今日操作清单
-- `smcore/strategy/allocation.py`：仓位分配
+- `smcore/strategy/fusion.py`：五策略信号融合 → 今日操作清单（含趋势守卫过滤）
+- `smcore/strategy/allocation.py`：仓位分配（三 regime：趋势上行 / 下行防御 / 震荡轮动）
+- `smcore/backtest/engine.py`：前向信号回测引擎（硬止损 + 真实交易成本 + MA60 破位出场 + 移动止盈）
+- `smcore/strategies/momentum.py`：动量/相对强度选股（策略5，东财-free）
 - `smcore/storage/cos.py`：腾讯云 COS 上传/下载
 - `smcore/storage/trades_repo.py`：Supabase 交易记录读写
 - `smcore/notify/email.py`：SMTP 邮件推送
@@ -249,20 +255,40 @@ cd frontend && npm run dev             # 前端 http://localhost:5173
 
 日报由市场状态动态生成：
 
-1. **Boll 主策略**：技术面买卖点
+1. **Boll 主策略**：技术面买卖点（超卖均值回归，主策略）
 2. **题材策略**：资金共识方向
 3. **相对强弱**：风格筛选（顺风不弱、逆风抗跌）
 4. **CCTV / 新闻**：叙事与预期差
-5. **宏观风险**：仓位约束（先控回撤，再追求收益）
+5. **动量/相对强度**：买中期上升趋势的强势股（与 Boll 超卖互补）
+6. **宏观风险**：仓位约束（先控回撤，再追求收益）
+
+各策略在综合评分中的权重（`STRATEGY_BASE_SCORE`，据 `measure_strategy_edge.py` 实测前向 edge 定稿）：
+**Boll 45 / Momentum 20 / Theme 15 / Relativity 15 / CCTV 10**（CCTV 噪声大降权，Relativity 实测最差砍权）。
 
 融合输出 `Daily-Action-List-YYYYMMDD.csv`（今日操作清单，含止损 / 止盈 / 建议买入价）。
 
 ---
 
-## 回测
+## 回测与策略验证
 
-- 信号样本回测：`python Frequently-Used-Program/backtest_signal_picks.py --signals-glob "stock_data/Stock-Selection-Boll-*.csv" --top-n 10 --hold-days 5`
-- 真实成交回测：`python Frequently-Used-Program/backtest_tradebook.py --trades-csv stock_data/my_trades.csv`
+### 前向信号回测（每日自动回测）
+次日开盘买入、持有 N 日；自写循环（非 backtrader），已修正为诚实口径：
+- **真实交易成本**：佣金万 2.5（最低 5 元）+ 卖出印花税千 0.5；
+- **gap-aware 硬止损**：盘中触及 −8% 即离场（封顶亏损 ≈8%，不空等收盘）；
+- **MA60 趋势破位出场**：收盘跌破 60 日线即走（避免弱势里死扛）；
+- **移动止盈 5% + 固定止盈 6%** 锁利；
+- **汇总口径**：仅聚合已走完批次（`num_trades>0`），胜率按单笔交易统计。
+
+运行：
+```bash
+# 对某日操作清单跑前向回测（Web 回测页底层即调用此脚本）
+python scripts/daily_backtest.py --signals stock_data/Daily-Action-List-YYYYMMDD.csv --hold-days 10
+```
+
+### 策略 edge 量化测量（定权重用）
+`scripts/measure_strategy_edge.py` 读历史 `Daily-Action-List-*.csv`，按来源策略拆桶，用改进引擎跑前向 10 日回测，输出各策略收益 / 胜率 / 回撤 / 夏普 + BASELINE 对照。据其结果**数据驱动定稿** `STRATEGY_BASE_SCORE` 与 `allocation` 权重（如 Relativity 实测最差 → 砍权，Boll 最抗跌 → 提权）。
+
+> 实测参考（窗口 2026-06-10~06-26，硬止损 + 真实成本）：全样本 BASELINE −5.09%、Boll −4.92%、Relativity −13.86%（MA60 破位对其单策略不利，已砍权缓解）。当前改进属「少亏」级，根因在弱势市 + 信号 alpha 弱；**趋势闸门（弱势不买均值回归）** 是下一步真正杠杆。
 
 ---
 
