@@ -31,7 +31,7 @@ def normalize_weight_map(weights: dict) -> dict:
 
     total = sum(normalized.values())
     if total <= 0:
-        return {"boll": 35, "theme": 20, "cctv": 8, "relativity": 20, "momentum": 17, "cash": 0}
+        return {"boll": 40, "theme": 18, "cctv": 7, "relativity": 10, "momentum": 17, "cash": 8}
 
     scaled = {key: int(round(val * 100.0 / total)) for key, val in normalized.items()}
     delta = 100 - sum(scaled.values())
@@ -82,29 +82,29 @@ def build_strategy_allocation(regime, *, boll_rows_count, theme_rows_count, has_
     """
     if regime == "趋势上行":
         base_weights = {
-            "theme": env_int_percent("ALLOC_UP_THEME", 30),
-            "cctv": env_int_percent("ALLOC_UP_CCTV", 10),
-            "boll": env_int_percent("ALLOC_UP_BOLL", 20),
-            "relativity": env_int_percent("ALLOC_UP_RELATIVITY", 15),
-            "momentum": env_int_percent("ALLOC_UP_MOMENTUM", 20),
-            "cash": env_int_percent("ALLOC_UP_CASH", 5),
+            "theme": env_int_percent("ALLOC_UP_THEME", 18),
+            "cctv": env_int_percent("ALLOC_UP_CCTV", 8),
+            "boll": env_int_percent("ALLOC_UP_BOLL", 30),
+            "relativity": env_int_percent("ALLOC_UP_RELATIVITY", 10),
+            "momentum": env_int_percent("ALLOC_UP_MOMENTUM", 18),
+            "cash": env_int_percent("ALLOC_UP_CASH", 16),
         }
-        priority_line = "- 执行优先级: 题材热度确认 > 动量强势确认 > Boll回踩确认 > Relativity 强弱过滤"
+        priority_line = "- 执行优先级: Boll定节奏 > 动量强势确认 > 题材热度确认 > Relativity 强弱过滤"
     elif regime == "下行防御":
         base_weights = {
-            "cash": env_int_percent("ALLOC_DOWN_CASH", 55),
-            "boll": env_int_percent("ALLOC_DOWN_BOLL", 25),
-            "relativity": env_int_percent("ALLOC_DOWN_RELATIVITY", 10),
+            "cash": env_int_percent("ALLOC_DOWN_CASH", 52),
+            "boll": env_int_percent("ALLOC_DOWN_BOLL", 30),
+            "relativity": env_int_percent("ALLOC_DOWN_RELATIVITY", 8),
             "theme": env_int_percent("ALLOC_DOWN_THEME", 5),
             "cctv": env_int_percent("ALLOC_DOWN_CCTV", 0),
             "momentum": env_int_percent("ALLOC_DOWN_MOMENTUM", 5),
         }
-        priority_line = "- 执行优先级: 先控回撤，再做小仓位试错；题材策略明显降权，动量仅留少量强势仓。"
+        priority_line = "- 执行优先级: 先控回撤，再做小仓位试错；题材/Relativity明显降权，动量仅留少量强势仓。"
     else:
-        theme_weight = 30 if theme_rows_count >= 20 else 25
-        cctv_weight = 15 if has_cctv_hot else 10
-        boll_weight = 30 if boll_rows_count >= 10 else 35
-        relativity_weight = 15 if macro_level != "high" else 12
+        theme_weight = 16 if theme_rows_count >= 20 else 18
+        cctv_weight = 12 if has_cctv_hot else 8
+        boll_weight = 38 if boll_rows_count >= 10 else 42
+        relativity_weight = 10 if macro_level != "high" else 8
         momentum_weight = 15
         cash_weight = 100 - theme_weight - cctv_weight - boll_weight - relativity_weight - momentum_weight
 

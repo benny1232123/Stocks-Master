@@ -30,15 +30,17 @@ from smcore.utils.code import format_stock_code
 from smcore.utils.format import fmt_num, to_float
 
 # 各策略在综合评分中的权重（命中该策略即得基础分，多策略叠加加分）
-# 2026-07-11 重定：CCTV 为纯舆情噪声、与 10 日收益几乎零相关，权重从 15 降到 10；
-# Relativity 含指数相对强弱（抗跌/跟涨），比纯超卖更稳健，从 25 升到 30；
-# Momentum 为新增「买强势」维度，权重暂定 25，待 measure_strategy_edge.py 测量后定稿。
+# 占比依据 2026-07-11 实测前向10日 edge（窗口 0606-0626，硬止损+真实成本）：
+#   Boll      收益 -5.48% / 回撤 -8.64%   → 最抗跌，提权为锚
+#   Relativity 收益 -9.57% / 回撤 -13.86% → 最差且集中度高，砍权
+#   Momentum  无历史样本；Relativity 弱势警示「纯强度」风险，适度而非激进
+#   Theme/CCTV 窗口内无样本（0628 后才出现信号），暂保持谨慎
 STRATEGY_BASE_SCORE = {
-    "boll": 40,       # Boll 是主策略（超卖均值回归），命中即得 40 分
-    "relativity": 30,  # 相对强弱命中 +30（指数相对强度，更稳健）
-    "momentum": 25,    # 动量/相对强度命中 +25（买中期上升趋势的强势股）
-    "theme": 20,       # 题材命中 +20
-    "cctv": 10,        # CCTV 舆情命中 +10（噪声大，降权）
+    "boll": 45,       # 主策略（超卖均值回归），实测最抗跌，提权
+    "relativity": 15,  # 相对强弱实测最差，砍权
+    "momentum": 20,    # 动量/相对强度，适度（待实测验证）
+    "theme": 15,       # 题材，谨慎
+    "cctv": 10,        # CCTV 舆情噪声大，最低
 }
 MULTI_HIT_BONUS = 5  # 每多命中一个策略额外 +5
 
