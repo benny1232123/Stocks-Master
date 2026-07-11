@@ -17,6 +17,21 @@ from smcore.backtest.loader import load_index_data, load_price_data
 from smcore.backtest.signal_backtest import BacktestResult
 from smcore.backtest.strategies import CNCommInfo, MultiStrategy, PriceData
 
+# A 股真实交易成本：佣金万2.5（单笔最低5元）+ 卖出印花税千0.5
+_COMM_RATE = 0.00025
+_COMM_MIN = 5.0
+_STAMP_RATE = 0.0005  # 仅卖出征收
+
+
+def _buy_cost(amount: float) -> float:
+    """买入费用（佣金，最低5元）。"""
+    return max(amount * _COMM_RATE, _COMM_MIN)
+
+
+def _sell_cost(amount: float) -> float:
+    """卖出费用（佣金 + 印花税）。"""
+    return max(amount * _COMM_RATE, _COMM_MIN) + amount * _STAMP_RATE
+
 
 def _build_summary(equity_df: pd.DataFrame, trades_df: pd.DataFrame, initial_capital: float) -> dict[str, Any]:
     if equity_df.empty:
@@ -315,9 +330,10 @@ def run_forward_signal_backtest(
                 if qty < 100:
                     continue
                 cost = buy_price * qty
-                if cost > cash:
+                fee = _buy_cost(cost)
+                if cost + fee > cash:
                     continue
-                cash -= cost
+                cash -= cost + fee
                 stop, take = level_map.get((sd, c), (None, None))
                 holdings[c] = {
                     "buy_date": d,
@@ -338,21 +354,33 @@ def run_forward_signal_backtest(
             h["peak"] = max(h.get("peak", close), close)
             exit_reason = None
             if enable_exits:
-                ret = close / h["buy_price"] - 1
-                # 止盈：优先 Boll 上轨（均值回归目标），其次固定比例
-                if use_signal_bands and h.get("take") is not None and close >= h["take"]:
-                    exit_reason = "take_band"
-                elif take_profit_pct is not None and ret >= abs(take_profit_pct):
-                    exit_reason = "take_pct"
-                # 止损：固定比例（Boll 下轨≈入场价、过紧易频繁假止损，不单独用作止损）
-                elif stop_loss_pct is not None and ret <= -abs(stop_loss_pct):
-                    exit_reason = "stop_pct"
-                # 移动止盈：从峰值回撤锁定利润
-                elif trailing_stop_pct is not None and h["peak"] > 0 and (close / h["peak"] - 1) <= -abs(trailing_stop_pct):
-                    exit_reason = "trailing"
-                # 最后防线：仅当 Boll 下轨明显低于入场价（>3%）时才用作硬止损
-                elif use_signal_bands and h.get("stop") is not None and h["stop"] < h["buy_price"] * 0.97 and close <= h["stop"]:
-                    exit_reason = "stop_band"
+                # 硬止损（缺口感知）：盘中最低价触及 -stop_loss_pct 即以 min(开盘价,止损价)
+                # 离场，封顶亏损≈stop_loss_pct，挡住跳空低开直接击穿收盘止损的巨亏（如单日 -23%）。
+                if stop_loss_pct is not None and (d - h["buy_date"]).days >= 1:
+                    low = _px(c, d, "low")
+                    if low is not None:
+                        hard_stop = h["buy_price"] * (1 - abs(stop_loss_pct))
+                        if low <= hard_stop:
+                            open_px = _px(c, d, "open")
+                            exit_px = min(open_px, hard_stop) if open_px is not None else hard_stop
+                            h["forced_sell_price"] = exit_px
+                            exit_reason = "stop_hard"
+                if exit_reason is None:
+                    ret = close / h["buy_price"] - 1
+                    # 止盈：优先 Boll 上轨（均值回归目标），其次固定比例
+                    if use_signal_bands and h.get("take") is not None and close >= h["take"]:
+                        exit_reason = "take_band"
+                    elif take_profit_pct is not None and ret >= abs(take_profit_pct):
+                        exit_reason = "take_pct"
+                    # 止损：固定比例（Boll 下轨≈入场价、过紧易频繁假止损，不单独用作止损）
+                    elif stop_loss_pct is not None and ret <= -abs(stop_loss_pct):
+                        exit_reason = "stop_pct"
+                    # 移动止盈：从峰值回撤锁定利润
+                    elif trailing_stop_pct is not None and h["peak"] > 0 and (close / h["peak"] - 1) <= -abs(trailing_stop_pct):
+                        exit_reason = "trailing"
+                    # 最后防线：仅当 Boll 下轨明显低于入场价（>3%）时才用作硬止损
+                    elif use_signal_bands and h.get("stop") is not None and h["stop"] < h["buy_price"] * 0.97 and close <= h["stop"]:
+                        exit_reason = "stop_band"
             if exit_reason is None and (d - h["buy_date"]).days >= hold_days:
                 exit_reason = "max_hold"  # 持有期满兜底
             if exit_reason is not None:
@@ -361,11 +389,15 @@ def run_forward_signal_backtest(
         to_sell = [c for c, h in holdings.items() if "exit_reason" in h]
         for c in to_sell:
             h = holdings.pop(c)
-            sell_price = _px(c, d, "close")
-            if sell_price is None:
-                sell_price = h["buy_price"]  # 极端缺数据兜底
+            if h.get("forced_sell_price") is not None:
+                sell_price = h["forced_sell_price"]
+            else:
+                sell_price = _px(c, d, "close")
+                if sell_price is None:
+                    sell_price = h["buy_price"]  # 极端缺数据兜底
             sell_price *= (1 - slippage)
-            cash += sell_price * h["qty"]
+            proceeds = sell_price * h["qty"]
+            cash += proceeds - _sell_cost(proceeds)
             trades.append(
                 {
                     "code": c,

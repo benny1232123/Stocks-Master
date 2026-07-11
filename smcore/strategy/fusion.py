@@ -30,13 +30,34 @@ from smcore.utils.code import format_stock_code
 from smcore.utils.format import fmt_num, to_float
 
 # 各策略在综合评分中的权重（命中该策略即得基础分，多策略叠加加分）
+# 2026-07-11 重定：CCTV 为纯舆情噪声、与 10 日收益几乎零相关，权重从 15 降到 10；
+# Relativity 含指数相对强弱（抗跌/跟涨），比纯超卖更稳健，从 25 升到 30。
 STRATEGY_BASE_SCORE = {
-    "boll": 40,       # Boll 是主策略，命中即得 40 分
-    "relativity": 25,  # 相对强弱命中 +25
+    "boll": 40,       # Boll 是主策略（超卖均值回归），命中即得 40 分
+    "relativity": 30,  # 相对强弱命中 +30（指数相对强度，更稳健）
     "theme": 20,       # 题材命中 +20
-    "cctv": 15,        # CCTV 命中 +15
+    "cctv": 10,        # CCTV 舆情命中 +10（噪声大，降权）
 }
 MULTI_HIT_BONUS = 5  # 每多命中一个策略额外 +5
+
+# 趋势守卫：价格低于 MA20 超过该比例，视作破位/下降通道自由落体股，剔除。
+# 阈值设为 12%——保留 Boll 轻度超卖票（近下轨通常仅低于 MA20 几个百分点），
+# 但剔除明显破位（如单日 -20%+ 的崩盘股），从信号层防尾部巨亏。
+TREND_GUARD_BELOW_MA20 = 0.12
+
+
+def _passes_trend_guard(price, ma20) -> bool:
+    """趋势守卫：价格远低于 MA20 则剔除（破位/下降通道）；数据缺失则保守保留。"""
+    if price is None or ma20 is None:
+        return True
+    try:
+        price = float(price)
+        ma20 = float(ma20)
+    except (TypeError, ValueError):
+        return True
+    if ma20 <= 0 or price <= 0:
+        return True
+    return price >= ma20 * (1 - TREND_GUARD_BELOW_MA20)
 
 
 def _extract_date_from_filename(path: Path) -> Optional[str]:
@@ -189,6 +210,7 @@ def fuse_signals(
     total_capital: float = 100000.0,
     max_picks: int = 15,
     fetch_levels: bool = True,
+    trend_guard: bool = True,
     max_stale_days: int = 3,
 ) -> tuple[pd.DataFrame, str]:
     """融合四策略信号，输出今日操作清单。
@@ -303,7 +325,18 @@ def fuse_signals(
 
         rows.append(row)
 
-    df = pd.DataFrame(rows).sort_values("综合评分", ascending=False).reset_index(drop=True)
+    df = pd.DataFrame(rows)
+    # 趋势守卫：剔除价格远低于 MA20 的破位/下降通道股（自由落体风险）
+    filtered_out = 0
+    if trend_guard:
+        before = len(df)
+        mask = df.apply(
+            lambda r: _passes_trend_guard(r.get("最新价"), r.get("MA20")),
+            axis=1,
+        )
+        df = df[mask].reset_index(drop=True)
+        filtered_out = before - len(df)
+    df = df.sort_values("综合评分", ascending=False).reset_index(drop=True)
     df = df.head(max_picks)
 
     # 生成日报段落
@@ -317,6 +350,8 @@ def fuse_signals(
         source_dates=source_dates,
         max_stale_days=max_stale_days,
     )
+    if filtered_out:
+        report += f"\n- 🛡️ 趋势守卫剔除 {filtered_out} 只破位/下降通道股（价格低于 MA20 超 12%）"
     return df, report
 
 

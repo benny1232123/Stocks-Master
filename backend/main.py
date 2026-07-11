@@ -354,32 +354,48 @@ def daily_backtest_summary() -> dict:
         except (TypeError, ValueError):
             return default
 
-    rets = [_num(r.get("total_return")) for r in rows]
-    dds = [_num(r.get("max_drawdown")) for r in rows]
-    wrs = [_num(r.get("win_rate")) for r in rows]
-    shps = [_num(r.get("sharpe")) for r in rows]
-    holds = [_num(r.get("hold_days")) for r in rows]
-    total_trades = sum(int(_num(r.get("num_trades"), 0)) for r in rows)
+    # 区分「已完成」（有真实成交）与「未走完」（num_trades=0 的部分前向批次）。
+    # 未走完批次收益≈0、win_rate=0，纳入均值会严重低估真实表现，故聚合指标只基于已完成批次。
+    completed = [r for r in rows if _num(r.get("num_trades")) > 0]
+    base_rows = completed if completed else rows
+
+    rets = [_num(r.get("total_return")) for r in base_rows]
+    dds = [_num(r.get("max_drawdown")) for r in base_rows]
+    wrs = [_num(r.get("win_rate")) for r in base_rows]
+    shps = [_num(r.get("sharpe")) for r in base_rows]
+    holds = [_num(r.get("hold_days")) for r in base_rows]
+    total_trades = sum(int(_num(r.get("num_trades"), 0)) for r in base_rows)
+
+    # 胜率按「单笔交易」层面统计（更真实）：汇总各已完成批次 trades 中盈利笔数。
+    win_trades = 0
+    for r in base_rows:
+        tag = r.get("date")
+        tdf = read_csv_file(f"stock_data/Multi-Backtest-{tag}-trades.csv")
+        if tdf.empty or "return_pct" not in tdf.columns:
+            continue
+        win_trades += int((tdf["return_pct"] > 0).sum())
+    avg_win_rate = round(win_trades / total_trades * 100, 1) if total_trades else 0.0
 
     positive_days = sum(1 for v in rets if v > 0)
-    best = max(rows, key=lambda r: _num(r.get("total_return")))
-    worst = min(rows, key=lambda r: _num(r.get("total_return")))
+    best = max(base_rows, key=lambda r: _num(r.get("total_return")))
+    worst = min(base_rows, key=lambda r: _num(r.get("total_return")))
 
     def _med(lst):
         return _stats.median(lst) if lst else 0.0
 
     return {
         "count": len(rows),
+        "completed_count": len(completed),
         "avg_return": round(_stats.mean(rets), 2),
         "median_return": round(_med(rets), 2),
         "avg_drawdown": round(_stats.mean(dds), 2),
         "median_drawdown": round(_med(dds), 2),
-        "avg_win_rate": round(_stats.mean(wrs), 1),
+        "avg_win_rate": avg_win_rate,
         "median_win_rate": round(_med(wrs), 1),
         "avg_sharpe": round(_stats.mean(shps), 2),
         "total_trades": total_trades,
         "positive_days": positive_days,
-        "positive_ratio": round(positive_days / len(rows) * 100, 1),
+        "positive_ratio": round(positive_days / len(base_rows) * 100, 1),
         "avg_hold_days": round(_stats.mean(holds), 1),
         "best_day": {"date": best.get("date"), "return": _num(best.get("total_return"))},
         "worst_day": {"date": worst.get("date"), "return": _num(worst.get("total_return"))},
