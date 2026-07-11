@@ -64,6 +64,38 @@ def _passes_trend_guard(price, ma20) -> bool:
     return price >= ma20 * (1 - TREND_GUARD_BELOW_MA20)
 
 
+def _detect_market_regime() -> str:
+    """用沪深300（新浪指数，东财-free）判断市场状态，驱动融合与趋势闸门。
+
+    返回 "趋势上行" / "下行防御" / "震荡轮动"。网络失败/数据不足时回退 "震荡轮动"（不触发闸门）。
+    - 价格 > MA60 且 MA60 上行 → 趋势上行
+    - 价格 < MA60 且 MA60 走平/下行 → 下行防御（均值回归票必亏，趋势闸门会剔除）
+    - 其他 → 震荡轮动
+    """
+    try:
+        import akshare as ak
+        from smcore.data.kline import _call_with_timeout
+
+        df = _call_with_timeout(lambda: ak.stock_zh_index_daily(symbol="sh000300"), 30)
+        if df is None or len(df) < 65:
+            return "震荡轮动"
+        close = pd.to_numeric(df["close"], errors="coerce").dropna()
+        if len(close) < 65:
+            return "震荡轮动"
+        c = close.values.astype(float)
+        price = c[-1]
+        ma60_now = c[-60:].mean()
+        ma60_prev = c[-120:-60].mean() if len(c) >= 120 else (c[-61:-1].mean() if len(c) > 61 else ma60_now)
+        ma60_slope = (ma60_now - ma60_prev) / ma60_prev if ma60_prev else 0.0
+        if price > ma60_now and ma60_slope > 0:
+            return "趋势上行"
+        if price < ma60_now and ma60_slope <= 0:
+            return "下行防御"
+        return "震荡轮动"
+    except Exception:
+        return "震荡轮动"
+
+
 def _extract_date_from_filename(path: Path) -> Optional[str]:
     """从文件名末尾提取 YYYYMMDD，例如 Stock-Selection-Boll-20260704.csv。"""
     suffix = path.stem.rsplit("-", 1)[-1]
@@ -234,6 +266,7 @@ def fuse_signals(
     max_picks: int = 15,
     fetch_levels: bool = True,
     trend_guard: bool = True,
+    market_gate: bool = True,
     max_stale_days: int = 3,
 ) -> tuple[pd.DataFrame, str]:
     """融合四策略信号，输出今日操作清单。
@@ -267,9 +300,11 @@ def fuse_signals(
     if not all_codes:
         return pd.DataFrame(), "今日无任何策略命中，无可操作清单。"
 
-    # 策略权重分配（基于信号可用性）
+    # 趋势闸门：用市场状态（沪深300）驱动融合与均值回归过滤
+    regime = _detect_market_regime() if market_gate else "震荡轮动"
+    # 策略权重分配（由真实市场状态驱动，而非硬编码震荡）
     alloc = build_strategy_allocation(
-        "震荡轮动",  # 默认震荡，实际应由市场状态模块给
+        regime,
         boll_rows_count=len(boll),
         theme_rows_count=len(theme),
         has_cctv_hot=bool(cctv),
@@ -278,6 +313,7 @@ def fuse_signals(
     weights = alloc["final_weights"]
 
     rows = []
+    gated_out = 0
     for code in all_codes:
         hit_strategies = []
         score = 0
@@ -312,6 +348,12 @@ def fuse_signals(
         # 多策略命中加分
         if len(hit_strategies) > 1:
             score += (len(hit_strategies) - 1) * MULTI_HIT_BONUS
+
+        # 趋势闸门：下行防御时不买纯均值回归票（Boll/Relativity）。
+        # 其「次日买、持有10日」在弱市必亏（实测 BASELINE 弱市 -5%~-9%），直接不出。
+        if market_gate and regime == "下行防御" and set(hit_strategies) <= {"Boll", "Relativity"}:
+            gated_out += 1
+            continue
 
         # 仓位分配：按命中策略中权重最大的那个分配，单票取该策略权重的 1/N（N=该策略候选数）
         # 避免大池子策略（如 CCTV 673只）把仓位稀释到 0
@@ -383,6 +425,11 @@ def fuse_signals(
     )
     if filtered_out:
         report += f"\n- 🛡️ 趋势守卫剔除 {filtered_out} 只破位/下降通道股（价格低于 MA20 超 12%）"
+    if market_gate:
+        if regime == "下行防御" and gated_out:
+            report += f"\n- 🚦 趋势闸门触发（市场下行防御）：剔除 {gated_out} 只纯均值回归候选（Boll/Relativity），仅留顺势策略"
+        else:
+            report += f"\n- 🚦 市场状态：{regime}（趋势闸门生效）"
     return df, report
 
 
