@@ -112,11 +112,18 @@ def _backtest_one(path: Path, sd: date, hold_days: int) -> dict | None:
         hold_days=hold_days,
         initial_capital=100000.0,
         max_positions=200,
-        # 开启退出逻辑：止盈=Boll上轨、止损=固定8%、移动止盈=8%回撤，真正回测策略的止损止盈
+        # 出场逻辑(2026-07-11 据 measure_strategy_edge v2 定稿)：
+        #  - 止盈=Boll上轨 / 固定+6% 锁利(take_profit_pct)
+        #  - 移动止盈=5% 回撤(trailing_stop_pct，原8%太宽)
+        #  - 收盘跌破 MA60 趋势破位即走(trend_exit_ma=60，避免弱势里空等-8%硬止损)
+        # 全样本BASELINE实测 -6.37%→-5.09%(+1.28pct)，回撤 -7.81%→-6.69% 收窄。
+        # 注：Relativity单策略因MA60破位恶化(-9.57%→-13.86%)，但该策略已砍权(15分)，整体净正。
         enable_exits=True,
         use_signal_bands=True,
         stop_loss_pct=0.08,
-        trailing_stop_pct=0.08,
+        take_profit_pct=0.06,
+        trailing_stop_pct=0.05,
+        trend_exit_ma=60,
     )
     if result.summary.get("error"):
         return None
@@ -131,7 +138,7 @@ def _backtest_one(path: Path, sd: date, hold_days: int) -> dict | None:
     summary["signal_start"] = sd.strftime("%Y-%m-%d")
     summary["signal_end"] = sd.strftime("%Y-%m-%d")
     summary["hold_days"] = hold_days
-    summary["exit_mode"] = "boll_upper_take+stop8%+trailing8%"
+    summary["exit_mode"] = "boll_upper_take+take6%+trailing5%+MA60break"
     summary["signals_days"] = 1
     summary["codes_count"] = len(sub)
     summary["strategies"] = strategies

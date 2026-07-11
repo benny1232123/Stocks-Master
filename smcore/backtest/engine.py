@@ -201,6 +201,7 @@ def run_forward_signal_backtest(
     stop_loss_pct: Optional[float] = None,
     take_profit_pct: Optional[float] = None,
     trailing_stop_pct: Optional[float] = None,
+    trend_exit_ma: Optional[int] = None,
 ) -> "BacktestResult":
     """前向信号回测：锁定历史某天的信号清单，从信号日起往后持有，回测真实表现。
 
@@ -213,6 +214,8 @@ def run_forward_signal_backtest(
       - 止盈：优先 Boll 上轨（清单「止盈价(上轨)」列，均值回归目标），其次固定比例
       - 止损：固定比例 stop_loss_pct（Boll 下轨≈入场价、过紧易频繁假止损，不单独用作止损）
       - 移动止盈 trailing_stop_pct（从持仓期间最高收盘价回撤超阈值即离场，锁定利润）
+      - 趋势破位 trend_exit_ma=N：收盘价跌破 N 日均线即离场（截停在下行市里继续下跌，
+        不空等硬止损；N 取 60 时 Boll 买点(近MA20、远高于MA60)不会误触发）
       - 持有满 hold_days 个日历日强制平仓（兜底上限）
     默认 enable_exits=False 时行为与改动前一致（仅按持有天数平仓），保证向后兼容。
     """
@@ -296,6 +299,16 @@ def run_forward_signal_backtest(
         val = row[col].iloc[0]
         return None if pd.isna(val) else float(val)
 
+    def _ma_n(code: str, d: date, n: int):
+        """收盘价的 N 日移动平均（截至 d，含 d）。数据不足返回 None。"""
+        p = price_cache.get(code)
+        if p is None or p.empty:
+            return None
+        sub = p.loc[p.index.date <= d, "close"]
+        if len(sub) < n:
+            return None
+        return float(sub.iloc[-n:].mean())
+
     # 买入调度：每个信号日 → 其「之后第一个交易日」作为买入处理日（即信号日次日开盘买入）。
     # 信号日本身可能不是交易日（周末/休市），不能直接用信号日作为交易日历中的 key。
     buy_schedule: dict[date, list[tuple[date, str]]] = defaultdict(list)
@@ -372,6 +385,11 @@ def run_forward_signal_backtest(
                         exit_reason = "take_band"
                     elif take_profit_pct is not None and ret >= abs(take_profit_pct):
                         exit_reason = "take_pct"
+                    # 趋势破位：收盘价跌破 N 日均线即离场（截停下行市继续下跌）
+                    elif trend_exit_ma and trend_exit_ma > 0:
+                        ma = _ma_n(c, d, trend_exit_ma)
+                        if ma is not None and close < ma:
+                            exit_reason = "trend_break"
                     # 止损：固定比例（Boll 下轨≈入场价、过紧易频繁假止损，不单独用作止损）
                     elif stop_loss_pct is not None and ret <= -abs(stop_loss_pct):
                         exit_reason = "stop_pct"

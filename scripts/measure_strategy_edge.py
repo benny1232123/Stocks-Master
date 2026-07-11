@@ -134,7 +134,9 @@ def main() -> int:
             enable_exits=True,
             use_signal_bands=True,
             stop_loss_pct=0.08,
-            trailing_stop_pct=0.08,
+            take_profit_pct=0.06,       # +6% 固定止盈，锁定利润
+            trailing_stop_pct=0.05,     # 移动止盈收紧至 5%（原 8% 太宽）
+            trend_exit_ma=60,           # 收盘跌破 MA60 即走（截停下行市继续下跌）
         )
         if "error" in res.summary:
             return [], 0
@@ -158,6 +160,7 @@ def main() -> int:
         }
 
     # 3) 逐策略测量
+    print(f"[出场配置] 硬止损=-8% 固定止盈=+6% 移动止盈=-5% 趋势破位=MA60 持有={HOLD_DAYS}日")
     results = {}
     for s in STRATS:
         rows_for_s: list[dict] = []
