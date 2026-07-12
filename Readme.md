@@ -9,12 +9,13 @@ A 股多策略选股系统 —— 以 Boll 布林带为主，融合题材热度 
 ```text
 ┌─────────────────────────────────────────────────────────────┐
 │  GitHub Actions（免费，美国服务器）                          │
-│  工作日 21:30（北京时间）cron 自动触发                       │
+│  工作日 16:30（北京时间，cron `30 8 * * 1-5` UTC）自动触发   │
 │    ├─ 策略1 Boll 布林带扫描      (timeout 25min)             │
 │    ├─ 策略2 题材热度             (timeout 20min)             │
 │    ├─ 策略3 CCTV 板块舆情        (timeout 25min)             │
 │    ├─ 策略4 相对强弱             (timeout 20min, 单线程)      │
-│    └─ 策略5 动量/相对强度        (timeout 20min, 东财-free)   │
+│    ├─ 策略5 动量/相对强度        (timeout 25min, 东财-free)   │
+│    └─ 融合→操作清单→看板预热→前向回测（自动串接）            │
 │         ↓ 每个策略先 pull 缓存，命中则跳过；跑完 push 缓存   │
 └───────────────────────────┬─────────────────────────────────┘
                             ↓ 写入
@@ -38,6 +39,48 @@ A 股多策略选股系统 —— 以 Boll 布林带为主，融合题材热度 
 - 结果缓存在 **Supabase**，避免重复调接口、支持断点续跑；
 - 看板在 **Render** 部署，从 Supabase 实时读取展示；
 - 任一接口挂掉时自动回退到**本地 SQLite**（`stock_data/stocks_data.db`），不会整流程崩。
+
+---
+
+## 每日选股流程（云端自动化）
+
+每个工作日 16:30（北京时间）GitHub Actions 自动跑完下面这条链路，全程不开电脑、0 元/月。看懂这一节，就知道"它每天是怎么选股的"。
+
+### 一、五个独立策略各自出候选池（并行跑，先查缓存）
+
+| 步骤 | 策略 | 选股逻辑（一句话） | 产物 |
+|---|---|---|---|
+| 1 | **Boll 布林带**（主策略） | 股价触及/跌破 Boll 下轨的超卖均值回归票，给建议买入价 | `Stock-Selection-Boll-*.csv` |
+| 2 | **题材热度** | 近期换手/资金共识最强的题材方向里的活跃票 | `Stock-Selection-Ashare-Theme-Turnover-*.csv` |
+| 3 | **CCTV 板块舆情** | 新闻/舆论热度高的板块股票池（叙事与预期差） | `CCTV-Sector-Stock-Pool-*.csv` |
+| 4 | **相对强弱** | 顺风不弱、逆风抗跌的风格筛选（单线程防限流） | `Stock-Selection-Relativity-*.csv` |
+| 5 | **动量/相对强度** | 近 20 日上涨、MA20 上行的强势股（与 Boll 超卖互补） | `Stock-Selection-Momentum-*.csv` |
+
+每个策略先 `strategy_cache.py pull` 查 Supabase 当天缓存 → 命中就跳过（省接口额度）；没命中才跑 → 跑完 `push` 回 Supabase。任一策略接口挂掉/超时（`continue-on-error`）也不影响其他策略，整体不崩。
+
+### 二、信号融合 → 一份今日操作清单（`fusion.fuse_signals`）
+
+读取上面五个候选池，合并去重、打分、算止损止盈、分配仓位，输出 `Daily-Action-List-YYYYMMDD.csv`。这一步是选股真正的"决策中枢"，顺次过五道关：
+
+1. **综合评分（排序与加分）**：命中策略即按权重得分 `Boll 45 / Momentum 20 / Theme 15 / Relativity 15 / CCTV 10`；多命中一个策略额外 +5（多策略共振加分）。评分决定最终排序与仓位。
+2. **趋势闸门（择时防御）**：用**沪深300 的 MA60 位置**判市场状态（上行 / 下行防御 / 震荡）。若判定"下行防御"，直接剔除**纯均值回归票**（只命中 Boll/Relativity、不含顺势策略）——其"次日买、持有 10 日"在弱市必亏。
+3. **相对强度过滤（alpha 质量门，核心）**：对每只候选算其**近 20 日收益 vs 沪深300 同期收益**，跑输大盘超过 `RS_TOL=3%` 的票直接剔除（动量票豁免，因其本就要求 ret20>0 且 MA20 上行）。—— 直击"大盘涨、个股仍跑输"的根因。
+4. **流动性门槛（成交质量门）**：信号日成交额 < **¥1 亿** 的票剔除（流动性差→难出场、滑点大、庄股陷阱）。头对头测量为甜点（平均收益 +0.92%、胜率 +5.1%）。
+5. **趋势守卫（尾部风险）**：价格低于 MA20 超 12% 的破位/下降通道股剔除（防自由落体巨亏）。
+
+过完五关后，按命中策略中权重最高者分配仓位（单票上限 30%），止损价=Boll 下轨、止盈价=Boll 上轨，输出 ≤15 只的最终清单。日报里会逐条标注每道关剔除的数量。
+
+### 三、看板预热 + 每日前向回测（自动验证）
+
+- **看板预热**：把指数/市场热度/选股结果刷进缓存，Render 看板即日可见。
+- **前向信号回测**（`scripts/daily_backtest.py`）：对近 30 天每一份历史操作清单，**从信号日次日开盘买入、持有 10 日**，回测真实表现。回测输入会**内联复用与生产融合完全一致的 RS + 流动性过滤**（避免旧清单未过滤导致数字失真），并按**综合评分加权分配仓位**（`size_by='综合评分'`，确定性高的票多给仓位）。出场规则：Boll 上轨止盈 / 固定 +6% 止盈 / 5% 移动止盈 / 收盘跌破 MA60 趋势破位即走 / −8% 硬止损（缺口感知）/ 满 10 日兜底平仓，并计入真实交易成本（佣金万 2.5 + 印花税千 0.5）。
+
+### 四、结果落库与推送
+
+- 操作清单 + 各策略结果 + 回测结果 `git commit` 回仓库（供历史追溯），并上传 COS（若配置）。
+- 看板接入沪深300 基准对比，可直观看到策略**跑赢/跑输大盘多少**。
+
+> 一句话总结：**五策略广撒网 → 五道质量关层层过滤 → 评分加权出清单 → 次日开盘买入持有 10 日 → 每日回测复盘**。选股的核心杠杆不在"加策略"，而在"剔除弱 alpha"（RS 过滤 + 流动性门槛 + 置信度加权）。
 
 ---
 
@@ -156,12 +199,12 @@ python Frequently-Used-Program/auto_notify_boll.py
 
 ### GitHub Actions 选股（`daily-pick.yml`）
 
-- **触发**：工作日 21:30 北京时间（cron `30 13 * * 1-5` UTC，约 5–15 分钟延迟）
+- **触发**：工作日 16:30 北京时间（cron `30 8 * * 1-5` UTC，约 5–15 分钟延迟）
 - **K 线后端**：新浪 `stock_zh_a_daily` / baostock 双后端（**已全面去除东财依赖**，见下「数据链路去东财」）
 
 > **数据链路去东财（2026-07-11）**：原动量策略快照用东财 `stock_zh_a_spot_em`、CCTV 自评估用东财 `stock_zh_a_hist`，均已替换为**新浪 `stock_zh_a_spot` + `fetch_daily_k`（baostock/新浪后端）**，沙箱/海外均可达、无需东财。动量快照偶发空加 3 次重试；`MOMENTUM_USE_EASTMONEY=1` 仅作兜底（15s 线程超时防挂）。
-- **流程**：每个策略先 `strategy_cache.py pull` 查缓存 → 命中则 `exit 0` 跳过 → 否则跑选股 → `push` 上传
-- **超时**（单 step）：Boll 25min / 题材 20min / CCTV 25min / 相对强弱 20min；总 job 90min
+- **流程**：每个策略先 `strategy_cache.py pull` 查缓存 → 命中则 `exit 0` 跳过 → 否则跑选股 → `push` 上传；五个策略跑完后依次执行**融合生成操作清单 → 上传 COS → 看板预热 → 每日前向回测**
+- **超时**（单 step）：Boll 25min / 题材 20min / CCTV 25min / 相对强弱 20min / 动量 25min / 回测 40min；总 job 90min
 - **费用**：私有仓库 2000 分钟/月免费，选股约 660 分钟/月，够用（0 元）
 
 ### Render 部署 Web 看板（`render.yaml`）
@@ -268,7 +311,7 @@ cd frontend && npm run dev             # 前端 http://localhost:5173
 融合输出 `Daily-Action-List-YYYYMMDD.csv`（今日操作清单，含止损 / 止盈 / 建议买入价）。
 
 ### 趋势闸门（市场择时防御）
-融合时用**沪深300 的 MA60 位置**判定市场状态（`_detect_market_regime`，新浪指数、东财-free），替代此前的硬编码「震荡轮动」：
+融合时用**沪深300 的 MA60 位置**判定市场状态（`_detect_market_regime`，`_get_hs300_close` 以 baostock 主源 + akshare 兜底，东财-free），替代此前的硬编码「震荡轮动」：
 - **下行防御**（价格 < MA60 且 MA60 走平/下行）时，驱动 `build_strategy_allocation` 走防御 regime，**并直接剔除「纯均值回归」候选**（仅命中 Boll / Relativity、不含顺势策略）——其「次日买、持有 10 日」在弱市必亏；保留 Momentum / Theme / CCTV 等顺势策略。
 - 网络/数据不足时回退「震荡轮动」（不触发闸门），保证 pipeline 不崩。
 - 日报标注市场状态与闸门触发情况。
@@ -279,7 +322,7 @@ cd frontend && npm run dev             # 前端 http://localhost:5173
 
 针对「大盘涨、选出的超卖票仍跑输」这把根因：融合时对每只候选计算其**近 20 日收益 vs 沪深300 同期收益**，跑输大盘超过 `RS_TOL`（默认 3%）的候选直接剔除——除非该票本身是**动量票**（`Momentum` 命中，已要求 ret20>0 且 MA20 上行，豁免以免误杀强势股）。
 
-- 实现：`smcore/strategy/fusion.py` 的 `_passes_relative_strength_filter` + `_index_20d_return`（沪深300 收益缓存，新浪指数、东财-free），`fuse_signals(..., relative_strength_filter=True)` 默认开启。
+- 实现：`smcore/strategy/fusion.py` 的 `_passes_relative_strength_filter` + `_index_20d_return`（沪深300 收益缓存，`_get_hs300_close` 以 **baostock 为主源 + akshare 兜底**，东财-free），`fuse_signals(..., relative_strength_filter=True)` 默认开启。
 - 复用候选 K 线拉取（与止损止盈计算同一次联网），不额外开销；数据缺失保守保留，pipeline 不崩。
 - 日报标注剔除数量（`📉 相对强度过滤剔除 N 只跑输大盘超 X% 的票`）。
 - 验证：`scripts/measure_rs_filter.py` 用改进引擎对历史融合候选「不过滤 vs 过滤」头对头重测，扫 `RS_TOL=0/0.03/0.05` 选最优。
@@ -311,11 +354,16 @@ cd frontend && npm run dev             # 前端 http://localhost:5173
 - **移动止盈 5% + 固定止盈 6%** 锁利；
 - **汇总口径**：仅聚合已走完批次（`num_trades>0`），胜率按单笔交易统计。
 
-运行：
+运行（默认对近 30 天每一份 `Daily-Action-List-*.csv` 跑前向回测，CI 即如此调用）：
 ```bash
-# 对某日操作清单跑前向回测（Web 回测页底层即调用此脚本）
-python scripts/daily_backtest.py --signals stock_data/Daily-Action-List-YYYYMMDD.csv --hold-days 10
+# 每日自动回测（GitHub Actions daily-pick 末尾调用）
+HOLD_DAYS=10 LOOKBACK_DAYS=30 python scripts/daily_backtest.py
 ```
+
+关键行为（与生产融合一致，避免旧清单数字失真）：
+- **内联 RS + 流动性过滤**：回测前先按评分粗取前 100 只预筛，再逐一复用 `fusion` 的 RS 过滤（`RS_TOL=3%`）与流动性门槛（¥1 亿）剔除弱 alpha 票，确保回测输入 = 当天新跑融合的输出；可用 `BACKTEST_INLINE_FILTER=0` / `BACKTEST_MIN_AMOUNT=...` 调整。
+- **置信度加权仓位**：按 `综合评分` 加权分配资金（`size_by='综合评分'`，确定性高=多策略共振=多给仓位）；`BACKTEST_SIZE_BY=""` 回退等权。
+- 出场规则：Boll 上轨止盈 / 固定 +6% / 移动止盈 5% / 收盘跌破 MA60 / −8% 硬止损（缺口感知）/ 满 `HOLD_DAYS` 兜底；含真实交易成本。
 
 ### 策略 edge 量化测量（定权重用）
 `scripts/measure_strategy_edge.py` 读历史 `Daily-Action-List-*.csv`，按来源策略拆桶，用改进引擎跑前向 10 日回测，输出各策略收益 / 胜率 / 回撤 / 夏普 + BASELINE 对照。据其结果**数据驱动定稿** `STRATEGY_BASE_SCORE` 与 `allocation` 权重（如 Relativity 实测最差 → 砍权，Boll 最抗跌 → 提权）。
