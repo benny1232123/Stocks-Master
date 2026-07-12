@@ -39,6 +39,8 @@ from smcore.strategy.fusion import (
     _compute_boll_levels,
     _get_hs300_close,
 )
+# 多维市场仪表盘：波动率自适应风控的共同输入
+from smcore.strategy.market import compute_market_profile
 
 STRAT_MAP = {
     "boll": "boll",
@@ -54,6 +56,12 @@ TOP_N = 30
 # 内联过滤前的预筛选上限：先按评分粗取 N 只再做昂贵的 RS/量能计算，
 # 避免对全量 600+ 候选逐只拉 K 线导致超时。
 FILTER_PRE_TOP_N = 100
+
+# 波动率自适应止损：个股近20日波动率 vol20 → 止损比例 = clamp(VOL_STOP_MULT*vol20, 6%, 15%)。
+# 高波动股给更宽止损避免被洗、低波动给更紧；无 vol 数据时回退引擎全局 -8%。
+VOL_STOP_MULT = 8.0
+# 总仓位随市场波动率缩放（高波动留现金）：low=1.0 / mid=0.85 / high=0.6
+_VOL_POS_SCALE_MAP = {"low": 1.0, "mid": 0.85, "high": 0.6}
 
 
 def _parse_signal_date(name: str) -> date | None:
@@ -163,6 +171,34 @@ def _backtest_one(path: Path, sd: date, hold_days: int) -> dict | None:
     if "综合评分" in df.columns:
         sub["综合评分"] = pd.to_numeric(df["综合评分"], errors="coerce").values[: len(codes)]
 
+    # 波动率自适应风控（market profile 驱动）
+    _vol_stop_on = os.environ.get("VOL_SCALED_STOP", "1") == "1"
+    _vol_pos_on = os.environ.get("VOL_POS_SCALE", "1") == "1"
+    _vol_mult = float(os.environ.get("VOL_STOP_MULT", str(VOL_STOP_MULT)))
+    capital_scale = 1.0
+    if _vol_stop_on or _vol_pos_on:
+        try:
+            _prof = compute_market_profile()
+        except Exception:
+            _prof = None
+        if _prof is not None:
+            # 总仓位随市场波动率缩放（高波动留现金，真正降低组合暴露）
+            if _vol_pos_on:
+                capital_scale = _VOL_POS_SCALE_MAP.get(_prof.volatility_level, 0.85)
+            # 逐只波动率自适应止损：无 vol 数据回退引擎全局 -8%
+            if _vol_stop_on:
+                _stops = []
+                for code in sub["代码"]:
+                    lv = _compute_boll_levels(str(code).strip(), sd_yyyymmdd)
+                    v = lv.get("vol20") if lv else None
+                    if v and v > 0:
+                        _stops.append(max(0.06, min(_vol_mult * v, 0.15)))
+                    else:
+                        _stops.append(None)
+                sub["stop_pct"] = _stops
+                print(f"  [波动率自适应] 市场波动={_prof.volatility_level} 总仓位缩放={capital_scale} "
+                      f"逐只止损: {sum(1 for s in _stops if s)}/{len(_stops)} 只已定")
+
     strategies = derive_strategies(df["来源策略"]) if "来源策略" in df.columns else "boll,relativity,theme"
 
     size_by = os.environ.get("BACKTEST_SIZE_BY", "综合评分") or None
@@ -178,6 +214,7 @@ def _backtest_one(path: Path, sd: date, hold_days: int) -> dict | None:
         #  - 收盘跌破 MA60 趋势破位即走(trend_exit_ma=60，避免弱势里空等-8%硬止损)
         # 全样本BASELINE实测 -6.37%→-5.09%(+1.28pct)，回撤 -7.81%→-6.69% 收窄。
         # 注：Relativity单策略因MA60破位恶化(-9.57%→-13.86%)，但该策略已砍权(15分)，整体净正。
+        # 波动率自适应：stop_loss_pct 为全局兜底(-8%)，逐只 stop_pct 列（个股 vol20 定）优先。
         enable_exits=True,
         use_signal_bands=True,
         stop_loss_pct=0.08,
@@ -185,6 +222,7 @@ def _backtest_one(path: Path, sd: date, hold_days: int) -> dict | None:
         trailing_stop_pct=0.05,
         trend_exit_ma=60,
         size_by=size_by,
+        capital_scale=capital_scale,
     )
     if result.summary.get("error"):
         return None
@@ -201,6 +239,10 @@ def _backtest_one(path: Path, sd: date, hold_days: int) -> dict | None:
     summary["hold_days"] = hold_days
     summary["exit_mode"] = "boll_upper_take+take6%+trailing5%+MA60break"
     summary["size_mode"] = f"conviction({size_by})" if size_by else "equal"
+    summary["vol_mode"] = (
+        f"scaled_stop+pos{capital_scale}" if (_vol_stop_on or _vol_pos_on) else "fixed"
+    )
+    summary["capital_scale"] = round(capital_scale, 2)
     summary["signals_days"] = 1
     summary["codes_count"] = len(sub)
     summary["strategies"] = strategies

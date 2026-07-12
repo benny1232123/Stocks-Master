@@ -426,6 +426,12 @@ def _compute_boll_levels(code: str, as_of_date: Optional[str] = None) -> dict:
         amt_series = pd.to_numeric(df["amount"], errors="coerce").dropna()
         if len(amt_series) > 0:
             amount = float(amt_series.iloc[-1])
+    # 个股近 20 日波动率（日收益 std），供波动率自适应止损使用
+    vol20 = None
+    if len(close) >= 21:
+        dret = close.iloc[-20:].pct_change().dropna()
+        if len(dret) >= 5:
+            vol20 = float(dret.std())
     return {
         "close": float(last["close"]),
         "lower": float(last["Lower"]) if pd.notna(last.get("Lower")) else None,
@@ -433,6 +439,7 @@ def _compute_boll_levels(code: str, as_of_date: Optional[str] = None) -> dict:
         "ma20": float(last["MA"]) if pd.notna(last.get("MA")) else None,
         "ret20": ret20,
         "amount": amount,
+        "vol20": vol20,
     }
 
 

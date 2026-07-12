@@ -203,6 +203,7 @@ def run_forward_signal_backtest(
     trailing_stop_pct: Optional[float] = None,
     trend_exit_ma: Optional[int] = None,
     size_by: Optional[str] = None,
+    capital_scale: float = 1.0,
 ) -> "BacktestResult":
     """前向信号回测：锁定历史某天的信号清单，从信号日起往后持有，回测真实表现。
 
@@ -259,6 +260,7 @@ def run_forward_signal_backtest(
     raw_by_date: dict[date, list[str]] = defaultdict(list)
     level_map: dict[tuple[date, str], tuple[Optional[float], Optional[float]]] = {}
     weight_map: dict[tuple[date, str], float] = {}
+    stoppct_map: dict[tuple[date, str], Optional[float]] = {}
     for _, row in norm.iterrows():
         sd = row["date"].date()
         code = str(row["code"]).strip()
@@ -269,6 +271,9 @@ def run_forward_signal_backtest(
             wv = _to_f(row.get(size_by))
             w = wv if (wv is not None and wv > 0) else 1.0
         weight_map[(sd, code)] = w
+        # 逐行止损比例（波动率自适应）：输入含 stop_pct 列时按个股波动率定，否则回退全局
+        sp = _to_f(row.get("stop_pct"))
+        stoppct_map[(sd, code)] = sp if (sp is not None and sp > 0) else None
 
     min_sig = min(raw_by_date.keys())
     max_sig = max(raw_by_date.keys())
@@ -327,7 +332,9 @@ def run_forward_signal_backtest(
                 break
         if proc is not None:
             for code in codes:
-                buy_schedule[proc].append((sd, code, weight_map.get((sd, code), 1.0)))
+                buy_schedule[proc].append(
+                    (sd, code, weight_map.get((sd, code), 1.0), stoppct_map.get((sd, code), None))
+                )
 
     cash = float(initial_capital)
     holdings: dict[str, dict] = {}
@@ -337,16 +344,18 @@ def run_forward_signal_backtest(
     for d in cal:
         # 1) 信号日次日开盘买入（处理日 = 信号日后第一个交易日，用其开盘价）
         if d in buy_schedule:
-            candidates = [(sd, c, w) for (sd, c, w) in buy_schedule[d] if c not in holdings]
+            candidates = [(sd, c, w, sp) for (sd, c, w, sp) in buy_schedule[d] if c not in holdings]
             avail = max_positions - len(holdings)
             buyable = candidates[:avail]
-            total_w = sum(w for (_, _, w) in buyable) or 1.0
-            for sd, c, w in buyable:
+            total_w = sum(w for (_, _, w, _) in buyable) or 1.0
+            for sd, c, w, row_stop in buyable:
                 buy_price = _px(c, d, "open")
                 if buy_price is None:
                     continue
                 buy_price *= (1 + slippage)
-                per = cash * (w / total_w)  # 按置信度权重分配资金（size_by=None 时全为1→等权）
+                # 按置信度权重分配资金（size_by=None 时全为1→等权）；
+                # capital_scale<1 时留现金（高波动降仓），真正减少组合暴露而非等比缩放
+                per = cash * (w / total_w) * max(0.0, min(1.0, capital_scale))
                 qty = int(per / buy_price / 100) * 100
                 if qty < 100:
                     continue
@@ -356,12 +365,15 @@ def run_forward_signal_backtest(
                     continue
                 cash -= cost + fee
                 stop, take = level_map.get((sd, c), (None, None))
+                # 逐行止损比例：波动率自适应（个股 vol20 定）回退全局 stop_loss_pct
+                eff_stop = row_stop if row_stop is not None else stop_loss_pct
                 holdings[c] = {
                     "buy_date": d,
                     "buy_price": buy_price,
                     "qty": qty,
                     "stop": stop,
                     "take": take,
+                    "stop_pct": eff_stop,
                     "peak": buy_price,
                     "sd": sd,
                 }
@@ -375,12 +387,14 @@ def run_forward_signal_backtest(
             h["peak"] = max(h.get("peak", close), close)
             exit_reason = None
             if enable_exits:
-                # 硬止损（缺口感知）：盘中最低价触及 -stop_loss_pct 即以 min(开盘价,止损价)
-                # 离场，封顶亏损≈stop_loss_pct，挡住跳空低开直接击穿收盘止损的巨亏（如单日 -23%）。
-                if stop_loss_pct is not None and (d - h["buy_date"]).days >= 1:
+                # 逐行止损比例：波动率自适应（个股 vol20 定）回退全局 stop_loss_pct
+                row_stop = h.get("stop_pct")
+                # 硬止损（缺口感知）：盘中最低价触及 -row_stop 即以 min(开盘价,止损价)
+                # 离场，封顶亏损≈row_stop，挡住跳空低开直接击穿收盘止损的巨亏（如单日 -23%）。
+                if row_stop is not None and (d - h["buy_date"]).days >= 1:
                     low = _px(c, d, "low")
                     if low is not None:
-                        hard_stop = h["buy_price"] * (1 - abs(stop_loss_pct))
+                        hard_stop = h["buy_price"] * (1 - abs(row_stop))
                         if low <= hard_stop:
                             open_px = _px(c, d, "open")
                             exit_px = min(open_px, hard_stop) if open_px is not None else hard_stop
@@ -398,8 +412,8 @@ def run_forward_signal_backtest(
                         ma = _ma_n(c, d, trend_exit_ma)
                         if ma is not None and close < ma:
                             exit_reason = "trend_break"
-                    # 止损：固定比例（Boll 下轨≈入场价、过紧易频繁假止损，不单独用作止损）
-                    elif stop_loss_pct is not None and ret <= -abs(stop_loss_pct):
+                    # 止损：固定/自适应比例（Boll 下轨≈入场价、过紧易频繁假止损，不单独用作止损）
+                    elif row_stop is not None and ret <= -abs(row_stop):
                         exit_reason = "stop_pct"
                     # 移动止盈：从峰值回撤锁定利润
                     elif trailing_stop_pct is not None and h["peak"] > 0 and (close / h["peak"] - 1) <= -abs(trailing_stop_pct):
