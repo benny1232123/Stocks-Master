@@ -383,6 +383,62 @@ def daily_backtest_summary() -> dict:
     def _med(lst):
         return _stats.median(lst) if lst else 0.0
 
+    # ── 基准对比：沪深300 同期收益 ──
+    benchmark_returns = []
+    try:
+        from smcore.strategy.fusion import _get_hs300_close
+        from datetime import datetime as _dt
+
+        hs_series = _get_hs300_close()
+        if hs_series is not None and len(hs_series) > 0:
+            for r in base_rows:
+                try:
+                    sd_str = r.get("signal_start") or r.get("date", "")
+                    ed_str = r.get("signal_end") or ""
+                    hd = int(_num(r.get("hold_days"), 10))
+                    if not sd_str:
+                        continue
+                    # 解析信号开始日期
+                    if len(sd_str) == 8:
+                        sig_dt = _dt.strptime(sd_str, "%Y%m%d").date()
+                    else:
+                        sig_dt = _dt.strptime(sd_str[:10], "%Y-%m-%d").date()
+                    # 结束日期：优先用 signal_end（若与 start 不同则用），否则按持有天数推算
+                    if ed_str and len(ed_str) >= 8:
+                        if len(ed_str) == 8:
+                            end_dt = _dt.strptime(ed_str, "%Y%m%d").date()
+                        else:
+                            end_dt = _dt.strptime(ed_str[:10], "%Y-%m-%d").date()
+                        # 如果 signal_end 和 signal_start 是同一天，说明需要按持有期推算
+                        if end_dt == sig_dt:
+                            from datetime import timedelta as _td
+                            end_dt = sig_dt + _td(days=max(hd, 1))
+                    else:
+                        from datetime import timedelta as _td
+                        end_dt = sig_dt + _td(days=max(hd, 1))
+
+                    # 在沪深300序列中找最接近的交易日收盘价
+                    idx_dates = [d.date() if hasattr(d, 'date') else _dt.strptime(str(d)[:10], "%Y-%m-%d").date()
+                                 for d in hs_series.index]
+                    # 找信号日之前最近的收盘价
+                    before = [(i, d) for i, d in enumerate(idx_dates) if d <= sig_dt]
+                    after = [(i, d) for i, d in enumerate(idx_dates) if d >= end_dt]
+                    if before and after:
+                        start_price = float(hs_series.iloc[before[-1][0]])
+                        end_price = float(hs_series.iloc[after[0][0]])
+                        if start_price and start_price > 0:
+                            bret = (end_price / start_price - 1) * 100
+                            benchmark_returns.append(bret)
+                except Exception:
+                    continue
+    except Exception:
+        pass
+
+    avg_benchmark = round(_stats.mean(benchmark_returns), 2) if benchmark_returns else None
+    avg_excess = None
+    if avg_benchmark is not None and rets:
+        avg_excess = round(_stats.mean(rets) - avg_benchmark, 2)
+
     return {
         "count": len(rows),
         "completed_count": len(completed),
@@ -399,6 +455,10 @@ def daily_backtest_summary() -> dict:
         "avg_hold_days": round(_stats.mean(holds), 1),
         "best_day": {"date": best.get("date"), "return": _num(best.get("total_return"))},
         "worst_day": {"date": worst.get("date"), "return": _num(worst.get("total_return"))},
+        # 基准对比
+        "benchmark_name": "沪深300",
+        "benchmark_return": avg_benchmark,
+        "excess_return": avg_excess,
     }
 
 

@@ -15,6 +15,7 @@ import {
   BarChart3,
   Trophy,
   AlertTriangle,
+  Zap,
 } from 'lucide-react'
 import { Button } from './components/ui/button'
 import { cn } from './lib/utils'
@@ -1813,61 +1814,89 @@ function App() {
                     <span className="dbt-summary-sub">近 {dailySummary.count} 个信号日前向回测（平均持有 {dailySummary.avg_hold_days} 天）的整体表现</span>
                   </div>
                   <div className="dbt-summary-grid">
-                    {/* 平均总收益 */}
-                    <div className={cn("dbt-summary-cell", dailySummary.avg_return >= 0 ? "dbt-cell-good" : "dbt-cell-bad")}>
+                    {/* ── 1. 平均总收益 ── */}
+                    <div className={cn("dbt-summary-cell", dailySummary.avg_return >= 0 ? "dbt-cell-good" : "dbt-cell-bad")}
+                      title="每个信号日买入后、持有到期卖出，扣除交易成本（佣金+印花税）后的平均收益率。正数=整体赚钱，负数=整体亏钱。">
                       <div className="dbt-cell-icon-wrap dbt-icon-green">
                         <TrendingUp className="dbt-cell-icon" />
                       </div>
                       <div className="dbt-cell-body">
                         <div className="dbt-summary-label">平均总收益</div>
                         <div className="dbt-summary-val">{dailySummary.avg_return >= 0 ? "+" : ""}{dailySummary.avg_return}%</div>
-                        <div className="dbt-summary-hint">中位 {dailySummary.median_return >= 0 ? "+" : ""}{dailySummary.median_return}%</div>
+                        <div className="dbt-summary-hint">中位 {dailySummary.median_return >= 0 ? "+" : ""}{dailySummary.median_return}% · 扣除成本后</div>
                       </div>
                     </div>
-                    {/* 平均最大回撤 */}
-                    <div className="dbt-summary-cell dbt-cell-bad">
+                    {/* ── 2. 平均最大回撤 ── */}
+                    <div className={cn("dbt-summary-cell", "dbt-cell-bad")}
+                      title="持有期间权益从峰值下跌的最大幅度。回撤越小越好——说明风控越稳、心态压力越小。">
                       <div className="dbt-cell-icon-wrap dbt-icon-red">
                         <TrendingDown className="dbt-cell-icon" />
                       </div>
                       <div className="dbt-cell-body">
                         <div className="dbt-summary-label">平均最大回撤</div>
                         <div className="dbt-summary-val">{dailySummary.avg_drawdown}%</div>
-                        <div className="dbt-summary-hint">中位 {dailySummary.median_drawdown}%</div>
+                        <div className="dbt-summary-hint">中位 {dailySummary.median_drawdown}% · 越小风控越稳</div>
                       </div>
                     </div>
-                    {/* 正收益天数 */}
-                    <div className={cn("dbt-summary-cell", dailySummary.positive_ratio >= 50 ? "dbt-cell-good" : "dbt-cell-bad")}>
+                    {/* ── 3. 正收益天数 ── */}
+                    <div className={cn("dbt-summary-cell", dailySummary.positive_ratio >= 50 ? "dbt-cell-good" : "dbt-cell-bad")}
+                      title="所有信号日中，最终盈利的天数占比。≥50% 说明多数时候能赚到钱，是策略稳定性的核心指标。">
                       <div className="dbt-cell-icon-wrap dbt-icon-blue">
                         <Target className="dbt-cell-icon" />
                       </div>
                       <div className="dbt-cell-body">
                         <div className="dbt-summary-label">正收益天数</div>
                         <div className="dbt-summary-val">{dailySummary.positive_days}<span className="dbt-val-slash">/</span>{dailySummary.count}</div>
-                        <div className="dbt-summary-hint">占比 {dailySummary.positive_ratio}%</div>
+                        <div className="dbt-summary-hint">占比 {dailySummary.positive_ratio}% · ≥50%多数日能赚</div>
                       </div>
                     </div>
-                    {/* 平均胜率 */}
-                    <div className={cn("dbt-summary-cell", dailySummary.avg_win_rate >= 50 ? "dbt-cell-good" : dailySummary.avg_win_rate >= 35 ? "dbt-cell-neutral" : "dbt-cell-bad")}>
+                    {/* ── 4. 平均胜率 ── */}
+                    <div className={cn("dbt-summary-cell", dailySummary.avg_win_rate >= 50 ? "dbt-cell-good" : dailySummary.avg_win_rate >= 35 ? "dbt-cell-neutral" : "dbt-cell-bad")}
+                      title="全部成交笔中盈利笔数的占比。每笔交易盈亏相加→胜率×均赢 − (1−胜率)×均亏。高胜率是长期盈利的基础。">
                       <div className="dbt-cell-icon-wrap dbt-icon-purple">
                         <Percent className="dbt-cell-icon" />
                       </div>
                       <div className="dbt-cell-body">
                         <div className="dbt-summary-label">平均胜率</div>
                         <div className="dbt-summary-val">{dailySummary.avg_win_rate}%</div>
-                        <div className="dbt-summary-hint">中位 {dailySummary.median_win_rate}%</div>
+                        <div className="dbt-summary-hint">中位 {dailySummary.median_win_rate}% · 单笔盈利占比</div>
                       </div>
                     </div>
-                    {/* 平均夏普 */}
-                    <div className={cn("dbt-summary-cell", dailySummary.avg_sharpe >= 0 ? "dbt-cell-good" : "dbt-cell-bad")}>
+                    {/* ── 5. 平均夏普 ── */}
+                    <div className={cn("dbt-summary-cell", dailySummary.avg_sharpe >= 0 ? "dbt-cell-good" : "dbt-cell-bad")}
+                      title="夏普比率 = （收益率 − 无风险利率）/ 收益标准差。衡量「承担单位风险获得的超额回报」。>1 优秀，>2 极好。">
                       <div className="dbt-cell-icon-wrap dbt-icon-amber">
                         <BarChart3 className="dbt-cell-icon" />
                       </div>
                       <div className="dbt-cell-body">
                         <div className="dbt-summary-label">平均夏普</div>
                         <div className="dbt-summary-val">{dailySummary.avg_sharpe}</div>
-                        <div className="dbt-summary-hint">累计成交 {dailySummary.total_trades} 笔</div>
+                        <div className="dbt-summary-hint">累计成交 {dailySummary.total_trades} 笔 · 风险调整后回报</div>
                       </div>
                     </div>
+                    {/* ── 6. 超额收益 vs 沪深300（NEW）── */}
+                    {dailySummary.excess_return != null ? (
+                    <div className={cn("dbt-summary-cell", dailySummary.excess_return >= 0 ? "dbt-cell-good" : "dbt-cell-bad")}
+                      title={`同期沪深300 ${dailySummary.benchmark_return >= 0 ? '+' : ''}${dailySummary.benchmark_return}% | 策略跑${dailySummary.excess_return >= 0 ? '赢' : '输'}大盘 ${(Math.abs(dailySummary.excess_return)).toFixed(2)} 个百分点。超额为正是 alpha 的直接证据——策略有独立选股能力。`}>
+                      <div className="dbt-cell-icon-wrap dbt-icon-purple">
+                        <Zap className="dbt-cell-icon" />
+                      </div>
+                      <div className="dbt-cell-body">
+                        <div className="dbt-summary-label">{dailySummary.benchmark_name || '沪深300'}</div>
+                        <div className="dbt-summary-val">{dailySummary.excess_return >= 0 ? "+" : ""}{dailySummary.excess_return}%</div>
+                        <div className="dbt-summary-hint">基准 {dailySummary.benchmark_return >= 0 ? "+" : ""}{dailySummary.benchmark_return}% · 策略跑{dailySummary.excess_return >= 0 ? '赢' : '输'}大盘</div>
+                      </div>
+                    </div>
+                    ) : (
+                    <div className="dbt-summary-cell dbt-cell-neutral"
+                      title="沪深300 基准数据暂不可用（指数序列拉取失败），无法计算超额收益。">
+                      <div className="dbt-cell-body">
+                        <div className="dbt-summary-label">vs 沪深300</div>
+                        <div className="dbt-summary-val">—</div>
+                        <div className="dbt-summary-hint">基准暂不可用</div>
+                      </div>
+                    </div>
+                    )}
                     {/* 最佳 / 最差信号日 */}
                     <div className="dbt-summary-cell dbt-cell-bestworst">
                       <div className="dbt-bw-row">
