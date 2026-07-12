@@ -27,6 +27,7 @@ from smcore.data import fetch_daily_k
 from smcore.indicators import calc_bollinger
 from smcore.strategy import build_strategy_allocation
 from smcore.strategy.market import compute_market_profile
+from smcore.strategy import sectors as sector_mod
 from smcore.utils.code import format_stock_code
 from smcore.utils.format import fmt_num, to_float
 
@@ -454,6 +455,8 @@ def fuse_signals(
     relative_strength_filter: bool = True,
     min_signal_amount: float = MIN_SIGNAL_AMOUNT,
     dynamic_thresholds: bool = True,
+    sector_cap: bool = True,
+    max_per_sector: int = sector_mod.DEFAULT_MAX_PER_SECTOR,
     max_stale_days: int = 3,
 ) -> tuple[pd.DataFrame, str]:
     """融合四策略信号，输出今日操作清单。
@@ -507,12 +510,15 @@ def fuse_signals(
     weights = alloc["final_weights"]
 
     rows = []
+    # 候选股近20日收益（ret20），供板块轮动动量加成使用（融合已算过，零额外联网）
+    cand_ret20: dict[str, Optional[float]] = {}
     gated_out = 0
     rs_filtered_out = 0
     liquidity_filtered_out = 0
     for code in all_codes:
         # 拉 K 线：fetch_levels 需算止损止盈；relative_strength_filter 需近20日收益（复用同一次拉取）
         levels = _compute_boll_levels(code, date_yyyymmdd) if (fetch_levels or relative_strength_filter) else {}
+        cand_ret20[code] = levels.get("ret20")
         hit_strategies = []
         score = 0
         name = ""
@@ -625,9 +631,31 @@ def fuse_signals(
     if df.empty:
         # 全部候选被过滤（趋势闸门/RS/流动性）时返回空清单，避免空 DF sort_values 崩溃
         df = df.head(max_picks)
+        sector_hit_cap = False
     else:
+        # 板块轮动（确认型）：用候选 ret20 聚合板块动量，给强势板块候选小幅加成
+        # 仅在本轮已筛候选内有效，零额外联网；样本不足或板块映射缺失时自动跳过（加成=0）。
+        sector_hit_cap = False
+        sector_map = sector_mod.get_sector_map() if sector_cap else {}
+        if sector_cap and sector_map:
+            sector_bonus, _meds = sector_mod.compute_sector_momentum(cand_ret20, sector_map)
+            if sector_bonus:
+                df["综合评分"] = df.apply(
+                    lambda r: round(
+                        r["综合评分"]
+                        + sector_bonus.get(sector_mod.industry_of(r["股票代码"], sector_map), 0.0),
+                        1,
+                    ),
+                    axis=1,
+                )
         df = df.sort_values("综合评分", ascending=False).reset_index(drop=True)
-        df = df.head(max_picks)
+        # 单板块集中度控制：最终入选单板块最多 max_per_sector 只，强制分散（映射缺失则跳过）
+        if sector_cap and sector_map:
+            df, sector_hit_cap = sector_mod.apply_sector_cap(
+                df, sector_map, max_per=max_per_sector, top_n=max_picks
+            )
+        else:
+            df = df.head(max_picks)
 
     # 生成日报段落
     report = _build_report_text(
@@ -652,6 +680,10 @@ def fuse_signals(
         report += f"\n- 📉 相对强度过滤剔除 {rs_filtered_out} 只跑输大盘超 {rs_tol * 100:.0f}% 的票（alpha 弱，直接不治本；阈值随市浮动）"
     if liquidity_filtered_out:
         report += f"\n- 💧 流动性门槛剔除 {liquidity_filtered_out} 只信号日成交额 < ¥{min_amt / 1e8:.2f}亿 的票（难出场/庄股陷阱；门槛随市浮动）"
+    if sector_cap:
+        n_sec = df["股票代码"].map(lambda c: sector_mod.industry_of(c)).nunique() if not df.empty else 0
+        cap_note = "（单板块上限 %d，已触发分散）" % max_per_sector if sector_hit_cap else "（单板块上限 %d）" % max_per_sector
+        report += f"\n- 🏭 板块轮动+集中度：最终 {len(df)} 只覆盖 {n_sec} 个行业{cap_note}（强势板块候选已微调评分）"
     if profile is not None:
         report += f"\n- 🌡️ 市场仪表盘：{profile.summary()}"
     return df, report
