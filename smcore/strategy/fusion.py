@@ -106,11 +106,47 @@ def _detect_market_regime() -> str:
 _HS300_CLOSE_CACHE: Optional[pd.Series] = None
 
 
-def _get_hs300_close() -> Optional[pd.Series]:
-    """缓存沪深300 收盘价序列（新浪指数，东财-free）。失败返回 None。"""
-    global _HS300_CLOSE_CACHE
-    if _HS300_CLOSE_CACHE is not None:
-        return _HS300_CLOSE_CACHE
+def _fetch_hs300_baostock() -> Optional[pd.Series]:
+    """baostock 拉沪深300 收盘价（沙箱/本地最稳，已验证可达）。失败返回 None。"""
+    try:
+        import baostock as bs
+        from smcore.data.session import session
+
+        with session() as ok:
+            if not ok:
+                return None
+            end = date.today().strftime("%Y-%m-%d")
+            rs = bs.query_history_k_data_plus(
+                "sh.000300", "date,close",
+                start_date="2020-01-01", end_date=end,
+                frequency="d", adjustflag="2",
+            )
+            if rs.error_code != "0":
+                # 指数不支持前复权，退而不复权重试
+                rs = bs.query_history_k_data_plus(
+                    "sh.000300", "date,close",
+                    start_date="2020-01-01", end_date=end,
+                    frequency="d", adjustflag="3",
+                )
+                if rs.error_code != "0":
+                    return None
+            rows = []
+            while rs.next():
+                rows.append(rs.get_row_data())
+            if not rows:
+                return None
+            df = pd.DataFrame(rows, columns=rs.fields)
+            close = pd.to_numeric(df["close"], errors="coerce")
+            dts = pd.to_datetime(df["date"], errors="coerce")
+            s = pd.Series(close.values.astype(float), index=dts)
+            s = s[~s.index.isna()].sort_index()
+            return s if len(s) >= 22 else None
+    except Exception:
+        return None
+
+
+def _fetch_hs300_akshare() -> Optional[pd.Series]:
+    """akshare 拉沪深300 收盘价（云端无 baostock 时兜底）。失败返回 None。"""
     try:
         import akshare as ak
         from smcore.data.kline import _call_with_timeout
@@ -122,10 +158,28 @@ def _get_hs300_close() -> Optional[pd.Series]:
         dts = pd.to_datetime(df["date"], errors="coerce")
         s = pd.Series(close.values.astype(float), index=dts)
         s = s[~s.index.isna()].sort_index()
-        _HS300_CLOSE_CACHE = s
-        return s
+        return s if len(s) >= 22 else None
     except Exception:
         return None
+
+
+def _get_hs300_close() -> Optional[pd.Series]:
+    """缓存沪深300 收盘价序列（baostock 主源 + akshare 兜底，东财-free）。
+
+    此前仅走 akshare，沙箱/云端指数接口偶发失败会返回 None，
+    导致 RS 过滤「数据缺失一律放行」而形同虚设。改为 baostock 主源后
+    沙箱稳定可取，云端退 akshare，保证相对强度过滤真正生效。
+    """
+    global _HS300_CLOSE_CACHE
+    if _HS300_CLOSE_CACHE is not None:
+        return _HS300_CLOSE_CACHE
+    s = _fetch_hs300_baostock()
+    if s is None:
+        s = _fetch_hs300_akshare()
+    if s is None or len(s) < 22:
+        return None
+    _HS300_CLOSE_CACHE = s
+    return s
 
 
 def _index_20d_return(as_of_yyyymmdd: str) -> Optional[float]:

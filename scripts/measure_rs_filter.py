@@ -94,7 +94,9 @@ def main() -> int:
     print(f"候选总数: {len(universe)}  唯一标的: {len(unique_codes)}")
 
     # 2) 预拉 K 线到缓存
-    earliest = min(sd for sd, _ in study) - timedelta(days=5)
+    # earliest 必须覆盖每只票信号日「前 45 天」的回看窗口（_stock_20d_return
+    # 用 sd-45d 起算 20 日收益），否则切片不足 22 个交易日→返回 None→过滤全放行。
+    earliest = min(sd for sd, _ in study) - timedelta(days=60)
     latest = max(sd for sd, _ in study) + timedelta(days=HOLD_DAYS + 20)
     cache: dict[str, pd.DataFrame] = {}
 
@@ -121,26 +123,67 @@ def main() -> int:
     import smcore.backtest.engine as eng_mod
     eng_mod.fetch_daily_k = cached_fetch
 
-    def run_set(rows: list[dict]):
+    # 按信号日分组（后续每个信号日独立回测，避免「全宇宙一次性塞入导致
+    # 首波买日花光现金、后续 12 天全跳过」的资金池假象）。
+    from collections import defaultdict as _dd
+
+    universe_by_date: dict[str, list[dict]] = _dd(list)
+    for rec in universe:
+        universe_by_date[rec["日期"]].append(rec)
+
+    def backtest_rows(rows: list[dict]) -> dict | None:
+        """对一组候选（跨多信号日）做头对头回测：每个信号日独立资金池，
+        汇总全部成交作为「等权每信号」样本。返回聚合指标。"""
         if not rows:
             return None
-        sdf = pd.DataFrame(rows)
-        res = run_forward_signal_backtest(
-            sdf, hold_days=HOLD_DAYS, initial_capital=100000.0, max_positions=200,
-            slippage=0.001, enable_exits=True, use_signal_bands=True,
-            stop_loss_pct=0.08, take_profit_pct=0.06, trailing_stop_pct=0.05,
-            trend_exit_ma=60,
-        )
-        return res.summary if "error" not in res.summary else None
+        by_date: dict[str, list[dict]] = _dd(list)
+        for r in rows:
+            by_date[r["日期"]].append(r)
+        all_trades: list[pd.DataFrame] = []
+        for sd in sorted(by_date):
+            recs = by_date[sd]
+            sdf = pd.DataFrame(recs)
+            res = run_forward_signal_backtest(
+                # 每个信号日独立资金池，给足资金让当天全部候选都能成交
+                # （per = 资金/候选数，≈每只 4 万，能买得起 100 股）。
+                sdf, hold_days=HOLD_DAYS, initial_capital=20_000_000.0, max_positions=600,
+                slippage=0.001, enable_exits=True, use_signal_bands=True,
+                stop_loss_pct=0.08, take_profit_pct=0.06, trailing_stop_pct=0.05,
+                trend_exit_ma=60,
+            )
+            if "error" not in res.summary and res.trades is not None and not res.trades.empty:
+                all_trades.append(res.trades)
+        if not all_trades:
+            return None
+        t = pd.concat(all_trades, ignore_index=True)
+        rets = pd.to_numeric(t["return_pct"], errors="coerce").dropna()
+        if rets.empty:
+            return None
+        return {
+            "num_trades": int(len(t)),
+            "avg_return": round(float(rets.mean()), 2),
+            "win_rate": round(float((rets > 0).mean() * 100), 1),
+        }
 
     # 3) 不过滤基线
-    base_sum = run_set(universe)
-    print(f"\n[不过滤基线] 收益={base_sum['total_return']:.2f}% 胜率={base_sum['win_rate']:.1f}% "
-          f"回撤={base_sum['max_drawdown']:.2f}% 夏普={base_sum['sharpe']:.2f} 交易={base_sum['num_trades']}")
+    base = backtest_rows(universe)
+    if base is None:
+        print("基线回测失败")
+        return 1
+    print(f"\n[不过滤基线] 平均收益={base['avg_return']:.2f}% 胜率={base['win_rate']:.1f}% 交易={base['num_trades']}")
 
     # 4) 按 TOL 过滤
     print(f"\n[出场配置] 硬止损=-8% 固定止盈=+6% 移动止盈=-5% 趋势破位=MA60 持有={HOLD_DAYS}日")
-    print(f"{'TOL':>6s} {'剔除':>5s} {'保留':>5s} {'收益%':>8s} {'胜率%':>8s} {'回撤%':>8s} {'夏普':>7s} {'交易':>6s} {'Δ收益':>8s}")
+    # 诊断：RS 数据可用性（确认过滤这次真能算出、不再全放行）
+    n_stock_ok = n_idx_ok = 0
+    for rec in universe:
+        sd = datetime.strptime(rec["日期"], "%Y-%m-%d").date()
+        if _stock_20d_return(rec["代码"], sd, cached_fetch) is not None:
+            n_stock_ok += 1
+        if _index_20d_return(sd.strftime("%Y%m%d")) is not None:
+            n_idx_ok += 1
+    print(f"[RS数据] 个股20日收益有效={n_stock_ok}/{len(universe)}  沪深300收益有效={n_idx_ok}/{len(universe)}")
+    print(f"{'TOL':>6s} {'剔除':>5s} {'保留':>5s} {'平均收益%':>10s} {'胜率%':>8s} {'交易':>6s} {'Δ收益':>8s}")
     for tol in TOLS:
         kept = []
         dropped = 0
@@ -154,14 +197,13 @@ def main() -> int:
                 dropped += 1
                 continue
             kept.append(rec)
-        s = run_set(kept)
+        s = backtest_rows(kept)
         if s is None:
             print(f"{tol:>6.2f} {dropped:>5d} {len(kept):>5d}  (回测失败)")
             continue
-        delta = s["total_return"] - base_sum["total_return"]
-        print(f"{tol:>6.2f} {dropped:>5d} {len(kept):>5d} {s['total_return']:>8.2f} "
-              f"{s['win_rate']:>8.1f} {s['max_drawdown']:>8.2f} {s['sharpe']:>7.2f} "
-              f"{s['num_trades']:>6d} {delta:>+8.2f}")
+        delta = s["avg_return"] - base["avg_return"]
+        print(f"{tol:>6.2f} {dropped:>5d} {len(kept):>5d} {s['avg_return']:>10.2f} "
+              f"{s['win_rate']:>8.1f} {s['num_trades']:>6d} {delta:>+8.2f}")
     return 0
 
 
