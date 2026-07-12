@@ -44,3 +44,8 @@
 
 ## 环境坑
 - 本地 `stocks-master.bat` 后端用 **Anaconda**（`E:\Anaconda\python.exe app.py`），所以 backtrader **必须装进 Anaconda**（`E:\Anaconda\python.exe -m pip install backtrader`）。受管 venv 里的 backtrader 只用于验证。
+
+## 数据链路坑（2026-07-12，已修）
+- **fusion.py 改过滤逻辑 ≠ 回测数字自动更新**：Daily-Action-List CSV 每天只产当天、历史冻结；daily_backtest.py 读旧 CSV 不过滤 → 改融合不改变历史回测输入。**修复**：daily_backtest.py 加内联 RS+流动性过滤管道（与 fusion 逻辑一致），确保回测输入始终与当前生产等价。
+- **前导零是持久性 bug**：pandas 读 CSV 自动把 `000915` 变成 `915`，旧 CSV 一旦生成就永远缺零。修复点在读取侧（read_csv_file / daily_backtest 均需 format_stock_code 归一），不能仅依赖生成侧。
+- **后台 Bash 跨会话会被杀**：长耗时任务必须前台阻塞跑（timeout≤600000ms）或脚本内增量落盘。
