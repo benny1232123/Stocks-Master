@@ -202,6 +202,7 @@ def run_forward_signal_backtest(
     take_profit_pct: Optional[float] = None,
     trailing_stop_pct: Optional[float] = None,
     trend_exit_ma: Optional[int] = None,
+    size_by: Optional[str] = None,
 ) -> "BacktestResult":
     """前向信号回测：锁定历史某天的信号清单，从信号日起往后持有，回测真实表现。
 
@@ -257,11 +258,17 @@ def run_forward_signal_backtest(
     # 按信号日分组，并记录每只标的的止损/止盈水位（来自操作清单）
     raw_by_date: dict[date, list[str]] = defaultdict(list)
     level_map: dict[tuple[date, str], tuple[Optional[float], Optional[float]]] = {}
+    weight_map: dict[tuple[date, str], float] = {}
     for _, row in norm.iterrows():
         sd = row["date"].date()
         code = str(row["code"]).strip()
         raw_by_date[sd].append(code)
         level_map[(sd, code)] = (_to_f(row.get("stop_price")), _to_f(row.get("take_price")))
+        w = 1.0
+        if size_by is not None:
+            wv = _to_f(row.get(size_by))
+            w = wv if (wv is not None and wv > 0) else 1.0
+        weight_map[(sd, code)] = w
 
     min_sig = min(raw_by_date.keys())
     max_sig = max(raw_by_date.keys())
@@ -320,7 +327,7 @@ def run_forward_signal_backtest(
                 break
         if proc is not None:
             for code in codes:
-                buy_schedule[proc].append((sd, code))
+                buy_schedule[proc].append((sd, code, weight_map.get((sd, code), 1.0)))
 
     cash = float(initial_capital)
     holdings: dict[str, dict] = {}
@@ -330,15 +337,16 @@ def run_forward_signal_backtest(
     for d in cal:
         # 1) 信号日次日开盘买入（处理日 = 信号日后第一个交易日，用其开盘价）
         if d in buy_schedule:
-            candidates = [(sd, c) for (sd, c) in buy_schedule[d] if c not in holdings]
+            candidates = [(sd, c, w) for (sd, c, w) in buy_schedule[d] if c not in holdings]
             avail = max_positions - len(holdings)
-            n_buy = min(avail, len(candidates))
-            per = cash / max(n_buy, 1)  # 按当日实际买入数量均分资金
-            for sd, c in candidates[:avail]:
+            buyable = candidates[:avail]
+            total_w = sum(w for (_, _, w) in buyable) or 1.0
+            for sd, c, w in buyable:
                 buy_price = _px(c, d, "open")
                 if buy_price is None:
                     continue
                 buy_price *= (1 + slippage)
+                per = cash * (w / total_w)  # 按置信度权重分配资金（size_by=None 时全为1→等权）
                 qty = int(per / buy_price / 100) * 100
                 if qty < 100:
                     continue
