@@ -54,6 +54,12 @@ TREND_GUARD_BELOW_MA20 = 0.12
 # 动量票已要求 ret20>0 且 MA20 上行，豁免本过滤以免误杀强势股。
 RS_LOOKBACK = 20
 RS_TOL = 0.03
+# 流动性门槛：信号日成交额（元）低于此值的票直接剔除。
+# 头对头测量（measure_signal_quality.py，RS 宇宙样本）：¥1e8 门槛相对基线
+# 平均收益 +0.92%、胜率 +5.1%、盈亏比 +0.43，为最优甜点（¥5e7 反而更弱）。
+# 剔除流动性差的票可避免难出场/庄股陷阱导致的隐性亏损。
+# 注意：amount 单位随数据源（akshare/baostock 均为元）；取值为 None 时放行（后端故障不误杀）。
+MIN_SIGNAL_AMOUNT = 1e8
 RS_APPLY_TO_MOMENTUM = False
 
 
@@ -390,12 +396,19 @@ def _compute_boll_levels(code: str, as_of_date: Optional[str] = None) -> dict:
         prev = close.iloc[-(RS_LOOKBACK + 1)]
         if prev and not pd.isna(prev):
             ret20 = float(close.iloc[-1]) / float(prev) - 1
+    # 信号日成交额（元），用于流动性门槛过滤
+    amount = None
+    if "amount" in df.columns:
+        amt_series = pd.to_numeric(df["amount"], errors="coerce").dropna()
+        if len(amt_series) > 0:
+            amount = float(amt_series.iloc[-1])
     return {
         "close": float(last["close"]),
         "lower": float(last["Lower"]) if pd.notna(last.get("Lower")) else None,
         "upper": float(last["Upper"]) if pd.notna(last.get("Upper")) else None,
         "ma20": float(last["MA"]) if pd.notna(last.get("MA")) else None,
         "ret20": ret20,
+        "amount": amount,
     }
 
 
@@ -408,6 +421,7 @@ def fuse_signals(
     trend_guard: bool = True,
     market_gate: bool = True,
     relative_strength_filter: bool = True,
+    min_signal_amount: float = MIN_SIGNAL_AMOUNT,
     max_stale_days: int = 3,
 ) -> tuple[pd.DataFrame, str]:
     """融合四策略信号，输出今日操作清单。
@@ -456,6 +470,7 @@ def fuse_signals(
     rows = []
     gated_out = 0
     rs_filtered_out = 0
+    liquidity_filtered_out = 0
     for code in all_codes:
         # 拉 K 线：fetch_levels 需算止损止盈；relative_strength_filter 需近20日收益（复用同一次拉取）
         levels = _compute_boll_levels(code, date_yyyymmdd) if (fetch_levels or relative_strength_filter) else {}
@@ -505,6 +520,15 @@ def fuse_signals(
             index_ret = _index_20d_return(date_yyyymmdd)
             if not _passes_relative_strength_filter(hit_strategies, stock_ret, index_ret):
                 rs_filtered_out += 1
+                continue
+
+        # 流动性门槛：剔除信号日成交额过低（难出场/庄股陷阱）的票。
+        # 复用 _compute_boll_levels 已拉的 K 线（amount 字段）。取值为 None 时放行，
+        # 避免数据源故障把整份清单误杀。仅 momentum 豁免意义不大，故对所有策略统一施加。
+        if min_signal_amount and min_signal_amount > 0:
+            amt = levels.get("amount")
+            if amt is not None and amt < min_signal_amount:
+                liquidity_filtered_out += 1
                 continue
 
         # 仓位分配：按命中策略中权重最大的那个分配，单票取该策略权重的 1/N（N=该策略候选数）
@@ -558,8 +582,12 @@ def fuse_signals(
         )
         df = df[mask].reset_index(drop=True)
         filtered_out = before - len(df)
-    df = df.sort_values("综合评分", ascending=False).reset_index(drop=True)
-    df = df.head(max_picks)
+    if df.empty:
+        # 全部候选被过滤（趋势闸门/RS/流动性）时返回空清单，避免空 DF sort_values 崩溃
+        df = df.head(max_picks)
+    else:
+        df = df.sort_values("综合评分", ascending=False).reset_index(drop=True)
+        df = df.head(max_picks)
 
     # 生成日报段落
     report = _build_report_text(
@@ -582,6 +610,8 @@ def fuse_signals(
             report += f"\n- 🚦 市场状态：{regime}（趋势闸门生效）"
     if rs_filtered_out:
         report += f"\n- 📉 相对强度过滤剔除 {rs_filtered_out} 只跑输大盘超 {RS_TOL * 100:.0f}% 的票（alpha 弱，直接不治本）"
+    if liquidity_filtered_out:
+        report += f"\n- 💧 流动性门槛剔除 {liquidity_filtered_out} 只信号日成交额 < ¥{min_signal_amount / 1e8:.0f}亿 的票（难出场/庄股陷阱）"
     return df, report
 
 

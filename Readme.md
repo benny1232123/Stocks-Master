@@ -286,6 +286,14 @@ cd frontend && npm run dev             # 前端 http://localhost:5173
 
 > 与趋势闸门的区别：趋势闸门是「市场弱时不买均值回归」的择时防御层；相对强度过滤是「无论市场强弱，剔除个股 alpha 弱于大盘的票」的质量门——后者直接打击那一轮亏损的根因（大盘涨而个股亏）。
 
+### 流动性门槛（成交质量门）
+
+在相对强度过滤之上，进一步剔除**信号日成交额过低**的票（流动性差 → 难出场、滑点大、庄股陷阱）。头对头测量（`scripts/measure_signal_quality.py`）表明固定门槛 **¥1 亿**为甜点：相对 RS 基线平均收益 +0.92%、胜率 +5.1%、盈亏比 +0.43，优于相对阈值（同信号日前 50%）与更松的 ¥5000 万；相对强度排名（RSR）反而有害，未采用。
+
+- 实现：`smcore/strategy/fusion.py` 新增 `MIN_SIGNAL_AMOUNT = 1e8`，`_compute_boll_levels` 顺带返回信号日 `amount`（复用已拉 K 线），`fuse_signals(..., min_signal_amount=1e8)` 默认开启；`amount` 为 `None` 时保守放行（数据源故障不误杀整份清单）。
+- 日报标注剔除数量（`💧 流动性门槛剔除 N 只信号日成交额 < ¥1亿 的票`）。
+- 量级已核对：akshare 与 baostock 的 `amount` 单位均为「元」、数值一致，云端（`KLINE_BACKEND=akshare`）与测量可比。
+
 ---
 
 ## 回测与策略验证
