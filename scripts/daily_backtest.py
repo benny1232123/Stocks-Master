@@ -32,6 +32,14 @@ from smcore.artifacts import PROJECT_ROOT, STOCK_DATA_DIR
 from smcore.backtest import run_forward_signal_backtest
 from smcore.utils.code import format_stock_code
 
+# 内联过滤（复用 fusion 层的 RS 过滤与流动性门槛逻辑，确保回测输入与生产融合一致）
+from smcore.strategy.fusion import (
+    _passes_relative_strength_filter,
+    _index_20d_return,
+    _compute_boll_levels,
+    _get_hs300_close,
+)
+
 STRAT_MAP = {
     "boll": "boll",
     "relativity": "relativity",
@@ -42,6 +50,10 @@ STRAT_MAP = {
 # 回测只取综合评分最高的前 TOP_N 只，避免信号过多把资金摊成数百个迷你仓位、
 # 导致权益曲线近乎水平（「曲线不动」）。TOP_N 个等权仓位每只约 initial/TOP_N，曲线才能看出涨跌。
 TOP_N = 30
+
+# 内联过滤前的预筛选上限：先按评分粗取 N 只再做昂贵的 RS/量能计算，
+# 避免对全量 600+ 候选逐只拉 K 线导致超时。
+FILTER_PRE_TOP_N = 100
 
 
 def _parse_signal_date(name: str) -> date | None:
@@ -86,6 +98,47 @@ def _backtest_one(path: Path, sd: date, hold_days: int) -> dict | None:
     df = pd.read_csv(path, encoding="utf-8-sig")
     if df.empty or "股票代码" not in df.columns:
         return None
+
+    # ① 前导零归一（旧 CSV 可能丢失前导零，如 000915→915）
+    df = df.copy()
+    df["股票代码"] = df["股票代码"].apply(format_stock_code)
+    df = df[df["股票代码"].str.len() >= 6].reset_index(drop=True)
+
+    # ①⑤ 预筛选：按评分粗取 FILTER_PRE_TOP_N 只，避免对 600+ 候选逐只拉 K 线
+    if "综合评分" in df.columns and len(df) > FILTER_PRE_TOP_N:
+        df["_pre_s"] = pd.to_numeric(df["综合评分"], errors="coerce")
+        df = df.sort_values("_pre_s", ascending=False).head(FILTER_PRE_TOP_N).drop(columns=["_pre_s"]).reset_index(drop=True)
+
+    # ② 内联 RS 过滤 + 流动性门槛（与 fusion.py 生产融合逻辑一致，
+    #    确保 daily_backtest 的回测输入与「当天新跑 fusion」的输出等价）
+    _inline_filter_enabled = os.environ.get("BACKTEST_INLINE_FILTER", "1") == "1"
+    rs_dropped = liq_dropped = 0
+    if _inline_filter_enabled and len(df) > 0:
+        sd_yyyymmdd = sd.strftime("%Y%m%d")
+        idx_ret = _index_20d_return(sd_yyyymmdd)
+        _min_amt = float(os.environ.get("BACKTEST_MIN_AMOUNT", "100000000"))  # default ¥1亿
+        _keep_mask = []
+        for _, row in df.iterrows():
+            code = str(row["股票代码"]).strip()
+            hit = [s.strip().lower() for s in str(row.get("来源策略", "")).split("/") if s.strip()]
+            # RS 过滤
+            lv = _compute_boll_levels(code, sd_yyyymmdd)
+            stock_ret = lv.get("ret20") if lv else None
+            amt = lv.get("amount") if lv else None
+            if not _passes_relative_strength_filter(hit, stock_ret, idx_ret):
+                rs_dropped += 1
+                _keep_mask.append(False)
+                continue
+            # 流动性门槛
+            if amt is not None and amt < _min_amt:
+                liq_dropped += 1
+                _keep_mask.append(False)
+                continue
+            _keep_mask.append(True)
+        df = df[_keep_mask].reset_index(drop=True)
+        if rs_dropped or liq_dropped:
+            print(f"  [内联过滤] RS剔除={rs_dropped} 流动性剔除={liq_dropped} 保留={len(df)}")
+
     # 按综合评分取前 TOP_N，避免信号过多导致仓位被摊薄、权益曲线近乎不动
     if "综合评分" in df.columns:
         df = df.copy()

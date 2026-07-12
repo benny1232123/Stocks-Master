@@ -1,2 +1,2 @@
-﻿num_trades,initial_capital,ending_total,total_return,max_drawdown,win_rate,avg_return,sharpe,strategies,signal_mode,date,run_date,signal_start,signal_end,hold_days,signals_days,codes_count,start,end
-0,100000.0,100666.01,0.67,0.0,0.0,0.0,51.67,"boll,relativity,theme",forward,20260707,20260711,2026-07-07,2026-07-07,4,1,15,2026-07-07,2026-07-11
+﻿num_trades,initial_capital,ending_total,total_return,max_drawdown,win_rate,avg_return,avg_win,avg_loss,profit_factor,sharpe,strategies,signal_mode,date,run_date,signal_start,signal_end,hold_days,exit_mode,size_mode,signals_days,codes_count,start,end
+0,100000.0,99831.84,-0.17,-1.33,0.0,0.0,0.0,0.0,0.0,-0.29,"relativity,theme",forward,20260707,20260712,2026-07-07,2026-07-07,5,boll_upper_take+take6%+trailing5%+MA60break,conviction(综合评分),1,5,2026-07-07,2026-07-12

@@ -1,4 +1,2 @@
-﻿code,buy_date,sell_date,buy_price,sell_price,qty,return_pct
-1286,2026-06-29,2026-07-09,10.23,10.01,3200,-2.15
-600642,2026-06-29,2026-07-09,8.639,8.871,3800,2.69
-100,2026-06-29,2026-07-09,5.435,5.355,6100,-1.49
+﻿code,buy_date,sell_date,buy_price,sell_price,qty,return_pct,exit_reason
+000100,2026-06-29,2026-06-30,5.435,5.814,18300,6.97,take_band
