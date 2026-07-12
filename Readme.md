@@ -305,13 +305,26 @@ cd frontend && npm run dev             # 前端 http://localhost:5173
 5. **动量/相对强度**：买中期上升趋势的强势股（与 Boll 超卖互补）
 6. **宏观风险**：仓位约束（先控回撤，再追求收益）
 
-各策略在综合评分中的权重（`get_regime_scores(regime)`，**根据市场状态动态选取**，与仓位分配联动）：
-**Boll 45 / Momentum 20 / Theme 15 / Relativity 15 / CCTV 10**（CCTV 噪声大降权，Relativity 实测最差砍权）。
+各策略在综合评分中的权重（`get_regime_scores(regime)`，**根据市场状态动态选取**，与仓位分配联动；以下为「震荡轮动」默认值）：
+- 趋势上行：Boll 32 / Momentum 38 / Theme 12 / Relativity 10 / CCTV 8（顺势为王，动量提权）
+- 下行防御：Boll 40 / Momentum 28 / Relativity 17 / Theme 8 / CCTV 7（防守优先，题材严控）
+- 震荡轮动（默认）：**Boll 45 / Momentum 20 / Theme 15 / Relativity 15 / CCTV 10**（CCTV 噪声大降权，Relativity 实测最差砍权）
 
 融合输出 `Daily-Action-List-YYYYMMDD.csv`（今日操作清单，含止损 / 止盈 / 建议买入价）。
 
+### 多维市场仪表盘（市场状态判定升级）
+
+所有"市场自适应"的共同输入。此前只看沪深300 的 MA60 位置（`_detect_market_regime`，三态非牛即熊），现升级为 `smcore/strategy/market.py` 的 `compute_market_profile()`，综合四个维度：
+
+- **趋势**：沪深300 价格 vs MA20 / MA60，MA60 斜率方向
+- **波动率**：沪深300 近 20 日年化波动率，及其在近 250 日分布中的分位（low/mid/high）
+- **宽度**：沪深300 / 中证500 / 中证1000 近 20 日收益的一致性（三大宽基同步涨=健康牛市；只有沪深300 涨、中小票跌=宽度失真）
+- **量能**：沪深300 近 5 日均量 / 近 60 日均量
+
+合成结果产出：向后兼容的三态 `regime`（趋势上行 / 下行防御 / 震荡轮动）、连续强度 `regime_strength`（0–1）、`volatility_level`、`breadth_score`、`activity_ratio`。**关键改进**：高波动且无明确上行时直接判为"下行防御"（避险），趋势上行还需宽度确认（避免指数失真导致的假牛市）。数据源 baostock 主源 + akshare 兜底，东财-free；任一指数拉取失败均保守降级，pipeline 不崩。日报以 `🌡️ 市场仪表盘：...` 展示快照。
+
 ### 趋势闸门（市场择时防御）
-融合时用**沪深300 的 MA60 位置**判定市场状态（`_detect_market_regime`，`_get_hs300_close` 以 baostock 主源 + akshare 兜底，东财-free），替代此前的硬编码「震荡轮动」：
+融合时由**多维市场仪表盘**判定市场状态（见上），替代此前的硬编码「震荡轮动」与单一 MA60 判断：
 - **下行防御**（价格 < MA60 且 MA60 走平/下行）时，驱动 `build_strategy_allocation` 走防御 regime，**并直接剔除「纯均值回归」候选**（仅命中 Boll / Relativity、不含顺势策略）——其「次日买、持有 10 日」在弱市必亏；保留 Momentum / Theme / CCTV 等顺势策略。
 - 网络/数据不足时回退「震荡轮动」（不触发闸门），保证 pipeline 不崩。
 - 日报标注市场状态与闸门触发情况。
@@ -320,9 +333,10 @@ cd frontend && npm run dev             # 前端 http://localhost:5173
 
 ### 相对强度过滤（alpha 质量门）
 
-针对「大盘涨、选出的超卖票仍跑输」这把根因：融合时对每只候选计算其**近 20 日收益 vs 沪深300 同期收益**，跑输大盘超过 `RS_TOL`（默认 3%）的候选直接剔除——除非该票本身是**动量票**（`Momentum` 命中，已要求 ret20>0 且 MA20 上行，豁免以免误杀强势股）。
+针对「大盘涨、选出的超卖票仍跑输」这把根因：融合时对每只候选计算其**近 20 日收益 vs 沪深300 同期收益**，跑输大盘超过 `RS_TOL` 的候选直接剔除——除非该票本身是**动量票**（`Momentum` 命中，已要求 ret20>0 且 MA20 上行，豁免以免误杀强势股）。
 
 - 实现：`smcore/strategy/fusion.py` 的 `_passes_relative_strength_filter` + `_index_20d_return`（沪深300 收益缓存，`_get_hs300_close` 以 **baostock 为主源 + akshare 兜底**，东财-free），`fuse_signals(..., relative_strength_filter=True)` 默认开启。
+- **动态阈值**：`RS_TOL` 随市浮动（`_dynamic_thresholds`）——趋势上行放宽至 **5%**（让更多顺势票过、不误杀强势股）、下行防御收紧至 **2%**（只留最强）、震荡轮动用默认 **3%**。
 - 复用候选 K 线拉取（与止损止盈计算同一次联网），不额外开销；数据缺失保守保留，pipeline 不崩。
 - 日报标注剔除数量（`📉 相对强度过滤剔除 N 只跑输大盘超 X% 的票`）。
 - 验证：`scripts/measure_rs_filter.py` 用改进引擎对历史融合候选「不过滤 vs 过滤」头对头重测，扫 `RS_TOL=0/0.03/0.05` 选最优。
@@ -331,9 +345,10 @@ cd frontend && npm run dev             # 前端 http://localhost:5173
 
 ### 流动性门槛（成交质量门）
 
-在相对强度过滤之上，进一步剔除**信号日成交额过低**的票（流动性差 → 难出场、滑点大、庄股陷阱）。头对头测量（`scripts/measure_signal_quality.py`）表明固定门槛 **¥1 亿**为甜点：相对 RS 基线平均收益 +0.92%、胜率 +5.1%、盈亏比 +0.43，优于相对阈值（同信号日前 50%）与更松的 ¥5000 万；相对强度排名（RSR）反而有害，未采用。
+在相对强度过滤之上，进一步剔除**信号日成交额过低**的票（流动性差 → 难出场、滑点大、庄股陷阱）。头对头测量（`scripts/measure_signal_quality.py`）表明门槛 **¥1 亿**为甜点：相对 RS 基线平均收益 +0.92%、胜率 +5.1%、盈亏比 +0.43，优于相对阈值（同信号日前 50%）与更松的 ¥5000 万；相对强度排名（RSR）反而有害，未采用。
 
-- 实现：`smcore/strategy/fusion.py` 新增 `MIN_SIGNAL_AMOUNT = 1e8`，`_compute_boll_levels` 顺带返回信号日 `amount`（复用已拉 K 线），`fuse_signals(..., min_signal_amount=1e8)` 默认开启；`amount` 为 `None` 时保守放行（数据源故障不误杀整份清单）。
+- 实现：`smcore/strategy/fusion.py` 新增 `MIN_SIGNAL_AMOUNT = 1e8`，`_compute_boll_levels` 顺带返回信号日 `amount`（复用已拉 K 线），`fuse_signals(..., min_signal_amount=1e8, dynamic_thresholds=True)` 默认开启动态浮动；`amount` 为 `None` 时保守放行（数据源故障不误杀整份清单）。
+- **动态门槛**：流动性门槛随市浮动（`_dynamic_thresholds`）——趋势上行降至 **¥7000万**（放量市流动性充裕）、下行防御抬高至 **¥2亿**（只留最易出场的最强票）、震荡轮动用默认 **¥1亿**。
 - 日报标注剔除数量（`💧 流动性门槛剔除 N 只信号日成交额 < ¥1亿 的票`）。
 - 量级已核对：akshare 与 baostock 的 `amount` 单位均为「元」、数值一致，云端（`KLINE_BACKEND=akshare`）与测量可比。
 

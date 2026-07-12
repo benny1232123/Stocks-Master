@@ -26,6 +26,7 @@ from smcore.config.defaults import DEFAULT_K, DEFAULT_WINDOW, STOCK_DATA_DIR
 from smcore.data import fetch_daily_k
 from smcore.indicators import calc_bollinger
 from smcore.strategy import build_strategy_allocation
+from smcore.strategy.market import compute_market_profile
 from smcore.utils.code import format_stock_code
 from smcore.utils.format import fmt_num, to_float
 
@@ -71,6 +72,20 @@ STRATEGY_BASE_SCORE = dict(_REGIME_STRATEGY_SCORE["_default"])
 def get_regime_scores(regime: str) -> dict[str, int]:
     """根据市场状态返回对应的策略评分权重。"""
     return dict(_REGIME_STRATEGY_SCORE.get(regime, _REGIME_STRATEGY_SCORE["_default"]))
+
+
+def _dynamic_thresholds(regime: str) -> tuple[float, float]:
+    """根据市场状态浮动 RS 容忍度与流动性门槛。
+
+    - 趋势上行：放宽（RS_TOL=0.05 / ¥7000万），让更多顺势票过、不误杀强势股
+    - 下行防御：收紧（RS_TOL=0.02 / ¥2亿），只留最强最流动的票控回撤
+    - 其他：用全局默认（RS_TOL=0.03 / ¥1亿）
+    """
+    if regime == "趋势上行":
+        return 0.05, 7e7
+    if regime == "下行防御":
+        return 0.02, 2e8
+    return RS_TOL, MIN_SIGNAL_AMOUNT
 MULTI_HIT_BONUS = 5  # 每多命中一个策略额外 +5
 
 # 趋势守卫：价格低于 MA20 超过该比例，视作破位/下降通道自由落体股，剔除。
@@ -107,33 +122,13 @@ def _passes_trend_guard(price, ma20) -> bool:
 
 
 def _detect_market_regime() -> str:
-    """用沪深300（新浪指数，东财-free）判断市场状态，驱动融合与趋势闸门。
+    """判断市场状态（向后兼容包装，委托给多维市场仪表盘）。
 
-    返回 "趋势上行" / "下行防御" / "震荡轮动"。网络失败/数据不足时回退 "震荡轮动"（不触发闸门）。
-    - 价格 > MA60 且 MA60 上行 → 趋势上行
-    - 价格 < MA60 且 MA60 走平/下行 → 下行防御（均值回归票必亏，趋势闸门会剔除）
-    - 其他 → 震荡轮动
+    返回 "趋势上行" / "下行防御" / "震荡轮动"。现由 `compute_market_profile` 综合
+    趋势/波动率/宽度/量能四维度合成，比单一 MA60 更准。
     """
     try:
-        import akshare as ak
-        from smcore.data.kline import _call_with_timeout
-
-        df = _call_with_timeout(lambda: ak.stock_zh_index_daily(symbol="sh000300"), 30)
-        if df is None or len(df) < 65:
-            return "震荡轮动"
-        close = pd.to_numeric(df["close"], errors="coerce").dropna()
-        if len(close) < 65:
-            return "震荡轮动"
-        c = close.values.astype(float)
-        price = c[-1]
-        ma60_now = c[-60:].mean()
-        ma60_prev = c[-120:-60].mean() if len(c) >= 120 else (c[-61:-1].mean() if len(c) > 61 else ma60_now)
-        ma60_slope = (ma60_now - ma60_prev) / ma60_prev if ma60_prev else 0.0
-        if price > ma60_now and ma60_slope > 0:
-            return "趋势上行"
-        if price < ma60_now and ma60_slope <= 0:
-            return "下行防御"
-        return "震荡轮动"
+        return compute_market_profile().regime
     except Exception:
         return "震荡轮动"
 
@@ -451,6 +446,7 @@ def fuse_signals(
     market_gate: bool = True,
     relative_strength_filter: bool = True,
     min_signal_amount: float = MIN_SIGNAL_AMOUNT,
+    dynamic_thresholds: bool = True,
     max_stale_days: int = 3,
 ) -> tuple[pd.DataFrame, str]:
     """融合四策略信号，输出今日操作清单。
@@ -484,10 +480,15 @@ def fuse_signals(
     if not all_codes:
         return pd.DataFrame(), "今日无任何策略命中，无可操作清单。"
 
-    # 趋势闸门：用市场状态（沪深300）驱动融合与均值回归过滤
-    regime = _detect_market_regime() if market_gate else "震荡轮动"
+    # 多维市场仪表盘：综合 趋势/波动率/宽度/量能 判定 regime（向后兼容三态）
+    profile = compute_market_profile() if market_gate else None
+    regime = profile.regime if profile else "震荡轮动"
     # 策略评分权重（根据市场状态动态选取，与仓位分配联动）
     strategy_scores = get_regime_scores(regime)
+    # 动态过滤阈值（RS 容忍度 / 流动性门槛随市浮动）
+    rs_tol, min_amt = (RS_TOL, min_signal_amount)
+    if dynamic_thresholds:
+        rs_tol, min_amt = _dynamic_thresholds(regime)
     # 策略权重分配（由真实市场状态驱动，而非硬编码震荡）
     alloc = build_strategy_allocation(
         regime,
@@ -546,19 +547,20 @@ def fuse_signals(
             continue
 
         # 相对大盘强度过滤：剔除「大盘涨、个股仍明显跑输」的票（针对根因 alpha 弱）。
+        # rs_tol 随市浮动（趋势上行放宽、下行防御收紧），由 _dynamic_thresholds 给出。
         if relative_strength_filter:
             stock_ret = levels.get("ret20")
             index_ret = _index_20d_return(date_yyyymmdd)
-            if not _passes_relative_strength_filter(hit_strategies, stock_ret, index_ret):
+            if not _passes_relative_strength_filter(hit_strategies, stock_ret, index_ret, tol=rs_tol):
                 rs_filtered_out += 1
                 continue
 
         # 流动性门槛：剔除信号日成交额过低（难出场/庄股陷阱）的票。
         # 复用 _compute_boll_levels 已拉的 K 线（amount 字段）。取值为 None 时放行，
-        # 避免数据源故障把整份清单误杀。仅 momentum 豁免意义不大，故对所有策略统一施加。
-        if min_signal_amount and min_signal_amount > 0:
+        # 避免数据源故障把整份清单误杀。min_amt 随市浮动（下行防御抬高）。
+        if min_amt and min_amt > 0:
             amt = levels.get("amount")
-            if amt is not None and amt < min_signal_amount:
+            if amt is not None and amt < min_amt:
                 liquidity_filtered_out += 1
                 continue
 
@@ -640,9 +642,11 @@ def fuse_signals(
         else:
             report += f"\n- 🚦 市场状态：{regime}（趋势闸门生效；评分权重: Boll {strategy_scores.get('boll')} / Momentum {strategy_scores.get('momentum')} / Theme {strategy_scores.get('theme')} / Relativity {strategy_scores.get('relativity')} / CCTV {strategy_scores.get('cctv')}）"
     if rs_filtered_out:
-        report += f"\n- 📉 相对强度过滤剔除 {rs_filtered_out} 只跑输大盘超 {RS_TOL * 100:.0f}% 的票（alpha 弱，直接不治本）"
+        report += f"\n- 📉 相对强度过滤剔除 {rs_filtered_out} 只跑输大盘超 {rs_tol * 100:.0f}% 的票（alpha 弱，直接不治本；阈值随市浮动）"
     if liquidity_filtered_out:
-        report += f"\n- 💧 流动性门槛剔除 {liquidity_filtered_out} 只信号日成交额 < ¥{min_signal_amount / 1e8:.0f}亿 的票（难出场/庄股陷阱）"
+        report += f"\n- 💧 流动性门槛剔除 {liquidity_filtered_out} 只信号日成交额 < ¥{min_amt / 1e8:.2f}亿 的票（难出场/庄股陷阱；门槛随市浮动）"
+    if profile is not None:
+        report += f"\n- 🌡️ 市场仪表盘：{profile.summary()}"
     return df, report
 
 
