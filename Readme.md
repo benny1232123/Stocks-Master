@@ -294,6 +294,11 @@ cd frontend && npm run dev             # 前端 http://localhost:5173
 - 日报标注剔除数量（`💧 流动性门槛剔除 N 只信号日成交额 < ¥1亿 的票`）。
 - 量级已核对：akshare 与 baostock 的 `amount` 单位均为「元」、数值一致，云端（`KLINE_BACKEND=akshare`）与测量可比。
 
+### 置信度加权仓位（资金分配门）
+在「RS + 流动性」已过滤的宇宙上，回测引擎对每日候选**按综合评分加权分配仓位**（高评分=多策略共振=确定性高→多给仓位），而非等权。头对头测量（`scripts/measure_position_sizing.py`）表明：相对等权，组合总收益 +1.02pp、夏普 +0.71、回撤还收窄 0.5pp，三维全改善；按「跑赢大盘幅度」仅小幅正、按「成交额」反而大亏（过度集中大盘股），故固定采用综合评分。
+
+- 落地：`run_forward_signal_backtest(..., size_by='综合评分')`；`scripts/daily_backtest.py` 默认开启，环境变量 `BACKTEST_SIZE_BY=""` 可回退等权；summary 记 `size_mode` 便于追溯。
+
 ---
 
 ## 回测与策略验证
