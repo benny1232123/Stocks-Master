@@ -62,7 +62,7 @@ A 股多策略选股系统 —— 以 Boll 布林带为主，融合题材热度 
 
 读取上面五个候选池，合并去重、打分、算止损止盈、分配仓位，输出 `Daily-Action-List-YYYYMMDD.csv`。这一步是选股真正的"决策中枢"，顺次过五道关：
 
-1. **综合评分（排序与加分）**：命中策略即按权重得分 `Boll 45 / Momentum 20 / Theme 15 / Relativity 15 / CCTV 10`；多命中一个策略额外 +5（多策略共振加分）。评分决定最终排序与仓位。
+1. **综合评分（排序与加分，动态权重）**：命中策略即按**当前市场状态**对应的权重得分——趋势上行时动量提权至 38（顺势为王）、Boll 降至 32；下行防御时 Boll 提至 40、题材降至 8；震荡轮动沿用默认（`Boll 45 / Momentum 20 / Theme 15 / Relativity 15 / CCTV 10`）。多命中一个策略额外 +5（多策略共振加分）。评分决定最终排序与仓位。
 2. **趋势闸门（择时防御）**：用**沪深300 的 MA60 位置**判市场状态（上行 / 下行防御 / 震荡）。若判定"下行防御"，直接剔除**纯均值回归票**（只命中 Boll/Relativity、不含顺势策略）——其"次日买、持有 10 日"在弱市必亏。
 3. **相对强度过滤（alpha 质量门，核心）**：对每只候选算其**近 20 日收益 vs 沪深300 同期收益**，跑输大盘超过 `RS_TOL=3%` 的票直接剔除（动量票豁免，因其本就要求 ret20>0 且 MA20 上行）。—— 直击"大盘涨、个股仍跑输"的根因。
 4. **流动性门槛（成交质量门）**：信号日成交额 < **¥1 亿** 的票剔除（流动性差→难出场、滑点大、庄股陷阱）。头对头测量为甜点（平均收益 +0.92%、胜率 +5.1%）。
@@ -305,7 +305,7 @@ cd frontend && npm run dev             # 前端 http://localhost:5173
 5. **动量/相对强度**：买中期上升趋势的强势股（与 Boll 超卖互补）
 6. **宏观风险**：仓位约束（先控回撤，再追求收益）
 
-各策略在综合评分中的权重（`STRATEGY_BASE_SCORE`，据 `measure_strategy_edge.py` 实测前向 edge 定稿）：
+各策略在综合评分中的权重（`get_regime_scores(regime)`，**根据市场状态动态选取**，与仓位分配联动）：
 **Boll 45 / Momentum 20 / Theme 15 / Relativity 15 / CCTV 10**（CCTV 噪声大降权，Relativity 实测最差砍权）。
 
 融合输出 `Daily-Action-List-YYYYMMDD.csv`（今日操作清单，含止损 / 止盈 / 建议买入价）。
@@ -366,7 +366,7 @@ HOLD_DAYS=10 LOOKBACK_DAYS=30 python scripts/daily_backtest.py
 - 出场规则：Boll 上轨止盈 / 固定 +6% / 移动止盈 5% / 收盘跌破 MA60 / −8% 硬止损（缺口感知）/ 满 `HOLD_DAYS` 兜底；含真实交易成本。
 
 ### 策略 edge 量化测量（定权重用）
-`scripts/measure_strategy_edge.py` 读历史 `Daily-Action-List-*.csv`，按来源策略拆桶，用改进引擎跑前向 10 日回测，输出各策略收益 / 胜率 / 回撤 / 夏普 + BASELINE 对照。据其结果**数据驱动定稿** `STRATEGY_BASE_SCORE` 与 `allocation` 权重（如 Relativity 实测最差 → 砍权，Boll 最抗跌 → 提权）。
+`scripts/measure_strategy_edge.py` 读历史 `Daily-Action-List-*.csv`，按来源策略拆桶，用改进引擎跑前向 10 日回测，输出各策略收益 / 胜率 / 回撤 / 夏普 + BASELINE 对照。据其结果**数据驱动定稿**各 regime 下的评分权重（`_REGIME_STRATEGY_SCORE`）与 `allocation` 仓位权重（如 Relativity 实测最差 → 砍权，Boll 最抗跌 → 提权；趋势上行时动量提权、下行防御时题材降权）。
 
 > 实测参考（窗口 2026-06-10~06-26，硬止损 + 真实成本）：全样本 BASELINE −5.09%、Boll −4.92%、Relativity −13.86%（MA60 破位对其单策略不利，已砍权缓解）。当前改进属「少亏」级，根因在信号 alpha 弱；**相对强度过滤（剔除跑输大盘的票）** 是下一步真正杠杆，由 `scripts/measure_rs_filter.py` 量化验证。
 

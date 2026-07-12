@@ -1,6 +1,6 @@
 """多策略回测引擎 —— 把项目四策略信号移植到 Backtrader。
 
-策略（与 smcore/strategy/fusion.py 的 STRATEGY_BASE_SCORE 一一对应）：
+策略（与 smcore/strategy/fusion.py 的 get_regime_scores(regime) 动态权重一一对应）：
 - boll       : 布林带低吸（收盘价<下轨 或 ≤下轨×1.015），止损=下轨/止盈=上轨
 - relativity : 个股 vs 上证指数 的"跟涨/抗跌"满足率（需指数数据，拉不到自动关闭）
 - theme      : 量价+动量（换手/成交额放大倍数、5/20日动量、距20日高点），price 5~30

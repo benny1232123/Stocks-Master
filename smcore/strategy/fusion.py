@@ -30,18 +30,47 @@ from smcore.utils.code import format_stock_code
 from smcore.utils.format import fmt_num, to_float
 
 # 各策略在综合评分中的权重（命中该策略即得基础分，多策略叠加加分）
-# 占比依据 2026-07-11 实测前向10日 edge（窗口 0606-0626，硬止损+真实成本）：
-#   Boll      收益 -5.48% / 回撤 -8.64%   → 最抗跌，提权为锚
-#   Relativity 收益 -9.57% / 回撤 -13.86% → 最差且集中度高，砍权
-#   Momentum  无历史样本；Relativity 弱势警示「纯强度」风险，适度而非激进
-#   Theme/CCTV 窗口内无样本（0628 后才出现信号），暂保持谨慎
-STRATEGY_BASE_SCORE = {
-    "boll": 45,       # 主策略（超卖均值回归），实测最抗跌，提权
-    "relativity": 15,  # 相对强弱实测最差，砍权
-    "momentum": 20,    # 动量/相对强度，适度（待实测验证）
-    "theme": 15,       # 题材，谨慎
-    "cctv": 10,        # CCTV 舆情噪声大，最低
+# 根据 _detect_market_regime() 判定的市场状态动态选取，不再硬编码一套走天下。
+#
+# 设计思路（与 allocation.py 仓位分配联动）：
+#   - 趋势上行：顺势为王 → 动量提权（强势股延续性高）、Boll 降权（超卖机会少）
+#   - 下行防御：防守优先 → Boll 提权（仅存均值回归窗口，但趋势闸门会先砍纯 boll 票）、
+#                   动量保留高分（仅让真强势票通过）、题材/CCTV 降权（弱市易一日游）
+#   - 震荡轮动：均衡配置，沿用此前实测 edge 定稿的默认值
+#
+# 默认权重依据 2026-07-11 实测前向10日 edge（窗口 0606-0626，硬止损+真实成本）。
+_REGIME_STRATEGY_SCORE: dict[str, dict[str, int]] = {
+    "趋势上行": {
+        "boll": 32,       # 牛市超卖少，均值回归降为辅
+        "momentum": 38,   # 顺势为王，强势股延续性高
+        "theme": 12,      # 跟风题材有溢价但不过度追
+        "relativity": 10, # 牛市里抗跌属性价值有限
+        "cctv": 8,        # 叙事驱动有一定作用
+    },
+    "下行防御": {
+        "boll": 40,       # 均值回归唯一窗口（但趋势闸门会先剔除纯 boll 票）
+        "momentum": 28,   # 仅留真正强势的票（RS 过滤兜底）
+        "relativity": 17, # 抗跌属性在弱市有价值
+        "theme": 8,       # 弱市题材容易一日游，严控
+        "cctv": 7,        # 舆情驱动的票波动大
+    },
+    # 震荡轮动 / 兜底默认（与旧 STRATEGY_BASE_SCORE 一致，经实测验证）
+    "_default": {
+        "boll": 45,       # 主策略（超卖均值回归），实测最抗跌，提权
+        "relativity": 15,  # 相对强弱实测最差，砍权
+        "momentum": 20,    # 动量/相对强度，适度（待实测验证）
+        "theme": 15,       # 题材，谨慎
+        "cctv": 10,        # CCTV 舆情噪声大，最低
+    },
 }
+
+# 向后兼容：保留 STRATEGY_BASE_SCORE 作为 _default regime 的别名（外部引用仍可访问）
+STRATEGY_BASE_SCORE = dict(_REGIME_STRATEGY_SCORE["_default"])
+
+
+def get_regime_scores(regime: str) -> dict[str, int]:
+    """根据市场状态返回对应的策略评分权重。"""
+    return dict(_REGIME_STRATEGY_SCORE.get(regime, _REGIME_STRATEGY_SCORE["_default"]))
 MULTI_HIT_BONUS = 5  # 每多命中一个策略额外 +5
 
 # 趋势守卫：价格低于 MA20 超过该比例，视作破位/下降通道自由落体股，剔除。
@@ -457,6 +486,8 @@ def fuse_signals(
 
     # 趋势闸门：用市场状态（沪深300）驱动融合与均值回归过滤
     regime = _detect_market_regime() if market_gate else "震荡轮动"
+    # 策略评分权重（根据市场状态动态选取，与仓位分配联动）
+    strategy_scores = get_regime_scores(regime)
     # 策略权重分配（由真实市场状态驱动，而非硬编码震荡）
     alloc = build_strategy_allocation(
         regime,
@@ -481,27 +512,27 @@ def fuse_signals(
 
         if code in boll:
             hit_strategies.append("Boll")
-            score += STRATEGY_BASE_SCORE["boll"]
+            score += strategy_scores.get("boll", 45)
             name = boll[code]["name"] or name
             buy_price = boll[code].get("buy_price")
         if code in relativity:
             hit_strategies.append("Relativity")
-            score += STRATEGY_BASE_SCORE["relativity"]
+            score += strategy_scores.get("relativity", 15)
             name = relativity[code]["name"] or name
         if code in theme:
             hit_strategies.append("Theme")
-            score += STRATEGY_BASE_SCORE["theme"]
+            score += strategy_scores.get("theme", 15)
             name = theme[code]["name"] or name
             # Theme 综合分作为额外加权（综合分 0-100，按 10% 加）
             theme_score = theme[code].get("score") or 0
             score += min(theme_score * 0.1, 10)
         if code in cctv:
             hit_strategies.append("CCTV")
-            score += STRATEGY_BASE_SCORE["cctv"]
+            score += strategy_scores.get("cctv", 10)
             name = cctv[code]["name"] or name
         if code in momentum:
             hit_strategies.append("Momentum")
-            score += STRATEGY_BASE_SCORE["momentum"]
+            score += strategy_scores.get("momentum", 20)
             name = momentum[code]["name"] or name
 
         # 多策略命中加分
@@ -607,7 +638,7 @@ def fuse_signals(
         if regime == "下行防御" and gated_out:
             report += f"\n- 🚦 趋势闸门触发（市场下行防御）：剔除 {gated_out} 只纯均值回归候选（Boll/Relativity），仅留顺势策略"
         else:
-            report += f"\n- 🚦 市场状态：{regime}（趋势闸门生效）"
+            report += f"\n- 🚦 市场状态：{regime}（趋势闸门生效；评分权重: Boll {strategy_scores.get('boll')} / Momentum {strategy_scores.get('momentum')} / Theme {strategy_scores.get('theme')} / Relativity {strategy_scores.get('relativity')} / CCTV {strategy_scores.get('cctv')}）"
     if rs_filtered_out:
         report += f"\n- 📉 相对强度过滤剔除 {rs_filtered_out} 只跑输大盘超 {RS_TOL * 100:.0f}% 的票（alpha 弱，直接不治本）"
     if liquidity_filtered_out:
