@@ -636,7 +636,7 @@ def fuse_signals(
         # 板块轮动（确认型）：用候选 ret20 聚合板块动量，给强势板块候选小幅加成
         # 仅在本轮已筛候选内有效，零额外联网；样本不足或板块映射缺失时自动跳过（加成=0）。
         sector_hit_cap = False
-        sector_map = sector_mod.get_sector_map() if sector_cap else {}
+        sector_map = sector_mod.ensure_industries(all_codes) if sector_cap else {}
         if sector_cap and sector_map:
             sector_bonus, _meds = sector_mod.compute_sector_momentum(cand_ret20, sector_map)
             if sector_bonus:

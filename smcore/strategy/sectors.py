@@ -2,10 +2,14 @@
 
 设计要点
 --------
-- **板块映射相对静态**：由 scripts/build_sector_map.py 通过 baostock（本地可达）一次性抓取，
-  缓存为 stock_data/sector_map.json 并提交仓库。云端 CI 直接读缓存 JSON，无需在线抓取
-  （规避海外东财 push2 不可达、akshare spot 偶发 ConnectionError 的问题）。若缓存缺失则在
-  云端静默返回空映射，融合层会安全跳过板块逻辑（fail-soft）。
+- **板块映射按需实时拉取**：融合时只对当天真正进入候选池的股票（几十只）用 baostock
+  `query_stock_industry` 拉行业（单只 ~1s，几十只 ~1–2 分钟，对 16:30 夜跑完全可接受），
+  不再依赖"预先构建全市场 5000+ 只映射"（那次构建 ~80 分钟，在会话切换时易被中断）。
+  拉到的映射写回 stock_data/sector_map.json 缓存，云端每夜自动累积，越跑越全。
+  若 baostock 不可达则静默降级为仅用已有缓存 / 空映射，融合层安全跳过板块逻辑（fail-soft）。
+  可用环境变量 SECTOR_MAP_ONDEMAND=0 关闭按需拉取（仅用缓存）。
+- **全市场预热（可选）**：scripts/build_sector_map.py 仍能一次性抓取全市场映射做缓存预热，
+  断点续跑；但已非必需。
 - **板块轮动（确认型）**：用本轮候选股的近 20 日收益（ret20，融合已算过）聚合出「板块动量」，
   对强势板块的候选给小幅评分加成。注意：这是「在本轮已筛候选内确认强势板块」，并非全市场
   轮动信号（全市场轮动需板块指数 20 日收益，云端拿不到东财板块数据），属轻量、零额外联网的增强。
@@ -31,6 +35,11 @@ DEFAULT_MAX_PER_SECTOR = 5
 SECTOR_MOMENTUM_BONUS = 6.0
 # 候选数低于此值时不做板块动量加成（样本太少无统计意义）
 MIN_SECTOR_MOMENTUM_SAMPLES = 20
+# 是否允许融合时按需用 baostock 实时拉取候选股行业（默认开；设 0 则仅用缓存）
+SECTOR_MAP_ONDEMAND = os.environ.get("SECTOR_MAP_ONDEMAND", "1") != "0"
+
+# baostock 登录态（模块级复用，避免每只重复登录）
+_bs_logged_in = False
 
 
 _cache: Optional[dict] = None
@@ -105,6 +114,85 @@ def _build_and_cache() -> dict:
         return out
     except Exception:
         return {}
+
+
+def _to_bs_code(code: str) -> str:
+    """内部 6 位代码 -> baostock 代码（sh./sz. 前缀）；非法返回 ''。"""
+    c = format_stock_code(code)
+    if not c:
+        return ""
+    if c[0] == "6":
+        return "sh." + c
+    if c[0] in ("0", "2", "3"):
+        return "sz." + c
+    return ""
+
+
+def _bs_industry(code: str) -> Optional[str]:
+    """用 baostock 查单只行业；失败/无数据返回 None（不抛）。"""
+    global _bs_logged_in
+    try:
+        import baostock as bs
+    except Exception:
+        return None
+    bs_code = _to_bs_code(code)
+    if not bs_code:
+        return None
+    try:
+        if not _bs_logged_in:
+            lg = bs.login()
+            if getattr(lg, "error_code", "1") != "0":
+                return None
+            _bs_logged_in = True
+        ir = bs.query_stock_industry(code=bs_code)
+        if getattr(ir, "error_code", "1") != "0":
+            return None
+        while ir.next():
+            d = ir.get_row_data()
+            if len(d) >= 3 and d[2]:
+                s = str(d[2]).strip()
+                i = 0
+                while i < len(s) and not ("\u4e00" <= s[i] <= "\u9fff"):
+                    i += 1
+                return s[i:].strip() or None
+        return None
+    except Exception:
+        return None
+
+
+def ensure_industries(codes, write_back: bool = True) -> dict:
+    """确保给定代码都有行业映射；缺失者在允许时按需用 baostock 拉取（仅限给定代码，有界）。
+
+    与一次性全市场构建不同，这里只拉 *当天候选池* 里的缺失代码（几十只），耗时 ~1–2 分钟，
+    对夜跑完全可接受，且不会拖垮 CI。拉到的映射写回缓存 JSON，云端每夜自动累积。
+
+    Args:
+        codes: 需要保证有行业映射的代码列表（任意格式，内部统一 format_stock_code）
+        write_back: 是否把更新写回 sector_map.json 缓存（云端默认 True 以累积；
+                    纯查询场景可设 False 仅本次内存使用）
+
+    Returns:
+        合并后的 {code(6位): industry} 映射（缓存 + 本次新拉取）
+    """
+    m = get_sector_map()
+    missing = [c for c in codes if format_stock_code(c) and format_stock_code(c) not in m]
+    if missing and SECTOR_MAP_ONDEMAND:
+        fresh: dict = {}
+        for c in missing:
+            c6 = format_stock_code(c)
+            ind = _bs_industry(c6)
+            fresh[c6] = ind or "未知"
+        if fresh:
+            m.update(fresh)
+            if write_back:
+                try:
+                    SECTOR_MAP_PATH.parent.mkdir(parents=True, exist_ok=True)
+                    SECTOR_MAP_PATH.write_text(
+                        json.dumps(m, ensure_ascii=False, indent=0), encoding="utf-8"
+                    )
+                except Exception:
+                    pass
+    return m
 
 
 def industry_of(code, sector_map: Optional[dict] = None) -> str:

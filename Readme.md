@@ -365,7 +365,7 @@ cd frontend && npm run dev             # 前端 http://localhost:5173
 - **板块轮动（确认型，零额外联网）**：用本轮候选股的近 20 日收益（`ret20`，融合拉 K 线时已算过）按行业聚合中位数，得到「板块动量」。领先板块中位动量给 **+6 分**、落后板块 **−6 分**、中间 0 分（线性插值，幅度由 `SECTOR_MOMENTUM_BONUS` 控制）。候选数 < 20 时统计意义不足，自动不加成。本质是「在本轮已筛候选内确认强势板块」，而非全市场轮动信号（全市场轮动需板块指数 20 日收益，云端拿不到东财板块数据，故未做）。
 - **单板块集中度控制**：最终入选清单按评分降序扫描，**同一板块最多保留 `max_per_sector=5` 只**（`apply_sector_cap`），强制跨行业分散；极端集中导致不足 15 只时再放宽补满。未映射（"未知"）的股票不计入任何板块上限，避免被误砍。
 
-板块映射来源：证监会行业分类，由 `scripts/build_sector_map.py` 经 **baostock `query_stock_industry` 本地一次性抓取**（~5000 只 A 股，断点续跑，每 200 只落盘）缓存为 `stock_data/sector_map.json` 并提交仓库。云端 CI 直接读缓存，无需在线拉行业数据（规避海外东财 push2 不可达、akshare spot 偶发 `ConnectionError`）；缓存缺失时静默跳过板块逻辑（fail-soft），pipeline 不崩。本地刷新：`python scripts/build_sector_map.py`（或 `--force` 全量重建）。
+板块映射来源：证监会行业分类，由 **baostock `query_stock_industry` 按需实时拉取**——融合时只对当天进入候选池的股票（几十只，单只 ~1s，整轮 ~1–2 分钟，对 16:30 夜跑完全可接受）查询行业，写回 `stock_data/sector_map.json` 缓存，云端每夜自动累积、越跑越全（不再依赖"预先构建全市场 5000+ 只映射"那次 ~80 分钟、易在会话切换时中断的批量抓取）。若 baostock 不可达则静默降级为仅用已有缓存 / 空映射，融合层安全跳过板块逻辑（fail-soft），pipeline 不崩。可选的全市场预热：`python scripts/build_sector_map.py`（断点续跑）。可用 `SECTOR_MAP_ONDEMAND=0` 关闭按需拉取、仅用缓存。
 
 - 实现：`fuse_signals(..., sector_cap=True, max_per_sector=5)` 默认开启；日报标注 `🏭 板块轮动+集中度：最终 N 只覆盖 M 个行业（单板块上限 5）`。
 
