@@ -57,6 +57,8 @@ function Field({ label, children, hint }) {
 function DailyExpandableList({ rows, onCodeClick }) {
   const [expanded, setExpanded] = useState(new Set())
   const num = (r, k) => { const v = r[k]; if (v == null || v === '') return null; const n = Number(v); return (isNaN(n) || !isFinite(n)) ? null : n }
+  // hasNum: 兼容 num() 返回 null 的安全守卫（!isNaN(null)===true 是 JS 坑）
+  const hasNum = (v) => v != null && !isNaN(v)
 
   // 策略颜色映射
   const STRAT_COLORS = {
@@ -191,14 +193,14 @@ function DailyExpandableList({ rows, onCodeClick }) {
 
               <div className="daily-summary-right">
                 {/* 评级药丸 */}
-                <div className={cn('score-pill', sg.cls)} title={`综合评分: ${!isNaN(score) ? score.toFixed(1) : '--'}`}>
+                <div className={cn('score-pill', sg.cls)} title={`综合评分: ${hasNum(score) ? score.toFixed(1) : '--'}`}>
                   <span className="score-label">{sg.label}</span>
                   {!isNaN(score) && <span className="score-bar-track"><span className="score-bar-fill" style={{ width: `${sg.bar}%` }} /></span>}
                 </div>
 
                 {/* 买入价 + 盈亏 */}
                 <div className="price-group">
-                  <span className="daily-buy">¥{!isNaN(buyPrice) ? buyPrice.toFixed(2) : '--'}</span>
+                  <span className="daily-buy">¥{hasNum(buyPrice) ? buyPrice.toFixed(2) : '--'}</span>
                   {!isNaN(pnlPct) && (
                     <span className={cn('pnl-mini', pnlPct >= 0 ? 'pnl-up' : 'pnl-down')}>
                       {pnlPct >= 0 ? '+' : ''}{pnlPct.toFixed(2)}%
@@ -208,8 +210,8 @@ function DailyExpandableList({ rows, onCodeClick }) {
 
                 {/* 仓位 & 金额 */}
                 <div className="pos-group">
-                  {!isNaN(posPct) && <span className="pos-tag">{posPct.toFixed(0)}%</span>}
-                  {!isNaN(amt) && <span className="amt-tag">{amt >= 10000 ? `${(amt/10000).toFixed(1)}万` : `${amt.toFixed(0)}`}</span>}
+                  {!isNaN(posPct) && <span className="pos-tag">{hasNum(posPct) ? posPct.toFixed(0) : '--'}%</span>}
+                  {!isNaN(amt) && <span className="amt-tag">{hasNum(amt) ? (amt >= 10000 ? `${(amt/10000).toFixed(1)}万` : `${amt.toFixed(0)}`) : '--'}</span>}
                 </div>
 
                 {/* 止损距离 */}
@@ -223,10 +225,10 @@ function DailyExpandableList({ rows, onCodeClick }) {
             {isOpen ? (
               <div className="daily-details">
                 <div className="dd-cell"><span>命中策略数</span><strong>{hitCount}</strong></div>
-                <div className="dd-cell"><span>建议仓位%</span><strong>{!isNaN(posPct) ? `${posPct.toFixed(0)}%` : '--'}</strong></div>
-                <div className="dd-cell"><span>建议金额</span><strong>{!isNaN(amt) ? `¥${amt.toFixed(0)}` : '--'}</strong></div>
+                <div className="dd-cell"><span>建议仓位%</span><strong>{hasNum(posPct) ? `${posPct.toFixed(0)}%` : '--'}</strong></div>
+                <div className="dd-cell"><span>建议金额</span><strong>{hasNum(amt) ? `¥${amt.toFixed(0)}` : '--'}</strong></div>
                 <div className="dd-cell"><span>最新价</span><strong className={!isNaN(latestP) && !isNaN(buyPrice) && buyPrice > 0 ? (latestP >= buyPrice ? 'text-up' : 'text-down') : ''}>{latestP != null && !isNaN(latestP) ? latestP.toFixed(2) : '--'}</strong></div>
-                <div className="dd-cell"><span>建议买入价</span><strong>{!isNaN(buyPrice) ? buyPrice.toFixed(2) : '--'}</strong></div>
+                <div className="dd-cell"><span>建议买入价</span><strong>{hasNum(buyPrice) ? buyPrice.toFixed(2) : '--'}</strong></div>
                 <div className="dd-cell"><span>止损价(下轨)</span><strong className={stopP != null && !isNaN(stopP) ? 'text-down' : ''}>{stopP != null && !isNaN(stopP) ? stopP.toFixed(2) : '--'}</strong></div>
                 <div className="dd-cell"><span>止盈价(上轨)</span><strong className={tpP != null && !isNaN(tpP) ? 'text-up' : ''}>{tpP != null && !isNaN(tpP) ? tpP.toFixed(2) : '--'}</strong></div>
                 <div className="dd-cell"><span>MA20</span><strong>{ma20V != null && !isNaN(ma20V) ? ma20V.toFixed(2) : '--'}</strong></div>
