@@ -31,6 +31,67 @@ from smcore.strategy import sectors as sector_mod
 from smcore.utils.code import format_stock_code
 from smcore.utils.format import fmt_num, to_float
 
+# ── 股票名称兜底映射（当所有策略 CSV 都缺 股票名称 时使用）─────────────
+_stock_name_cache: Optional[dict] = None
+# baostock 登录态复用
+_bs_name_logged_in = False
+
+
+def _get_stock_name_map() -> dict:
+    """返回 {code(6位): name} 映射，优先从 stock_info_a_code_name.csv 缓存读取。"""
+    global _stock_name_cache
+    if _stock_name_cache is not None:
+        return _stock_name_cache
+    _stock_name_cache = {}
+    try:
+        p = STOCK_DATA_DIR / "stock_info_a_code_name.csv"
+        if p.exists():
+            df = pd.read_csv(p, encoding="utf-8-sig", dtype=str)
+            code_col = next((c for c in df.columns if c in ("code", "代码", "股票代码")), None)
+            name_col = next((c for c in df.columns if c in ("name", "名称", "股票名称")), None)
+            if code_col and name_col:
+                for _, r in df.iterrows():
+                    c = format_stock_code(str(r[code_col]).strip())
+                    n = str(r[name_col]).strip()
+                    if c and n and c not in _stock_name_cache:
+                        _stock_name_cache[c] = n
+    except Exception:
+        pass
+    return _stock_name_cache
+
+
+def lookup_stock_name(code: str) -> str:
+    """查询单只股票名称（缓存 → CSV → baostock 三级兜底），找不到返回空串。"""
+    c6 = format_stock_code(code)
+    if not c6:
+        return ""
+    # 1) 已有缓存
+    m = _get_stock_name_map()
+    if c6 in m:
+        return m[c6]
+    # 2) baostock 实时查（仅一次登录，~0.3s/只）
+    global _bs_name_logged_in
+    try:
+        import baostock as bs
+        bs_code = f"sh.{c6}" if c6[0] == "6" else f"sz.{c6}"
+        if not _bs_name_logged_in:
+            lg = bs.login()
+            if getattr(lg, "error_code", "1") != "0":
+                return ""
+            _bs_name_logged_in = True
+        rs = bs.query_stock_basic(code=bs_code, code_name="")
+        found = ""
+        while rs.next():
+            row = rs.get_row_data()
+            if len(row) >= 2 and row[1]:
+                found = str(row[1]).strip()
+                break
+        if found:
+            _stock_name_cache[c6] = found  # 写回缓存
+        return found
+    except Exception:
+        return ""
+
 # 各策略在综合评分中的权重（命中该策略即得基础分，多策略叠加加分）
 # 根据 _detect_market_regime() 判定的市场状态动态选取，不再硬编码一套走天下。
 #
@@ -548,6 +609,14 @@ def fuse_signals(
             hit_strategies.append("Momentum")
             score += strategy_scores.get("momentum", 20)
             name = momentum[code]["name"] or name
+
+        # ── 买入价兜底：非 Boll 策略无建议买入价时用信号日收盘价 ─────────
+        if buy_price is None and levels:
+            buy_price = levels.get("close")
+
+        # ── 名字兜底：所有策略 CSV 都缺名字时从 stock_info / baostock 补查 ────────
+        if not name:
+            name = lookup_stock_name(code)
 
         # 多策略命中加分
         if len(hit_strategies) > 1:

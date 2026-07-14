@@ -56,7 +56,7 @@ function Field({ label, children, hint }) {
 
 function DailyExpandableList({ rows, onCodeClick }) {
   const [expanded, setExpanded] = useState(new Set())
-  const num = (r, k) => { const v = r[k]; return v != null && v !== '' ? Number(v) : NaN }
+  const num = (r, k) => { const v = r[k]; if (v == null || v === '') return null; const n = Number(v); return (isNaN(n) || !isFinite(n)) ? null : n }
 
   // 策略颜色映射
   const STRAT_COLORS = {
@@ -69,7 +69,7 @@ function DailyExpandableList({ rows, onCodeClick }) {
 
   // 评分等级色
   const scoreGrade = (s) => {
-    if (isNaN(s)) return { label: '--', cls: '', bar: 0 }
+    if (s == null || isNaN(s)) return { label: '--', cls: '', bar: 0 }
     if (s >= 45) return { label: 'A+', cls: 'ds-a-plus', bar: 100 }
     if (s >= 38) return { label: 'A', cls: 'ds-a', bar: 85 }
     if (s >= 30) return { label: 'B', cls: 'ds-b', bar: 65 }
@@ -1542,7 +1542,7 @@ function App() {
             </div>
             {fullDaily?.rows?.length > 0 ? (() => {
               const rows = fullDaily.rows
-              const num = (r, k) => { const v = r[k]; return v != null && v !== '' ? Number(v) : NaN }
+              const num = (r, k) => { const v = r[k]; if (v == null || v === '') return null; const n = Number(v); return (isNaN(n) || !isFinite(n)) ? null : n }
               const total = rows.length
               const totalAmt = rows.reduce((s, r) => s + (num(r, '建议金额') || 0), 0)
               const avgScore = total ? rows.reduce((s, r) => s + (num(r, '综合评分') || 0), 0) / total : 0
