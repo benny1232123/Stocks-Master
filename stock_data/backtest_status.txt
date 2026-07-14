@@ -1,0 +1,5 @@
+run_date=20260714
+eligible_signal_days=22
+generated=22
+skipped=0
+range=20260615~20260713
