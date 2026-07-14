@@ -31,6 +31,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from smcore.artifacts import PROJECT_ROOT, STOCK_DATA_DIR
 from smcore.backtest import run_forward_signal_backtest
 from smcore.utils.code import format_stock_code
+import smcore.data.kline as kline_mod  # 用于注入进程内 K 线缓存，避免跨信号日重复抓取
 
 # 内联过滤（复用 fusion 层的 RS 过滤与流动性门槛逻辑，确保回测输入与生产融合一致）
 from smcore.strategy.fusion import (
@@ -101,16 +102,32 @@ def collect_eligible_lists(lookback_days: int) -> list[tuple[Path, date]]:
     return cands
 
 
-def _backtest_one(path: Path, sd: date, hold_days: int) -> dict | None:
+def _backtest_one(path: Path, sd: date, hold_days: int, market_profile=None) -> dict | None:
     """对单个信号日做前向回测并落盘，返回摘要信息；无有效结果返回 None。"""
     df = pd.read_csv(path, encoding="utf-8-sig")
     if df.empty or "股票代码" not in df.columns:
         return None
 
+    sd_yyyymmdd = sd.strftime("%Y%m%d")
+
     # ① 前导零归一（旧 CSV 可能丢失前导零，如 000915→915）
     df = df.copy()
     df["股票代码"] = df["股票代码"].apply(format_stock_code)
     df = df[df["股票代码"].str.len() >= 6].reset_index(drop=True)
+
+    # K 线结果按 code 进程内缓存（内联过滤 + 波动率止损会重复调用 _compute_boll_levels，
+    # 且 run_forward_signal_backtest 跨信号日会重复抓同一只票的 K 线）。单次抓取失败也容错
+    # 返回 {}，不让单只票的数据源抖动把整轮回测拖垮。
+    _lv_cache: dict[str, dict] = {}
+
+    def _lv(code: str) -> dict:
+        c = str(code).strip()
+        if c not in _lv_cache:
+            try:
+                _lv_cache[c] = _compute_boll_levels(c, sd_yyyymmdd) or {}
+            except Exception:
+                _lv_cache[c] = {}
+        return _lv_cache[c]
 
     # ①⑤ 预筛选：按评分粗取 FILTER_PRE_TOP_N 只，避免对 600+ 候选逐只拉 K 线
     if "综合评分" in df.columns and len(df) > FILTER_PRE_TOP_N:
@@ -129,10 +146,10 @@ def _backtest_one(path: Path, sd: date, hold_days: int) -> dict | None:
         for _, row in df.iterrows():
             code = str(row["股票代码"]).strip()
             hit = [s.strip().lower() for s in str(row.get("来源策略", "")).split("/") if s.strip()]
-            # RS 过滤
-            lv = _compute_boll_levels(code, sd_yyyymmdd)
-            stock_ret = lv.get("ret20") if lv else None
-            amt = lv.get("amount") if lv else None
+            # RS 过滤（K 线失败容错：lv 为空则放行，避免数据源抖动把整份清单误杀）
+            lv = _lv(code)
+            stock_ret = lv.get("ret20")
+            amt = lv.get("amount")
             if not _passes_relative_strength_filter(hit, stock_ret, idx_ret):
                 rs_dropped += 1
                 _keep_mask.append(False)
@@ -176,12 +193,14 @@ def _backtest_one(path: Path, sd: date, hold_days: int) -> dict | None:
     _vol_pos_on = os.environ.get("VOL_POS_SCALE", "1") == "1"
     _vol_mult = float(os.environ.get("VOL_STOP_MULT", str(VOL_STOP_MULT)))
     capital_scale = 1.0
-    if _vol_stop_on or _vol_pos_on:
+    # 市场仪表盘由 main() 一次性计算并传入，避免每个信号日重复抓指数 K 线拖慢回测
+    _prof = market_profile
+    if _prof is None and (_vol_stop_on or _vol_pos_on):
         try:
             _prof = compute_market_profile()
         except Exception:
             _prof = None
-        if _prof is not None:
+    if _prof is not None:
             # 总仓位随市场波动率缩放（高波动留现金，真正降低组合暴露）
             if _vol_pos_on:
                 capital_scale = _VOL_POS_SCALE_MAP.get(_prof.volatility_level, 0.85)
@@ -189,8 +208,7 @@ def _backtest_one(path: Path, sd: date, hold_days: int) -> dict | None:
             if _vol_stop_on:
                 _stops = []
                 for code in sub["代码"]:
-                    lv = _compute_boll_levels(str(code).strip(), sd_yyyymmdd)
-                    v = lv.get("vol20") if lv else None
+                    v = _lv(str(code).strip()).get("vol20")
                     if v and v > 0:
                         _stops.append(max(0.06, min(_vol_mult * v, 0.15)))
                     else:
@@ -266,10 +284,49 @@ def _backtest_one(path: Path, sd: date, hold_days: int) -> dict | None:
     }
 
 
+def _write_status(lists, generated, skipped):
+    """把回测运行状态写到 stock_data/backtest_status.txt，便于在仓库/看板确认回测真的跑了
+    （continue-on-error 不会再静默吞掉失败）。"""
+    try:
+        lines = [
+            f"run_date={date.today().strftime('%Y%m%d')}",
+            f"eligible_signal_days={len(lists)}",
+            f"generated={len(generated)}",
+            f"skipped={skipped}",
+        ]
+        if generated:
+            lines.append(f"range={generated[0]['date_tag']}~{generated[-1]['date_tag']}")
+        else:
+            lines.append("range=NONE")
+        (STOCK_DATA_DIR / "backtest_status.txt").write_text("\n".join(lines), encoding="utf-8")
+    except Exception:
+        pass
+
+
 def main() -> int:
     hold_days = int(os.environ.get("HOLD_DAYS", "10"))
     lookback_days = int(os.environ.get("LOOKBACK_DAYS", "30"))
     today = date.today()
+
+    # 进程内 K 线缓存：一次运行里跨信号日、跨（内联过滤/止损/引擎）对同一只票只抓一次。
+    # 这是回测步骤此前频繁超时的根因——每个信号日都重抓全部历史 K 线（且无缓存持久化）。
+    _orig_fetch = kline_mod.fetch_daily_k
+    _kcache: dict = {}
+
+    def _cached_fetch(code, start, end, *a, **k):
+        key = (str(code), str(start), str(end), k.get("adjust", "qfq"))
+        if key not in _kcache:
+            _kcache[key] = _orig_fetch(code, start, end, *a, **k)
+        return _kcache[key]
+
+    kline_mod.fetch_daily_k = _cached_fetch
+
+    # 市场仪表盘只算一次（所有信号日共用），避免每个信号日重复抓指数 K 线
+    market_profile = None
+    try:
+        market_profile = compute_market_profile()
+    except Exception as e:
+        print(f"[warn] 计算市场仪表盘失败，波动率自适应将回退默认：{e}")
 
     lists = collect_eligible_lists(lookback_days)
     if not lists:
@@ -277,6 +334,7 @@ def main() -> int:
         return 0
 
     generated: list[dict] = []
+    skipped = 0
     for path, sd in lists:
         days_since = (today - sd).days
         actual_hold = min(hold_days, days_since)
@@ -284,20 +342,28 @@ def main() -> int:
             # 当天的信号至少需持有 1 天，跳过（明天 CI 会自动纳入）
             continue
         print(f"[回测] 信号日 {sd} · 距今天 {days_since} 天 · 实际持有 {actual_hold} 天")
-        res = _backtest_one(path, sd, actual_hold)
+        try:
+            res = _backtest_one(path, sd, actual_hold, market_profile=market_profile)
+        except Exception as e:
+            skipped += 1
+            print(f"  → 回测异常跳过：{e}")
+            continue
         if res is None:
+            skipped += 1
             print("  → 无有效结果（信号为空或 K 线拉取失败）")
             continue
         generated.append(res)
         print(f"  → 总收益 {res['summary'].get('total_return')}%，"
               f"回撤 {res['summary'].get('max_drawdown')}%，{res['num_trades']} 笔")
 
+    _write_status(lists, generated, skipped)
+
     if not generated:
-        print("没有生成任何每日回测结果（可能历史清单为空）")
+        print("没有生成任何每日回测结果（可能历史清单为空或 K 线全部拉取失败）")
         return 0
 
     print(f"\n完成：共生成 {len(generated)} 份前向信号回测，信号日范围 "
-          f"{generated[0]['date_tag']} ~ {generated[-1]['date_tag']}")
+          f"{generated[0]['date_tag']} ~ {generated[-1]['date_tag']}（跳过 {skipped}）")
     return 0
 
 
