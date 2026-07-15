@@ -112,7 +112,14 @@ def main() -> int:
         print(f"smcore.strategies.{strat} 缺少 run_{strat}()", file=sys.stderr)
         return 3
 
-    rc = run_fn()
+    # 策略模块内部的 argparse 会直接用 sys.argv；把策略名从 sys.argv 里清掉，
+    # 否则 run_cctv()/run_momentum() 等会把 'cctv'/'momentum' 当成未识别参数。
+    original_argv = sys.argv
+    sys.argv = [sys.argv[0]]
+    try:
+        rc = run_fn()
+    finally:
+        sys.argv = original_argv
     return int(rc) if rc is not None else 0
 
 

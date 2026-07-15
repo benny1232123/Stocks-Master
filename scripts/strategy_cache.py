@@ -23,6 +23,7 @@ STRATEGY_PATTERNS = {
     "theme": "Stock-Selection-Ashare-Theme-Turnover-{date}.csv",
     "cctv": "CCTV-Sector-Stock-Pool-{date}.csv",
     "relativity": "Stock-Selection-Relativity-{date}.csv",
+    "momentum": "Stock-Selection-Momentum-{date}.csv",
 }
 
 CACHE_TABLE = "strategy_cache"
