@@ -4,6 +4,12 @@ on:
   schedule:
     - cron: "30 8 * * 1-5"
   workflow_dispatch:
+    inputs:
+      signal_date:
+        description: '信号日 YYYYMMDD（留空 = 今天）。用于补跑历史某天的 daily-action-list + 回测。'
+        required: false
+        default: ''
+        type: string
 
 jobs:
   daily-pick:
@@ -16,6 +22,16 @@ jobs:
       # 走下方加固的 akshare 兜底。国内自托管 Runner 请覆盖为 "1" 或 "auto" 启用 Tdx 提速。
       TDX_ENABLED: "0"
     steps:
+      - name: 计算信号日 $TODAY
+        id: today
+        run: |
+          if [ -n "${{ github.event.inputs.signal_date }}" ]; then
+            TODAY="${{ github.event.inputs.signal_date }}"
+          else
+            TODAY=$(date +%Y%m%d)
+          fi
+          echo "today=$TODAY" >> $GITHUB_OUTPUT
+          echo "[daily-pick] 信号日: $TODAY"
       - uses: actions/checkout@v4
 
       - uses: actions/setup-python@v5
@@ -48,9 +64,9 @@ jobs:
           SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
           SUPABASE_KEY: ${{ secrets.SUPABASE_KEY }}
         run: |
-          TODAY=$(date +%Y%m%d)
+          TODAY=${{ steps.today.outputs.today }}
           python scripts/strategy_cache.py pull boll $TODAY && echo "skip=true" >> $GITHUB_OUTPUT && exit 0
-          python -m smcore.strategies.boll
+          python -m smcore.strategies.boll $TODAY
           python scripts/strategy_cache.py push boll $TODAY
 
       - name: 策略2 题材热度
@@ -62,9 +78,10 @@ jobs:
           SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
           SUPABASE_KEY: ${{ secrets.SUPABASE_KEY }}
         run: |
-          TODAY=$(date +%Y%m%d)
+          TODAY=${{ steps.today.outputs.today }}
           python scripts/strategy_cache.py pull theme $TODAY && echo "skip=true" >> $GITHUB_OUTPUT && exit 0
-          python -m smcore.strategies.theme
+          # theme 内部 datetime.now() 硬编码，用 SIGNAL_DATE 包装脚本注入指定日期
+          SIGNAL_DATE=$TODAY python scripts/run_strategy_for_date.py theme
           python scripts/strategy_cache.py push theme $TODAY
 
       - name: 策略3 CCTV 板块
@@ -76,9 +93,9 @@ jobs:
           SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
           SUPABASE_KEY: ${{ secrets.SUPABASE_KEY }}
         run: |
-          TODAY=$(date +%Y%m%d)
+          TODAY=${{ steps.today.outputs.today }}
           python scripts/strategy_cache.py pull cctv $TODAY && echo "skip=true" >> $GITHUB_OUTPUT && exit 0
-          python -m smcore.strategies.cctv
+          SIGNAL_DATE=$TODAY python scripts/run_strategy_for_date.py cctv
           python scripts/strategy_cache.py push cctv $TODAY
 
       - name: 策略4 相对强弱
@@ -92,9 +109,10 @@ jobs:
           SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
           SUPABASE_KEY: ${{ secrets.SUPABASE_KEY }}
         run: |
-          TODAY=$(date +%Y%m%d)
+          TODAY=${{ steps.today.outputs.today }}
           python scripts/strategy_cache.py pull relativity $TODAY && echo "skip=true" >> $GITHUB_OUTPUT && exit 0
-          python -m smcore.strategies.relativity --max-workers 1
+          # relativity --max-workers 1 仍可通过 env 注入信号日
+          SIGNAL_DATE=$TODAY python scripts/run_strategy_for_date.py relativity
           python scripts/strategy_cache.py push relativity $TODAY
 
       - name: 策略5 动量/相对强度
@@ -106,9 +124,9 @@ jobs:
           SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
           SUPABASE_KEY: ${{ secrets.SUPABASE_KEY }}
         run: |
-          TODAY=$(date +%Y%m%d)
+          TODAY=${{ steps.today.outputs.today }}
           python scripts/strategy_cache.py pull momentum $TODAY && echo "skip=true" >> $GITHUB_OUTPUT && exit 0
-          python -m smcore.strategies.momentum
+          SIGNAL_DATE=$TODAY python scripts/run_strategy_for_date.py momentum
           python scripts/strategy_cache.py push momentum $TODAY
 
       - name: 生成操作清单 + 上传 COS
@@ -119,15 +137,15 @@ jobs:
           COS_BUCKET: ${{ secrets.COS_BUCKET }}
           COS_REGION: ${{ secrets.COS_REGION }}
         run: |
-          python -c "
-          import sys; sys.path.insert(0, '.')
-          from datetime import date
+          TODAY=${{ steps.today.outputs.today }}
+          SIGNAL_DATE=$TODAY python -c "
+          import os, sys; sys.path.insert(0, '.')
           from smcore.strategy import fuse_signals, save_action_list
           from smcore.storage import upload_file
 
-          today = date.today().strftime('%Y%m%d')
+          today = os.environ.get('SIGNAL_DATE') or __import__('datetime').date.today().strftime('%Y%m%d')
           df, report = fuse_signals(today, total_capital=100000, max_picks=15, fetch_levels=True)
-          print(f'操作清单: {len(df)} 只候选')
+          print(f'操作清单: {len(df)} 只候选 @ {today}')
           if not df.empty:
               path = save_action_list(df, today)
               print(f'已保存: {path}')
