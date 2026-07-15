@@ -19,6 +19,16 @@ from smcore.utils.code import format_stock_code
 NAME_COL = "股票名称"
 
 
+def _is_missing_name(v: object) -> bool:
+    """空字符串 / 纯空白 / 'nan' / 'NaN' / 'NAN' 一律视为缺失。"""
+    if v is None:
+        return True
+    s = str(v).strip()
+    if not s:
+        return True
+    return s.lower() == "nan"
+
+
 def load_name_map() -> dict[str, str]:
     import akshare as ak
 
@@ -55,7 +65,7 @@ def main() -> int:
             if NAME_COL not in fieldnames:
                 fieldnames = fieldnames + [NAME_COL]
             for row in reader:
-                if NAME_COL not in row or not (row.get(NAME_COL) or "").strip():
+                if NAME_COL not in row or _is_missing_name(row.get(NAME_COL)):
                     c = format_stock_code(str(row.get("股票代码", "")))
                     nm = name_map.get(c)
                     if nm:
