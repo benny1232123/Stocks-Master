@@ -14,12 +14,19 @@ min(HOLD_DAYS, 距今天数) 天后卖出，回测这段「往后」的真实表
 
 每个信号日独立存档：stock_data/Multi-Backtest-{信号日}-{summary,equity,trades}.csv，
 命名带信号日，便于追溯「这是哪天的信号、往后持有 N 天的真实结果」。
+
+性能优化（2026-07-15）：
+- 预拉阶段：在逐日回测前，一次性收集所有信号日的全部候选标的，
+  每只股票仅拉一次 K 线（最宽区间），填满进程缓存 + 文件缓存，
+  避免回测循环中 30天×100只 = 3000+ 次重复 akshare HTTP 请求。
+- 全程进度输出：预拉 / 内联过滤 / 引擎加载均有逐条或百分比进度。
 """
 from __future__ import annotations
 
 import os
 import re
 import sys
+import time
 from datetime import date, datetime, timedelta
 from pathlib import Path
 
@@ -143,7 +150,10 @@ def _backtest_one(path: Path, sd: date, hold_days: int, market_profile=None) -> 
         idx_ret = _index_20d_return(sd_yyyymmdd)
         _min_amt = float(os.environ.get("BACKTEST_MIN_AMOUNT", "100000000"))  # default ¥1亿
         _keep_mask = []
-        for _, row in df.iterrows():
+        _filter_total = len(df)
+        for _fi, (_, row) in enumerate(df.iterrows()):
+            if (_fi + 1) % 20 == 0 or _fi + 1 == _filter_total:
+                print(f"  [过滤] {_fi+1}/{_filter_total} ...", flush=True)
             code = str(row["股票代码"]).strip()
             hit = [s.strip().lower() for s in str(row.get("来源策略", "")).split("/") if s.strip()]
             # RS 过滤（K 线失败容错：lv 为空则放行，避免数据源抖动把整份清单误杀）
@@ -303,13 +313,38 @@ def _write_status(lists, generated, skipped):
         pass
 
 
+def _collect_all_candidate_codes(lists: list[tuple[Path, date]], limit_per_day: int = FILTER_PRE_TOP_N) -> set[str]:
+    """从所有信号日清单中收集候选代码集合（每天最多取 limit_per_day 只，按评分截断）。"""
+    codes: set[str] = set()
+    for path, sd in lists:
+        try:
+            df = pd.read_csv(path, encoding="utf-8-sig")
+        except Exception:
+            continue
+        if df.empty or "股票代码" not in df.columns:
+            continue
+        # 前导零归一
+        df = df.copy()
+        df["股票代码"] = df["股票代码"].apply(format_stock_code)
+        df = df[df["股票代码"].str.len() >= 6]
+        # 按评分粗取（与 _backtest_one 的预筛选逻辑一致）
+        if "综合评分" in df.columns and len(df) > limit_per_day:
+            df["_pre_s"] = pd.to_numeric(df["综合评分"], errors="coerce")
+            df = df.sort_values("_pre_s", ascending=False).head(limit_per_day)
+        for c in df["股票代码"].dropna().unique():
+            fc = format_stock_code(c)
+            if fc and len(fc) >= 6:
+                codes.add(fc)
+    return codes
+
+
 def main() -> int:
     hold_days = int(os.environ.get("HOLD_DAYS", "10"))
     lookback_days = int(os.environ.get("LOOKBACK_DAYS", "30"))
     today = date.today()
+    t0 = time.time()
 
-    # 进程内 K 线缓存：一次运行里跨信号日、跨（内联过滤/止损/引擎）对同一只票只抓一次。
-    # 这是回测步骤此前频繁超时的根因——每个信号日都重抓全部历史 K 线（且无缓存持久化）。
+    # ── 阶段 0：进程内 K 线缓存（跨信号日去重）──
     _orig_fetch = kline_mod.fetch_daily_k
     _kcache: dict = {}
 
@@ -333,37 +368,71 @@ def main() -> int:
         print(f"未找到近 {lookback_days} 天的 Daily-Action-List CSV，跳过每日回测")
         return 0
 
+    print(f"[回测] 找到 {len(lists)} 个信号日 ({lists[0][1]} ~ {lists[-1][1]}), HOLD={hold_days}d")
+
+    # ── 阶段 1：预拉全量 K 线（性能核心优化）──
+    # 收集所有信号日的全部候选标的，每只股票只拉一次最宽区间的 K 线，
+    # 填满进程缓存 + 文件缓存。后续 _compute_boll_levels / run_forward_signal_backtest
+    # 全部命中缓存，不再触发 akshare HTTP 请求。
+    all_codes = _collect_all_candidate_codes(lists)
+    if all_codes:
+        global_start = min(sd for _, sd in lists) - timedelta(days=120)  # boll 窗口前推
+        global_end = today
+        sorted_codes = sorted(all_codes)
+        n_codes = len(sorted_codes)
+        print(f"[预拉K线] 共 {n_codes} 只标的，范围 {global_start} ~ {global_end}")
+        t_pre = time.time()
+        ok_cnt = 0
+        for i, code in enumerate(sorted_codes):
+            if (i + 1) % 10 == 0 or i + 1 == n_codes or i == 0:
+                pct = (i + 1) / n_codes * 100
+                elapsed = time.time() - t_pre
+                print(f"  [预拉 {i+1}/{n_codes}] ({pct:.0f}%) {code} ...", flush=True)
+            try:
+                df = kline_mod.fetch_daily_k(code, global_start, global_end, adjust="qfq")
+                if df is not None and not df.empty:
+                    ok_cnt += 1
+            except Exception:
+                pass
+        t_pre_done = time.time() - t_pre
+        print(f"[预拉K线] 完成: {ok_cnt}/{n_codes} 只成功, 耗时 {t_pre_done:.0f}s")
+
+    # ── 阶段 2：逐信号日回测（K 线已全部在缓存中）──
     generated: list[dict] = []
     skipped = 0
-    for path, sd in lists:
+    total_signals = len(lists)
+    for idx, (path, sd) in enumerate(lists):
         days_since = (today - sd).days
         actual_hold = min(hold_days, days_since)
         if actual_hold < 1:
-            # 当天的信号至少需持有 1 天，跳过（明天 CI 会自动纳入）
             continue
-        print(f"[回测] 信号日 {sd} · 距今天 {days_since} 天 · 实际持有 {actual_hold} 天")
+        print(f"\n[回测] ({idx+1}/{total_signals}) 信号日 {sd} · 距今天 {days_since}d · 实际持有 {actual_hold}d",
+              flush=True)
         try:
             res = _backtest_one(path, sd, actual_hold, market_profile=market_profile)
         except Exception as e:
             skipped += 1
-            print(f"  → 回测异常跳过：{e}")
+            print(f"  → 回测异常跳过：{e}", flush=True)
             continue
         if res is None:
             skipped += 1
-            print("  → 无有效结果（信号为空或 K 线拉取失败）")
+            print("  → 无有效结果（信号为空或 K 线拉取失败）", flush=True)
             continue
         generated.append(res)
         print(f"  → 总收益 {res['summary'].get('total_return')}%，"
-              f"回撤 {res['summary'].get('max_drawdown')}%，{res['num_trades']} 笔")
+              f"回撤 {res['summary'].get('max_drawdown')}%，{res['num_trades']} 笔", flush=True)
 
     _write_status(lists, generated, skipped)
 
+    total_elapsed = time.time() - t0
     if not generated:
         print("没有生成任何每日回测结果（可能历史清单为空或 K 线全部拉取失败）")
         return 0
 
-    print(f"\n完成：共生成 {len(generated)} 份前向信号回测，信号日范围 "
+    print(f"\n{'='*60}")
+    print(f"完成：共生成 {len(generated)} 份前向信号回测，信号日范围 "
           f"{generated[0]['date_tag']} ~ {generated[-1]['date_tag']}（跳过 {skipped}）")
+    print(f"总耗时: {total_elapsed:.0f}s ({total_elapsed/60:.1f}min)")
     return 0
 
 
