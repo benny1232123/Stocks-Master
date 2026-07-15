@@ -17,10 +17,12 @@ from pathlib import Path
 
 import pandas as pd
 
-from smcore.config import ADJUST_FLAG_MAP, CACHE_DIR, CSV_ENCODING, DEFAULT_ADJUST
+from smcore.config import ADJUST_FLAG_MAP, CACHE_DIR, CSV_ENCODING, DEFAULT_ADJUST, STOCK_DATA_DIR
 from smcore.utils.code import format_stock_code, to_baostock_code
 
-K_DATA_CACHE_DIR = CACHE_DIR / "k_data"
+# K 线缓存单独放在 stock_data/k_data/（受追踪、随仓库提交），
+# 不放在 stock_data/cache/ 下（该目录被 .gitignore 整目录忽略，会导致云端每次冷启动重抓）。
+K_DATA_CACHE_DIR = STOCK_DATA_DIR / "k_data"
 DAILY_K_COLUMNS = ["date", "open", "high", "low", "close", "volume", "amount"]
 
 
@@ -178,12 +180,18 @@ def fetch_daily_k(
     if force_refresh or cached.empty or cache_min is None:
         segments.append((request_start, request_end))
     else:
+        # 前导缺口：缓存起点之前的请求区间（极少触发，缓存通常从上市起覆盖）
         if request_start < cache_min:
             segments.append((request_start, min(request_end, cache_min - timedelta(days=1))))
+        # 尾部缺口：缓存终点之后的请求区间（每个交易日新增的部分）
         if request_end > cache_max:
-            segments.append((max(request_start, cache_max + timedelta(days=1)), request_end))
-        if covers and not fresh and request_end >= date.today() - timedelta(days=1):
-            segments.append((max(request_start, request_end - timedelta(days=10)), request_end))
+            trail_start = cache_max + timedelta(days=1)
+            # 仅当缓存偏旧(>max_cache_age_hours)且请求触及近期时，
+            # 把回刷起点前移少量交易日以修复可能残缺的末尾几根——
+            # 而不是无脑重抓最近 10 个日历日（那样每只股票都重复抓一片已缓存的数据）。
+            if covers and not fresh and request_end >= date.today() - timedelta(days=1):
+                trail_start = min(trail_start, cache_max - timedelta(days=3))
+            segments.append((max(request_start, trail_start), request_end))
 
     parts: list[pd.DataFrame] = []
 

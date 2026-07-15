@@ -44,6 +44,8 @@ stock_data/*.csv
 
 # 看板缓存（GitHub Actions 预热后提交回仓库）
 !stock_data/daily_cache/
+# K 线缓存（个股日 K 全量 CSV，跨 GitHub Actions run 复用，避免每次冷启动重抓）
+!stock_data/k_data/
 
 # Secrets (Supabase keys etc.)
 .streamlit/secrets.toml
