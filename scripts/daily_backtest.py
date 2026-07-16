@@ -27,8 +27,11 @@ import os
 import re
 import sys
 import time
+from collections import defaultdict
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import date, datetime, timedelta
 from pathlib import Path
+from threading import Lock
 
 import pandas as pd
 
@@ -338,9 +341,32 @@ def _collect_all_candidate_codes(lists: list[tuple[Path, date]], limit_per_day: 
     return codes
 
 
+def _skip_completed(
+    lists: list[tuple[Path, date]], hold_days: int, today: date
+) -> tuple[list[tuple[Path, date]], int]:
+    """跳过已有完整回测结果的信号日，避免重复计算。
+
+    判定标准：Multi-Backtest-{date}-summary.csv 已存在 且 信号日+持有期 ≤ 今天（窗口走完）。
+    未走完的近期信号（实际持有期 < hold_days）始终保留，以便滚动更新。
+    """
+    remaining: list[tuple[Path, date]] = []
+    skipped_count = 0
+    for path, sd in lists:
+        days_since = (today - sd).days
+        if days_since >= hold_days:
+            # 窗口已走完 → 检查是否已存在结果
+            tag = sd.strftime("%Y%m%d")
+            summary_path = STOCK_DATA_DIR / f"Multi-Backtest-{tag}-summary.csv"
+            if summary_path.exists():
+                skipped_count += 1
+                continue
+        remaining.append((path, sd))
+    return remaining, skipped_count
+
+
 def main() -> int:
     hold_days = int(os.environ.get("HOLD_DAYS", "10"))
-    lookback_days = int(os.environ.get("LOOKBACK_DAYS", "30"))
+    lookback_days = int(os.environ.get("LOOKBACK_DAYS", "14"))  # 默认从30降到14（海外慢）
     today = date.today()
     t0 = time.time()
 
@@ -368,34 +394,61 @@ def main() -> int:
         print(f"未找到近 {lookback_days} 天的 Daily-Action-List CSV，跳过每日回测")
         return 0
 
-    print(f"[回测] 找到 {len(lists)} 个信号日 ({lists[0][1]} ~ {lists[-1][1]}), HOLD={hold_days}d")
+    # ── 阶段 0.5：跳过已有完整结果的信号日 ──
+    lists, already_done = _skip_completed(lists, hold_days, today)
+    if not lists:
+        print(f"[回测] 全部 {already_done} 个信号日均已有完整结果，跳过回测")
+        # 仍写 status 文件，让前端知道今天跑过
+        _write_status([], [], already_done)
+        return 0
 
-    # ── 阶段 1：预拉全量 K 线（性能核心优化）──
-    # 收集所有信号日的全部候选标的，每只股票只拉一次最宽区间的 K 线，
-    # 填满进程缓存 + 文件缓存。后续 _compute_boll_levels / run_forward_signal_backtest
-    # 全部命中缓存，不再触发 akshare HTTP 请求。
+    print(f"[回测] 找到 {len(lists)} 个待回测信号日 (已跳过 {already_done} 个已完成) "
+          f"({lists[0][1]} ~ {lists[-1][1]}), HOLD={hold_days}d")
+
+    # ── 阶段 1：并发预拉全量 K 线（性能核心优化）──
     all_codes = _collect_all_candidate_codes(lists)
     if all_codes:
         global_start = min(sd for _, sd in lists) - timedelta(days=120)  # boll 窗口前推
         global_end = today
         sorted_codes = sorted(all_codes)
         n_codes = len(sorted_codes)
-        print(f"[预拉K线] 共 {n_codes} 只标的，范围 {global_start} ~ {global_end}")
+
+        # 并发数：4 线程平衡速度与 akshare 限流风险（海外 Runner 每连接 ~4s）
+        _max_workers = int(os.environ.get("PREPULL_WORKERS", "4"))
+        print(f"[预拉K线] 共 {n_codes} 只标的，范围 {global_start} ~ {global_end}, "
+              f"并发={_max_workers}")
         t_pre = time.time()
+
         ok_cnt = 0
-        for i, code in enumerate(sorted_codes):
-            if (i + 1) % 10 == 0 or i + 1 == n_codes or i == 0:
-                pct = (i + 1) / n_codes * 100
-                elapsed = time.time() - t_pre
-                print(f"  [预拉 {i+1}/{n_codes}] ({pct:.0f}%) {code} ...", flush=True)
+        done_cnt = 0
+        _progress_lock = Lock()
+
+        def _prepull_one(code: str):
+            nonlocal ok_cnt
             try:
                 df = kline_mod.fetch_daily_k(code, global_start, global_end, adjust="qfq")
-                if df is not None and not df.empty:
-                    ok_cnt += 1
+                success = df is not None and not df.empty
             except Exception:
-                pass
+                success = False
+            with _progress_lock:
+                nonlocal done_cnt
+                done_cnt += 1
+                if success:
+                    ok_cnt += 1
+                if done_cnt % 10 == 0 or done_cnt == n_codes:
+                    pct = done_cnt / n_codes * 100
+                    print(f"  [预拉 {done_cnt}/{n_codes}] ({pct:.0f}%)", flush=True)
+            return success
+
+        with ThreadPoolExecutor(max_workers=_max_workers) as pool:
+            futures = {pool.submit(_prepull_one, c): c for c in sorted_codes}
+            for f in as_completed(futures):
+                pass  # 进度在回调中输出
+
         t_pre_done = time.time() - t_pre
-        print(f"[预拉K线] 完成: {ok_cnt}/{n_codes} 只成功, 耗时 {t_pre_done:.0f}s")
+        rate = n_codes / max(t_pre_done, 0.001)
+        print(f"[预拉K线] 完成: {ok_cnt}/{n_codes} 只成功, "
+              f"耗时 {t_pre_done:.0f}s ({rate:.1f}/s)")
 
     # ── 阶段 2：逐信号日回测（K 线已全部在缓存中）──
     generated: list[dict] = []
@@ -422,16 +475,18 @@ def main() -> int:
         print(f"  → 总收益 {res['summary'].get('total_return')}%，"
               f"回撤 {res['summary'].get('max_drawdown')}%，{res['num_trades']} 笔", flush=True)
 
-    _write_status(lists, generated, skipped)
+    total_skipped = skipped + already_done
+    _write_status(lists, generated, total_skipped)
 
     total_elapsed = time.time() - t0
     if not generated:
-        print("没有生成任何每日回测结果（可能历史清单为空或 K 线全部拉取失败）")
+        print("没有生成新的每日回测结果（可能历史清单为空或 K 线全部拉取失败）")
         return 0
 
     print(f"\n{'='*60}")
     print(f"完成：共生成 {len(generated)} 份前向信号回测，信号日范围 "
-          f"{generated[0]['date_tag']} ~ {generated[-1]['date_tag']}（跳过 {skipped}）")
+          f"{generated[0]['date_tag']} ~ {generated[-1]['date_tag']} "
+          f"(已完成{already_done} + 跳过{skipped})")
     print(f"总耗时: {total_elapsed:.0f}s ({total_elapsed/60:.1f}min)")
     return 0
 

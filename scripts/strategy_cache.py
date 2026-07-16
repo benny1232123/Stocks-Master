@@ -127,8 +127,8 @@ def push(strategy: str, date: str, csv_path: str) -> bool:
 
     path = Path(csv_path)
     if not path.exists():
-        print(f"[cache] {csv_path} 不存在，跳过 push")
-        return False
+        print(f"[cache] {csv_path} 不存在，跳过 push（无需上传）")
+        return True  # 文件不存在 = 无需上传，不是错误
 
     content = path.read_text(encoding="utf-8-sig")
     row_count = max(0, content.count("\n") - 1)
