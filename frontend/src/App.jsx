@@ -691,6 +691,7 @@ function App() {
             done = true
             if (data.result) { setBacktestRun(data.result); setScanLogs((prev) => [...prev, '回测完成，权益曲线已更新']) }
             setScanPhase(null)
+            loadDailyBacktest() // ← 回测完成后刷新总体总结 / 历史信号日列表
             clearInterval(timer)
           }
         }
