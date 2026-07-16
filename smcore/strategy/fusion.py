@@ -37,15 +37,37 @@ _stock_name_cache: Optional[dict] = None
 _bs_name_logged_in = False
 
 
+def _build_stock_name_cache_from_akshare(path: Path) -> bool:
+    """用 akshare 全市场代码→名称映射构建本地缓存文件。成功返回 True。"""
+    try:
+        import akshare as ak
+        df = ak.stock_info_a_code_name()
+        if df is None or df.empty:
+            return False
+        df = df.copy()
+        df["code"] = df["code"].astype(str).str.zfill(6)
+        df.to_csv(path, index=False, encoding="utf-8-sig")
+        for _, r in df.iterrows():
+            c = format_stock_code(str(r.get("code", "")).strip())
+            n = str(r.get("name", "")).strip()
+            if c and n and c not in _stock_name_cache:
+                _stock_name_cache[c] = n
+        return True
+    except Exception as exc:
+        print(f"[name-cache] akshare 构建失败：{type(exc).__name__}: {exc}")
+        return False
+
+
 def _get_stock_name_map() -> dict:
-    """返回 {code(6位): name} 映射，优先从 stock_info_a_code_name.csv 缓存读取。"""
+    """返回 {code(6位): name} 映射，优先从 stock_info_a_code_name.csv 缓存读取；
+    文件缺失时自动用 akshare 全市场映射构建（覆盖全部 A 股，避免 baostock 兜底查不到）。"""
     global _stock_name_cache
     if _stock_name_cache is not None:
         return _stock_name_cache
     _stock_name_cache = {}
-    try:
-        p = STOCK_DATA_DIR / "stock_info_a_code_name.csv"
-        if p.exists():
+    p = STOCK_DATA_DIR / "stock_info_a_code_name.csv"
+    if p.exists():
+        try:
             df = pd.read_csv(p, encoding="utf-8-sig", dtype=str)
             code_col = next((c for c in df.columns if c in ("code", "代码", "股票代码")), None)
             name_col = next((c for c in df.columns if c in ("name", "名称", "股票名称")), None)
@@ -55,21 +77,39 @@ def _get_stock_name_map() -> dict:
                     n = str(r[name_col]).strip()
                     if c and n and c not in _stock_name_cache:
                         _stock_name_cache[c] = n
-    except Exception:
-        pass
+        except Exception:
+            pass
+    else:
+        # 缓存文件缺失 → 用 akshare 一次性构建并持久化（之后直接读文件，秒级）
+        if _build_stock_name_cache_from_akshare(p):
+            print(f"[name-cache] 已从 akshare 构建 {len(_stock_name_cache)} 只股票名称缓存")
     return _stock_name_cache
 
 
 def lookup_stock_name(code: str) -> str:
-    """查询单只股票名称（缓存 → CSV → baostock 三级兜底），找不到返回空串。"""
+    """查询单只股票名称（缓存 → akshare 单只 → baostock 兜底），找不到返回空串。"""
     c6 = format_stock_code(code)
     if not c6:
         return ""
-    # 1) 已有缓存
+    # 1) 已有缓存（含 stock_info_a_code_name.csv 或 akshare 全市场构建结果）
     m = _get_stock_name_map()
     if c6 in m:
         return m[c6]
-    # 2) baostock 实时查（仅一次登录，~0.3s/只）
+    # 2) akshare 单只实时兜底（覆盖新股等未入全市场列表的代码）
+    try:
+        import akshare as ak
+        # stock_individual_info_em 返回 item/value 两列，其中「股票简称」即名称
+        info = ak.stock_individual_info_em(symbol=c6)
+        if info is not None and not info.empty:
+            name_row = info[info["item"].astype(str).str.contains("简称|名称", na=False)]
+            if not name_row.empty:
+                found = str(name_row["value"].iloc[0]).strip()
+                if found:
+                    _stock_name_cache[c6] = found  # 写回缓存
+                    return found
+    except Exception:
+        pass
+    # 3) baostock 兜底（仅一次登录，~0.3s/只）
     global _bs_name_logged_in
     try:
         import baostock as bs
