@@ -202,12 +202,16 @@ jobs:
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
-          git add -f stock_data/daily_cache/
-          git add -f stock_data/cache/
-          git add -f stock_data/k_data/
-          git add -f stock_data/Daily-Action-List-*.csv
-          git add -f stock_data/Multi-Backtest-*.csv
-          git add -f stock_data/backtest_status.txt
+          # --ignore-missing: 某些目录可能因上游步骤失败而不存在（如 daily_cache / cache），
+          # 不应导致整步 fatal exit 128。
+          git add -f --ignore-missing stock_data/daily_cache/
+          git add -f --ignore-missing stock_data/cache/
+          git add -f --ignore-missing stock_data/k_data/
+          git add -f --ignore-missing stock_data/Daily-Action-List-*.csv
+          git add -f --ignore-missing stock_data/Multi-Backtest-*.csv
+          git add -f --ignore-missing stock_data/backtest_status.txt
+          # 兜底：即使上面全部 miss 也继续执行（空提交会被 diff --quiet 拦住）
+          true
           if git diff --cached --quiet; then
             echo "无变更，跳过提交"
           else
