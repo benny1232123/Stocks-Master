@@ -28,10 +28,8 @@ import re
 import sys
 import time
 from collections import defaultdict
-from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import date, datetime, timedelta
 from pathlib import Path
-from threading import Lock
 
 import pandas as pd
 
@@ -405,7 +403,11 @@ def main() -> int:
     print(f"[回测] 找到 {len(lists)} 个待回测信号日 (已跳过 {already_done} 个已完成) "
           f"({lists[0][1]} ~ {lists[-1][1]}), HOLD={hold_days}d")
 
-    # ── 阶段 1：并发预拉全量 K 线（性能核心优化）──
+    # 阶段 1：串行预拉全量 K 线（性能核心优化）
+    # 用户要求：不用多线程，避免把 akshare 接口打崩。
+    # 串行虽慢，但配合「跳过已完成」+「缩短窗口」后，日常增量只需预拉 1~3 个
+    # 新信号日的标的（几十只），串行几分钟即可；冷启动（窗口内全量）由
+    # PREPULL_INTERVAL 控制节奏，温和对待上游接口。
     all_codes = _collect_all_candidate_codes(lists)
     if all_codes:
         global_start = min(sd for _, sd in lists) - timedelta(days=120)  # boll 窗口前推
@@ -413,37 +415,32 @@ def main() -> int:
         sorted_codes = sorted(all_codes)
         n_codes = len(sorted_codes)
 
-        # 并发数：4 线程平衡速度与 akshare 限流风险（海外 Runner 每连接 ~4s）
-        _max_workers = int(os.environ.get("PREPULL_WORKERS", "4"))
+        # 串行预拉时每两只之间的间隔（秒）：给上游接口喘息时间，默认 0.3s。
+        # 设 0 可关闭间隔（最快，但风险高），日常 CI 建议保留默认值。
+        _interval = float(os.environ.get("PREPULL_INTERVAL", "0.3"))
         print(f"[预拉K线] 共 {n_codes} 只标的，范围 {global_start} ~ {global_end}, "
-              f"并发={_max_workers}")
+              f"串行(间隔 {_interval}s)")
         t_pre = time.time()
 
         ok_cnt = 0
-        done_cnt = 0
-        _progress_lock = Lock()
 
-        def _prepull_one(code: str):
-            nonlocal ok_cnt
+        for i, code in enumerate(sorted_codes):
             try:
                 df = kline_mod.fetch_daily_k(code, global_start, global_end, adjust="qfq")
-                success = df is not None and not df.empty
-            except Exception:
-                success = False
-            with _progress_lock:
-                nonlocal done_cnt
-                done_cnt += 1
-                if success:
+                if df is not None and not df.empty:
                     ok_cnt += 1
-                if done_cnt % 10 == 0 or done_cnt == n_codes:
-                    pct = done_cnt / n_codes * 100
-                    print(f"  [预拉 {done_cnt}/{n_codes}] ({pct:.0f}%)", flush=True)
-            return success
-
-        with ThreadPoolExecutor(max_workers=_max_workers) as pool:
-            futures = {pool.submit(_prepull_one, c): c for c in sorted_codes}
-            for f in as_completed(futures):
-                pass  # 进度在回调中输出
+            except Exception:
+                pass
+            # 进度输出（带 ETA）
+            if (i + 1) % 10 == 0 or (i + 1) == n_codes or i == 0:
+                pct = (i + 1) / n_codes * 100
+                elapsed = time.time() - t_pre
+                eta = (elapsed / (i + 1)) * (n_codes - i - 1) if i + 1 > 0 else 0
+                print(f"  [预拉 {i+1}/{n_codes}] ({pct:.0f}%) {code} "
+                      f"已用 {elapsed:.0f}s 预计剩余 {eta:.0f}s", flush=True)
+            # 温和间隔，保护上游接口不被打崩
+            if _interval > 0 and i + 1 < n_codes:
+                time.sleep(_interval)
 
         t_pre_done = time.time() - t_pre
         rate = n_codes / max(t_pre_done, 0.001)

@@ -187,7 +187,7 @@ jobs:
           KLINE_BACKEND: akshare
           HOLD_DAYS: "10"
           LOOKBACK_DAYS: "14"          # 从30降到14：海外akshare慢，已完成的历史结果会自动跳过
-          PREPULL_WORKERS: "4"         # 并发预拉K线（4线程，~4x提速）
+          PREPULL_INTERVAL: "0.3"      # 串行预拉每只间隔0.3s，保护akshare接口不被打崩（不用多线程）
           SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
           SUPABASE_KEY: ${{ secrets.SUPABASE_KEY }}
         run: |
