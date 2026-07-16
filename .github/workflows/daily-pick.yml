@@ -68,6 +68,16 @@ jobs:
           python scripts/strategy_cache.py pull boll $TODAY && echo "skip=true" >> $GITHUB_OUTPUT && exit 0
           python -m smcore.strategies.boll $TODAY
           python scripts/strategy_cache.py push boll $TODAY
+          # ── 策略产出摘要 ──
+          echo "### Boll 策略产出" >> $GITHUB_STEP_SUMMARY
+          F="stock_data/Stock-Selection-Boll-${TODAY}.csv"
+          if [ -f "$F" ]; then
+            N=$(tail -n +2 "$F" | wc -l)
+            echo "✅ ${F}: **${N}** 只候选" >> $GITHUB_STEP_SUMMARY
+          else
+            echo "::error::Boll 策略未生成输出文件 ${F}"
+            echo "❌ 文件不存在: ${F}" >> $GITHUB_STEP_SUMMARY
+          fi
 
       - name: 策略2 题材热度
         id: theme
@@ -83,6 +93,15 @@ jobs:
           # theme 内部 datetime.now() 硬编码，用 SIGNAL_DATE 包装脚本注入指定日期
           SIGNAL_DATE=$TODAY python scripts/run_strategy_for_date.py theme
           python scripts/strategy_cache.py push theme $TODAY
+          echo "### Theme 策略产出" >> $GITHUB_STEP_SUMMARY
+          F="stock_data/Stock-Selection-Ashare-Theme-Turnover-${TODAY}.csv"
+          if [ -f "$F" ]; then
+            N=$(tail -n +2 "$F" | wc -l)
+            echo "✅ ${F}: **${N}** 只候选" >> $GITHUB_STEP_SUMMARY
+          else
+            echo "::error::Theme 策略未生成输出文件 ${F}"
+            echo "❌ 文件不存在: ${F}" >> $GITHUB_STEP_SUMMARY
+          fi
 
       - name: 策略3 CCTV 板块
         id: cctv
@@ -97,6 +116,15 @@ jobs:
           python scripts/strategy_cache.py pull cctv $TODAY && echo "skip=true" >> $GITHUB_OUTPUT && exit 0
           SIGNAL_DATE=$TODAY python scripts/run_strategy_for_date.py cctv
           python scripts/strategy_cache.py push cctv $TODAY
+          echo "### CCTV 策略产出" >> $GITHUB_STEP_SUMMARY
+          F="stock_data/CCTV-Sector-Stock-Pool-${TODAY}.csv"
+          if [ -f "$F" ]; then
+            N=$(tail -n +2 "$F" | wc -l)
+            echo "✅ ${F}: **${N}** 只候选" >> $GITHUB_STEP_SUMMARY
+          else
+            echo "::warning::CCTV 策略未生成个股池（新闻稀薄/板块未匹配属正常现象）"
+            echo "⚪ 文件不存在（可能无新闻或板块匹配失败）: ${F}" >> $GITHUB_STEP_SUMMARY
+          fi
 
       - name: 策略4 相对强弱
         id: relativity
@@ -114,6 +142,15 @@ jobs:
           # relativity --max-workers 1 仍可通过 env 注入信号日
           SIGNAL_DATE=$TODAY python scripts/run_strategy_for_date.py relativity
           python scripts/strategy_cache.py push relativity $TODAY
+          echo "### Relativity 策略产出" >> $GITHUB_STEP_SUMMARY
+          F="stock_data/Stock-Selection-Relativity-${TODAY}.csv"
+          if [ -f "$F" ]; then
+            N=$(tail -n +2 "$F" | wc -l)
+            echo "✅ ${F}: **${N}** 只候选" >> $GITHUB_STEP_SUMMARY
+          else
+            echo "::error::Relativity 策略未生成输出文件 ${F}"
+            echo "❌ 文件不存在: ${F}" >> $GITHUB_STEP_SUMMARY
+          fi
 
       - name: 策略5 动量/相对强度
         id: momentum
@@ -128,6 +165,15 @@ jobs:
           python scripts/strategy_cache.py pull momentum $TODAY && echo "skip=true" >> $GITHUB_OUTPUT && exit 0
           SIGNAL_DATE=$TODAY python scripts/run_strategy_for_date.py momentum
           python scripts/strategy_cache.py push momentum $TODAY
+          echo "### Momentum 策略产出" >> $GITHUB_STEP_SUMMARY
+          F="stock_data/Stock-Selection-Momentum-${TODAY}.csv"
+          if [ -f "$F" ]; then
+            N=$(tail -n +2 "$F" | wc -l)
+            echo "✅ ${F}: **${N}** 只候选" >> $GITHUB_STEP_SUMMARY
+          else
+            echo "::error::Momentum 策略未生成输出文件 ${F}"
+            echo "❌ 文件不存在: ${F}" >> $GITHUB_STEP_SUMMARY
+          fi
 
       - name: 生成操作清单 + 上传 COS
         env:

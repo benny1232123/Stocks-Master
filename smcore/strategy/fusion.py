@@ -771,16 +771,45 @@ def _build_report_text(
     max_stale_days: int = 3,
 ) -> str:
     """生成日报段落。"""
+    # ── 策略贡献度汇总（显眼置顶，一眼看出哪几个策略在出力）──
+    strat_raw = {
+        "Boll": n_boll,
+        "Relativity": n_relativity,
+        "Theme": n_theme,
+        "CCTV": n_cctv,
+        "Momentum": n_momentum,
+    }
+    sd = source_dates or {}
+    contrib_lines = []
+    for name, cnt in strat_raw.items():
+        actual = sd.get(name)
+        if actual is None:
+            status = "❌ 缺失（未找到文件）"
+        elif cnt == 0:
+            status = f"⚪ 产出=0（{actual} 数据为空）"
+        elif actual != date_yyyymmdd:
+            status = f"✅ {cnt} 只（{actual}，回退{max_stale_days}天内）"
+        else:
+            status = f"✅ {cnt} 只"
+        contrib_lines.append(f"- {name}: {status}")
+    active_count = sum(1 for c in strat_raw.values() if c > 0)
+
     if df.empty:
-        stale_notes = _format_source_date_notes(date_yyyymmdd, source_dates or {}, max_stale_days=max_stale_days)
-        if stale_notes:
-            return "\n## 今日操作清单\n- 无候选\n" + stale_notes
-        return "\n## 今日操作清单\n- 无候选"
+        stale_notes = _format_source_date_notes(date_yyyymmdd, sd, max_stale_days=max_stale_days)
+        header = "\n## 今日操作清单\n- 无候选"
+        summary = "\n### 策略贡献度\n" + "\n".join(contrib_lines) + (
+            f"\n> 📊 仅 {active_count}/5 个策略有输出，清单可能不完整。" if active_count < 3 else ""
+        )
+        return header + ("\n" + stale_notes if stale_notes else "") + summary
 
     lines = [
         f"\n## 今日操作清单（{date_yyyymmdd}）",
-        f"- 信号来源: Boll {n_boll} | Relativity {n_relativity} | Momentum {n_momentum} | Theme {n_theme} | CCTV {n_cctv}",
         f"- 融合后候选: {len(df)} 只（按综合评分排序）",
+        "",
+        "### 策略贡献度",
+        *contrib_lines,
+        "" if active_count >= 3 else f"> ⚠️ 仅 {active_count}/5 个策略有输出，回测/决策参考价值有限。",
+        "",
     ]
     stale_notes = _format_source_date_notes(date_yyyymmdd, source_dates or {}, max_stale_days=max_stale_days)
     if stale_notes:

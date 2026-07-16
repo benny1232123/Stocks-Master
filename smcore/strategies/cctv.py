@@ -827,6 +827,15 @@ def write_markdown_report(date_str, sector_df, quality_df, emerging_df, top_n, u
     return path
 
 
+def _write_empty_stock_pool(date_str: str, reason: str) -> None:
+    """写空 CCTV 个股池标记文件，让 fusion 能区分「跑了但为空」vs「没跑过」。"""
+    stock_pool_path = DATA_DIR / f"CCTV-Sector-Stock-Pool-{date_str}.csv"
+    pd.DataFrame(columns=["股票代码", "股票名称"]).to_csv(
+        stock_pool_path, index=False, encoding="utf-8-sig"
+    )
+    print(f"[cctv] 个股池为空（{reason}）→ 已写入空文件 {stock_pool_path.name}")
+
+
 def run_cctv():
     args = parse_args()
     if args.unit_days <= 0:
@@ -836,6 +845,8 @@ def run_cctv():
     date_str, news_df, raw_news_count = fetch_cctv_news(args.date, fallback=(not args.no_fallback))
     if news_df.empty:
         print("未获取到可用 CCTV 新闻，退出")
+        # 写空标记文件让 fusion 知道「跑了但无数据」
+        _write_empty_stock_pool(date_str, "未获取到新闻")
         return
 
     keyword_news_df = news_df
@@ -861,6 +872,7 @@ def run_cctv():
     sector_df, matched_df, _ = build_sector_heat(keyword_news_df, sector_keywords)
     if sector_df.empty:
         print("未匹配到板块关键词，可扩展词库")
+        _write_empty_stock_pool(date_str, "未匹配到板块关键词")
         return
 
     _log_step("开始计算个股池")
@@ -888,6 +900,13 @@ def run_cctv():
         emerging_df.to_csv(emerging_path, index=False, encoding="utf-8-sig")
     if not stock_pool_df.empty:
         stock_pool_df.to_csv(stock_pool_path, index=False, encoding="utf-8-sig")
+        print(f"[cctv] 个股池 {stock_pool_path.name} 已保存，{len(stock_pool_df)} 只")
+    else:
+        # 即使 0 候选也写空文件
+        pd.DataFrame(columns=["股票代码", "股票名称"]).to_csv(
+            stock_pool_path, index=False, encoding="utf-8-sig"
+        )
+        print(f"[cctv] 个股池为空 → 已写入空文件 {stock_pool_path.name}")
 
     unit_df = pd.DataFrame()
     used_days = []

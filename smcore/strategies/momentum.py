@@ -147,6 +147,16 @@ def _momentum_metrics(code: str, sleep_seconds: float, min_60d: float = MIN_60D_
     }
 
 
+def _write_empty_momentum(date_str: str, reason: str) -> None:
+    """写空动量标记文件，让 fusion 能区分「跑了但为空」vs「没跑过」。"""
+    out_path = STOCK_DATA_DIR / f"Stock-Selection-Momentum-{date_str}.csv"
+    pd.DataFrame(columns=["股票代码", "股票名称", "建议买入价", "动量分",
+                          "20日收益%", "60日收益%", "MA20斜率%", "距20日高点%"]).to_csv(
+        out_path, index=False, encoding="utf-8-sig"
+    )
+    print(f"[动量] 产出=0（{reason}）→ 已写入空文件 {out_path.name}")
+
+
 def run_momentum() -> None:
     args = parse_args()
     STOCK_DATA_DIR.mkdir(parents=True, exist_ok=True)
@@ -157,9 +167,11 @@ def run_momentum() -> None:
         spot = _fetch_spot()
     except Exception as exc:
         print(f"[动量] 快照拉取失败（{type(exc).__name__}），跳过本策略: {exc}")
+        _write_empty_momentum(today_text, f"快照拉取失败: {exc}")
         return
     if spot is None or spot.empty:
         print("[动量] 快照为空，退出")
+        _write_empty_momentum(today_text, "快照为空")
         return
     spot = spot.copy()
     spot["代码"] = spot["代码"].astype(str).str.zfill(6)
@@ -189,6 +201,7 @@ def run_momentum() -> None:
     cand = spot[mask].copy()
     if cand.empty:
         print("[动量] 预筛后无候选")
+        _write_empty_momentum(today_text, "预筛后无候选")
         return
     # 排序：东财快照按 60日涨幅，新浪快照按当日涨幅（廉价强度代理）；取 Top 候选拉 K 线确认
     sort_col = "60日涨跌幅" if has_60 else "涨跌幅"
@@ -231,6 +244,7 @@ def run_momentum() -> None:
 
     if not rows:
         print("[动量] 无符合动量条件的股票")
+        _write_empty_momentum(today_text, "K线确认后无符合条件的股票")
         return
 
     out = pd.DataFrame(rows).sort_values("动量分", ascending=False).head(args.top_n)

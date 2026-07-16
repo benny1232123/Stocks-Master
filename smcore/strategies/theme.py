@@ -828,7 +828,11 @@ def run_theme():
         out_path = DATA_DIR / f"Stock-Selection-Ashare-Theme-Turnover-{today_text}.csv"
 
     if result_df.empty:
-        print("未筛选出符合条件的股票。")
+        # 即使 0 候选也写空文件（让 fusion 能区分「跑了但为空」vs「没跑过」）
+        pd.DataFrame(columns=["股票代码", "股票名称", "综合分", "最新换手率%", "成交额放大倍数", "题材标签"]).to_csv(
+            out_path, index=False, encoding="utf-8-sig"
+        )
+        print(f"未筛选出符合条件的股票 → 已写入空文件 {out_path.name}")
         print(f"热点板块参考: {', '.join(hot_sectors) if hot_sectors else '无'}")
         return 0
 

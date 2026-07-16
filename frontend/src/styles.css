@@ -1028,6 +1028,8 @@
   white-space: nowrap;
 }
 .trade-form { display: grid; grid-template-columns: repeat(auto-fill, minmax(160px, 1fr)); gap: 12px; }
+.field-labeled { display: flex; flex-direction: column; gap: 2px; }
+.field-label { font-size: 11px; color: hsl(var(--muted-foreground)); line-height: 1; padding-left: 2px; }
 .analysis-form { display: flex; gap: 12px; }
 .analysis-form input {
   height: 44px; border-radius: 9px; border: 1px solid hsl(var(--border));

@@ -487,18 +487,22 @@ def run_boll(
         except Exception:
             pass
 
+    out_path = STOCK_DATA_DIR / f"Stock-Selection-Boll-{today}.csv"
     if boll_selected_codes:
         out_df = pd.DataFrame({
             "股票代码": [format_stock_code(c) for c in boll_selected_codes],
             "股票名称": [code_name_map.get(format_stock_code(c), "") for c in boll_selected_codes],
             "建议买入价": [boll_selected_buy.get(format_stock_code(c), "") for c in boll_selected_codes],
         })
-        out_path = STOCK_DATA_DIR / f"Stock-Selection-Boll-{today}.csv"
         out_df.to_csv(out_path, index=False, encoding="utf-8-sig")
         print(f"[boll] Stock-Selection-Boll-{today}.csv 已保存，{len(out_df)} 只")
         return out_df
     else:
-        print("[boll] 没有选出符合布林带策略的股票")
+        # 即使 0 候选也写空文件（让 fusion 能区分「跑了但为空」vs「没跑过」）
+        pd.DataFrame(columns=["股票代码", "股票名称", "建议买入价"]).to_csv(
+            out_path, index=False, encoding="utf-8-sig"
+        )
+        print(f"[boll] 没有选出符合布林带策略的股票 → 已写入空文件 {out_path.name}")
         return pd.DataFrame(columns=["股票代码", "股票名称", "建议买入价"])
 
 

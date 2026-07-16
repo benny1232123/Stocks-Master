@@ -1073,18 +1073,22 @@ def run_relativity() -> None:
     finally:
         bs.logout()
 
+    out_path = STOCK_DATA_DIR / f"Stock-Selection-Relativity-{today_text}.csv"
     if selected_rows:
         out_df = pd.DataFrame(selected_rows)
         if RS_CHECKPOINT_PASS_COL in out_df.columns:
             out_df = out_df.drop(columns=[RS_CHECKPOINT_PASS_COL], errors="ignore")
         if "抗跌满足率" in out_df.columns and "上涨满足率" in out_df.columns:
             out_df = out_df.sort_values(["抗跌满足率", "上涨满足率"], ascending=False, na_position="last")
-        out_path = STOCK_DATA_DIR / f"Stock-Selection-Relativity-{today_text}.csv"
         out_df.to_csv(out_path, index=False, encoding="utf-8-sig")
-        print(f"\n{out_path.name} 文件已保存")
+        print(f"\n{out_path.name} 文件已保存，{len(out_df)} 只")
         print(out_df)
     else:
-        print("\n没有选出符合相对强弱策略的股票。")
+        # 即使 0 候选也写空文件
+        pd.DataFrame(columns=["股票代码", "股票名称"]).to_csv(
+            out_path, index=False, encoding="utf-8-sig"
+        )
+        print(f"\n没有选出符合相对强弱策略的股票 → 已写入空文件 {out_path.name}")
 
 
 if __name__ == "__main__":

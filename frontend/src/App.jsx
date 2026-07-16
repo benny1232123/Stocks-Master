@@ -891,8 +891,9 @@ function App() {
                       <span>代码</span><span>名称</span><span>价格</span>
                     </div>
                     {actionPreview.slice(0, 5).map((row, i) => {
-                      const code = row['股票代码'] ?? row['代码'] ?? '--'
-                      const name = row['股票名称'] ?? row['名称'] ?? '--'
+                      const code = String(row['股票代码'] ?? row['代码'] ?? '--').padStart(6, '0')
+                      const rawName = String(row['股票名称'] ?? row['名称'] ?? '').trim()
+                      const name = (!rawName || rawName === '--' || rawName.toLowerCase() === 'nan') ? '--' : rawName
                       const priceRaw = row['最新价'] ?? row['建议买入价'] ?? null
                       const price = priceRaw != null ? Number(priceRaw) : null
                       return (
@@ -1667,7 +1668,7 @@ function App() {
                                 <div className="top-info">
                                   <div className="top-main">
                                     <span className="top-code">{code}</span>
-                                    <span className="top-name">{r['股票名称']}</span>
+                                    <span className="top-name">{(!r['股票名称'] || String(r['股票名称']).trim().toLowerCase() === 'nan') ? '--' : r['股票名称']}</span>
                                     {/* 策略标签 */}
                                     {strategies.length > 0 && (
                                       <div className="top-tags">
@@ -1762,12 +1763,21 @@ function App() {
                     <option value="buy">买入</option>
                     <option value="sell">卖出</option>
                   </select>
-                  <input value={tradeForm.price} type="number" min="0" step="0.01" placeholder="价格" className="h-9 rounded-lg bg-card border border-border px-3 text-foreground"
-                    onChange={(e) => setTradeForm((p) => ({ ...p, price: Number(e.target.value) }))} />
-                  <input value={tradeForm.qty} type="number" min="1" step="1" placeholder="数量" className="h-9 rounded-lg bg-card border border-border px-3 text-foreground"
-                    onChange={(e) => setTradeForm((p) => ({ ...p, qty: Number(e.target.value) }))} />
-                  <input value={tradeForm.fee} type="number" min="0" step="0.01" placeholder="手续费" className="h-9 rounded-lg bg-card border border-border px-3 text-foreground"
-                    onChange={(e) => setTradeForm((p) => ({ ...p, fee: Number(e.target.value) }))} />
+                  <div className="field-labeled">
+                    <label className="field-label">价格</label>
+                    <input value={tradeForm.price} type="number" min="0" step="0.01" placeholder="0.00" className="h-9 rounded-lg bg-card border border-border px-3 text-foreground"
+                      onChange={(e) => setTradeForm((p) => ({ ...p, price: Number(e.target.value) }))} />
+                  </div>
+                  <div className="field-labeled">
+                    <label className="field-label">数量</label>
+                    <input value={tradeForm.qty} type="number" min="1" step="1" placeholder="100" className="h-9 rounded-lg bg-card border border-border px-3 text-foreground"
+                      onChange={(e) => setTradeForm((p) => ({ ...p, qty: Number(e.target.value) }))} />
+                  </div>
+                  <div className="field-labeled">
+                    <label className="field-label">手续费</label>
+                    <input value={tradeForm.fee} type="number" min="0" step="0.01" placeholder="0" className="h-9 rounded-lg bg-card border border-border px-3 text-foreground"
+                      onChange={(e) => setTradeForm((p) => ({ ...p, fee: Number(e.target.value) }))} />
+                  </div>
                   <input value={tradeForm.notes} placeholder="备注" className="h-9 rounded-lg bg-card border border-border px-3 text-foreground"
                     onChange={(e) => setTradeForm((p) => ({ ...p, notes: e.target.value }))} />
                   <Button onClick={async () => {

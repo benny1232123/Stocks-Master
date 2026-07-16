@@ -86,6 +86,14 @@ def preview_csv(path: str, limit: int = 20) -> dict:
     if frame.empty:
         return {"rows": [], "columns": frame.columns.tolist()}
 
+    # 股票代码列归一化：与 read_csv_file 保持一致，避免前端 Hero 预览表
+    # 显示 566 而非 000566（pandas 把 '000566' 推断成 int 丢前导零）。
+    from smcore.utils.code import format_stock_code
+
+    for col in frame.columns:
+        if "股票代码" in col or col == "代码":
+            frame[col] = frame[col].map(lambda x: format_stock_code(x))
+
     return {
         "columns": frame.columns.tolist(),
         "rows": frame.head(limit).to_dict(orient="records"),
