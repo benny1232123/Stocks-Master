@@ -217,8 +217,37 @@ jobs:
           if git diff --cached --quiet; then
             echo "无变更，跳过提交"
           else
-            git commit -m "chore: 预热看板缓存 + 数据 $(date +%Y-%m-%d)"
-            # 远程可能有新提交（如手动 push），先拉取 rebase 再推送
-            git pull --rebase --autostash origin master || true
-            git push
+            git commit -m "chore: 缓存看板数据 $(date +%Y%m%d)"
+            # ── 推送策略（三层容错）──
+            # 这些数据文件（k_data/daily_cache/Daily-Action-List/Multi-Backtest）
+            # 都是「新的 > 旧的」追加/替换型产物，CI 是唯一写入方。
+            #
+            # 第1层（首选）：git pull --rebase —— 干净地线性合并远程新提交。
+            #   但若两次 CI 同时修改同一只票的 k_data/*.csv 会产生 CONFLICT。
+            if git pull --rebase --autostash origin master 2>/dev/null; then
+              echo "[push] rebase 成功"
+              git push
+            else
+              # 第2层（rebase 冲突时）：abort rebase → 回退 commit → re-add + 重新 commit
+              #   然后 merge 用 theirs 策略（保留本地最新数据）。
+              echo "[push] rebase 冲突，切换为 merge(保留本地最新数据)"
+              git rebase --abort 2>/dev/null || true
+              git reset HEAD~ 2>/dev/null || true   # 回退 commit，脱离 detached HEAD
+              git checkout master 2>/dev/null || true
+              # 重新 stage（可能被 reset 清掉了）
+              [ -d stock_data/daily_cache/ ] && git add -f stock_data/daily_cache/ || true
+              [ -d stock_data/k_data/ ] && git add -f stock_data/k_data/ || true
+              ls stock_data/Daily-Action-List-*.csv >/dev/null 2>&1 && git add -f stock_data/Daily-Action-List-*.csv || true
+              ls stock_data/Multi-Backtest-*.csv >/dev/null 2>&1 && git add -f stock_data/Multi-Backtest-*.csv || true
+              [ -f stock_data/backtest_status.txt ] && git add -f stock_data/backtest_status.txt || true
+              git diff --cached --quiet && echo "无变更（冲突回退后为空），跳过" && exit 0
+              git commit -m "chore: 缓存看板数据 $(date +%Y%m%d)"
+              if ! git pull --no-rebase -Xtheirs origin master 2>/dev/null; then
+                # 第3层（兜底）：merge 也失败 → force-with-lease 强推。
+                echo "[push] merge 也失败，使用 force-with-lease 强推"
+                git push --force-with-lease origin master
+              else
+                git push
+              fi
+            fi
           fi
