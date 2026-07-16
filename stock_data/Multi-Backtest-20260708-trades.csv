@@ -1,2 +1,4 @@
 ﻿code,buy_date,sell_date,buy_price,sell_price,qty,return_pct,exit_reason
 600428,2026-07-09,2026-07-10,8.238,8.981,500,9.02,take_pct
+600323,2026-07-09,2026-07-15,29.069,30.27,200,4.13,take_band
+600557,2026-07-09,2026-07-15,12.382,13.267,300,7.14,take_pct
