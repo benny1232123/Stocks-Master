@@ -327,17 +327,44 @@ def daily_latest_backtest() -> dict:
 
 @app.get("/api/backtests/daily-summary")
 def daily_backtest_summary() -> dict:
-    """聚合全部每日前向回测批次（Multi-Backtest-*-summary.csv），产出总体总结指标。"""
+    """聚合全部每日前向回测批次（Multi-Backtest-*-summary.csv），产出总体总结指标。
+
+    与 daily_backtest.py 的 _filter_incomplete 对齐：
+    策略数 < BACKTEST_MIN_STRATEGIES（默认 3）的信号日视为残缺，
+    不纳入总体统计（避免少数策略的偏小组合污染回测结论）。
+    """
     import glob as _glob
     import statistics as _stats
 
     from smcore.artifacts import STOCK_DATA_DIR
+
+    # ── 可配置阈值（与 daily_backtest.py 一致）──
+    _MIN_STRATEGIES = int(os.environ.get("BACKTEST_MIN_STRATEGIES", "3"))
+
+    def _count_active_strategies(date_tag: str) -> int:
+        """读取对应日期的 Daily-Action-List，统计「来源策略」列去重后的活跃策略数。"""
+        try:
+            dal = read_csv_file(f"stock_data/Daily-Action-List-{date_tag}.csv")
+            if dal.empty or "来源策略" not in dal.columns:
+                return 0
+            strategies = set()
+            for raw in dal["来源策略"].dropna().astype(str):
+                for s in raw.split("/"):
+                    s = s.strip()
+                    if s:
+                        strategies.add(s)
+            return len(strategies)
+        except Exception:
+            return 0
 
     files = sorted(_glob.glob(str(STOCK_DATA_DIR / "Multi-Backtest-*-summary.csv")), reverse=True)
     rows = []
     for f in files:
         name = os.path.basename(f)
         date_tag = name[len("Multi-Backtest-"):-len("-summary.csv")]
+        # 策略完整性筛除：与 daily_backtest.py Stage 0.7 对齐
+        if _count_active_strategies(date_tag) < _MIN_STRATEGIES:
+            continue
         summary_df = read_csv_file(f"stock_data/Multi-Backtest-{date_tag}-summary.csv")
         if summary_df.empty:
             continue
