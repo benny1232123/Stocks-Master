@@ -259,6 +259,8 @@ jobs:
           [ -d stock_data/k_data/ ] && git add -f stock_data/k_data/ || true
           ls stock_data/Daily-Action-List-*.csv >/dev/null 2>&1 && git add -f stock_data/Daily-Action-List-*.csv || true
           ls stock_data/Multi-Backtest-*.csv >/dev/null 2>&1 && git add -f stock_data/Multi-Backtest-*.csv || true
+          ls stock_data/Stock-Selection-*.csv >/dev/null 2>&1 && git add -f stock_data/Stock-Selection-*.csv || true
+          ls stock_data/CCTV-Sector-Stock-Pool-*.csv >/dev/null 2>&1 && git add -f stock_data/CCTV-Sector-Stock-Pool-*.csv || true
           [ -f stock_data/backtest_status.txt ] && git add -f stock_data/backtest_status.txt || true
           if git diff --cached --quiet; then
             echo "无变更，跳过提交"
@@ -285,6 +287,8 @@ jobs:
               [ -d stock_data/k_data/ ] && git add -f stock_data/k_data/ || true
               ls stock_data/Daily-Action-List-*.csv >/dev/null 2>&1 && git add -f stock_data/Daily-Action-List-*.csv || true
               ls stock_data/Multi-Backtest-*.csv >/dev/null 2>&1 && git add -f stock_data/Multi-Backtest-*.csv || true
+              ls stock_data/Stock-Selection-*.csv >/dev/null 2>&1 && git add -f stock_data/Stock-Selection-*.csv || true
+              ls stock_data/CCTV-Sector-Stock-Pool-*.csv >/dev/null 2>&1 && git add -f stock_data/CCTV-Sector-Stock-Pool-*.csv || true
               [ -f stock_data/backtest_status.txt ] && git add -f stock_data/backtest_status.txt || true
               git diff --cached --quiet && echo "无变更（冲突回退后为空），跳过" && exit 0
               git commit -m "chore: 缓存看板数据 $(date +%Y%m%d)"

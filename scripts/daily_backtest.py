@@ -295,7 +295,7 @@ def _backtest_one(path: Path, sd: date, hold_days: int, market_profile=None) -> 
     }
 
 
-def _write_status(lists, generated, skipped):
+def _write_status(lists, generated, skipped, incomplete_skipped=0):
     """把回测运行状态写到 stock_data/backtest_status.txt，便于在仓库/看板确认回测真的跑了
     （continue-on-error 不会再静默吞掉失败）。"""
     try:
@@ -304,6 +304,7 @@ def _write_status(lists, generated, skipped):
             f"eligible_signal_days={len(lists)}",
             f"generated={len(generated)}",
             f"skipped={skipped}",
+            f"incomplete_skipped={incomplete_skipped}",
         ]
         if generated:
             lines.append(f"range={generated[0]['date_tag']}~{generated[-1]['date_tag']}")
@@ -362,6 +363,46 @@ def _skip_completed(
     return remaining, skipped_count
 
 
+def _count_active_strategies(path: Path) -> tuple[int, set[str]]:
+    """读 Daily-Action-List 的「来源策略」列，去重统计有效策略数及标识集合。"""
+    try:
+        df = pd.read_csv(path, encoding="utf-8-sig", dtype=str)
+    except Exception:
+        return 0, set()
+    col = next((c for c in df.columns if "来源策略" in c or c == "策略"), None)
+    if col is None or df.empty:
+        return 0, set()
+    tags: set[str] = set()
+    for v in df[col].dropna():
+        for s in str(v).split("/"):
+            s = s.strip().lower()
+            if s:
+                tags.add(s)
+    return len(tags), tags
+
+
+def _filter_incomplete(
+    lists: list[tuple[Path, date]], min_strategies: int
+) -> tuple[list[tuple[Path, date]], int]:
+    """跳过有效策略数 < min_strategies 的信号日，保证回测在统一基准上。
+
+    某些信号日的清单只融合了部分策略（如某天 Theme/CCTV step 失败被
+    continue-on-error 吞掉），用这种「残缺清单」回测会污染统计
+    （组合偏小、与齐全日不可比）。
+    """
+    remaining: list[tuple[Path, date]] = []
+    skipped = 0
+    for path, sd in lists:
+        n, tags = _count_active_strategies(path)
+        if n < min_strategies:
+            skipped += 1
+            print(f"  [筛除] {sd} 有效策略={n} ({sorted(tags) if tags else '空'}) "
+                  f"< {min_strategies}，跳过", flush=True)
+            continue
+        remaining.append((path, sd))
+    return remaining, skipped
+
+
 def main() -> int:
     hold_days = int(os.environ.get("HOLD_DAYS", "10"))
     lookback_days = int(os.environ.get("LOOKBACK_DAYS", "14"))  # 默认从30降到14（海外慢）
@@ -394,13 +435,23 @@ def main() -> int:
 
     # ── 阶段 0.5：跳过已有完整结果的信号日 ──
     lists, already_done = _skip_completed(lists, hold_days, today)
+
+    # ── 阶段 0.7：策略完整性筛选（统一回测基准）──
+    # 某些信号日清单只融合了部分策略（如某天 Theme/CCTV step 失败被吞），
+    # 用残缺清单回测会污染统计（组合偏小、与齐全日不可比）。
+    # 跳过有效策略数 < BACKTEST_MIN_STRATEGIES 的信号日。
+    _min_strat = int(os.environ.get("BACKTEST_MIN_STRATEGIES", "3"))
+    lists, incomplete_skipped = _filter_incomplete(lists, _min_strat)
+    print(f"[回测] 策略完整性筛选：有效策略 < {_min_strat} 的信号日跳过 {incomplete_skipped} 个")
+
     if not lists:
-        print(f"[回测] 全部 {already_done} 个信号日均已有完整结果，跳过回测")
-        # 仍写 status 文件，让前端知道今天跑过
-        _write_status([], [], already_done)
+        print(f"[回测] 全部 {already_done} 个已完成 + {incomplete_skipped} 个策略不全，"
+              f"无有效信号日，跳过回测")
+        _write_status([], [], already_done, incomplete_skipped)
         return 0
 
-    print(f"[回测] 找到 {len(lists)} 个待回测信号日 (已跳过 {already_done} 个已完成) "
+    print(f"[回测] 找到 {len(lists)} 个待回测信号日 "
+          f"(已完成跳过 {already_done} + 残缺跳过 {incomplete_skipped}) "
           f"({lists[0][1]} ~ {lists[-1][1]}), HOLD={hold_days}d")
 
     # 阶段 1：串行预拉全量 K 线（性能核心优化）
@@ -473,7 +524,7 @@ def main() -> int:
               f"回撤 {res['summary'].get('max_drawdown')}%，{res['num_trades']} 笔", flush=True)
 
     total_skipped = skipped + already_done
-    _write_status(lists, generated, total_skipped)
+    _write_status(lists, generated, total_skipped, incomplete_skipped)
 
     total_elapsed = time.time() - t0
     if not generated:

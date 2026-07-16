@@ -41,6 +41,8 @@ stock_data/cache/
 stock_data/*.csv
 !stock_data/Daily-Action-List-*.csv
 !stock_data/Multi-Backtest-*.csv
+!stock_data/Stock-Selection-*.csv
+!stock_data/CCTV-Sector-Stock-Pool-*.csv
 
 # 看板缓存（GitHub Actions 预热后提交回仓库）
 !stock_data/daily_cache/
