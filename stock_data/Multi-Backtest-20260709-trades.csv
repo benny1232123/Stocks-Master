@@ -1,1 +1,2 @@
-﻿
+﻿code,buy_date,sell_date,buy_price,sell_price,qty,return_pct,exit_reason
+600203,2026-07-10,2026-07-15,13.133,11.152,2300,-15.09,stop_hard
