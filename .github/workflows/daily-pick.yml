@@ -202,16 +202,18 @@ jobs:
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
-          # --ignore-missing: 某些目录可能因上游步骤失败而不存在（如 daily_cache / cache），
-          # 不应导致整步 fatal exit 128。
-          git add -f --ignore-missing stock_data/daily_cache/
-          git add -f --ignore-missing stock_data/cache/
-          git add -f --ignore-missing stock_data/k_data/
-          git add -f --ignore-missing stock_data/Daily-Action-List-*.csv
-          git add -f --ignore-missing stock_data/Multi-Backtest-*.csv
-          git add -f --ignore-missing stock_data/backtest_status.txt
-          # 兜底：即使上面全部 miss 也继续执行（空提交会被 diff --quiet 拦住）
-          true
+          # 治本：只提交「被 git 跟踪、需跨 run 持久化」的缓存与产物。
+          # - stock_data/daily_cache/、stock_data/k_data/：预热看板 + 回测 K 线文件缓存，
+          #   用于下次 CI 暖启动（否则每次都是冷启动超时）。二者已在 git 中跟踪。
+          # - stock_data/cache/：在 .gitignore 显式忽略（本地临时态，如 realtime_snapshot.pkl；
+          #   strategy_cache 走 Supabase 云端，不用此目录），故【不提交】——此前正是它不存在
+          #   触发 pathspec 错误，把整个提交步骤 abort，连上面的 k_data 都提交不出去。
+          # 每个 add 先判路径存在，避免缺失路径再次触发 fatal exit 128。
+          [ -d stock_data/daily_cache/ ] && git add -f stock_data/daily_cache/ || true
+          [ -d stock_data/k_data/ ] && git add -f stock_data/k_data/ || true
+          ls stock_data/Daily-Action-List-*.csv >/dev/null 2>&1 && git add -f stock_data/Daily-Action-List-*.csv || true
+          ls stock_data/Multi-Backtest-*.csv >/dev/null 2>&1 && git add -f stock_data/Multi-Backtest-*.csv || true
+          [ -f stock_data/backtest_status.txt ] && git add -f stock_data/backtest_status.txt || true
           if git diff --cached --quiet; then
             echo "无变更，跳过提交"
           else
