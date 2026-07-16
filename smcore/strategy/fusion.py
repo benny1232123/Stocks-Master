@@ -46,6 +46,11 @@ def _build_stock_name_cache_from_akshare(path: Path) -> bool:
             return False
         df = df.copy()
         df["code"] = df["code"].astype(str).str.zfill(6)
+        # 清洗名称：去除内部多余空格（如 "万 科Ａ" -> "万科Ａ"），保留全角Ａ/Ｂ
+        df["name"] = (
+            df["name"].astype(str).str.replace(r"\s+", "", regex=True).str.strip()
+        )
+        df = df[df["name"].str.len() > 0]
         df.to_csv(path, index=False, encoding="utf-8-sig")
         for _, r in df.iterrows():
             c = format_stock_code(str(r.get("code", "")).strip())
@@ -131,6 +136,17 @@ def lookup_stock_name(code: str) -> str:
         return found
     except Exception:
         return ""
+
+
+# ── 名称归一化：把 pandas 写出的 "nan" / "None" / "--" 统一视为缺失 ──
+_INVALID_NAMES = {"nan", "none", "null", "--", "", "na", "nat"}
+
+
+def _normalize_name(raw: str) -> str:
+    """将 CSV 中可能出现的无效名称归一化为空串。"""
+    s = (raw or "").strip()
+    return "" if s.lower() in _INVALID_NAMES else s
+
 
 # 各策略在综合评分中的权重（命中该策略即得基础分，多策略叠加加分）
 # 根据 _detect_market_regime() 判定的市场状态动态选取，不再硬编码一套走天下。
@@ -413,7 +429,7 @@ def _load_boll_picks(date_yyyymmdd: str, *, max_stale_days: int = 3) -> tuple[di
             if not code:
                 continue
             picks[code] = {
-                "name": (row.get("股票名称") or "").strip(),
+                "name": _normalize_name(row.get("股票名称", "")),
                 "buy_price": to_float(row.get("建议买入价")),
             }
     return picks, actual_date
@@ -432,7 +448,7 @@ def _load_relativity_picks(date_yyyymmdd: str, *, max_stale_days: int = 3) -> tu
             if not code:
                 continue
             picks[code] = {
-                "name": (row.get("股票名称") or "").strip(),
+                "name": _normalize_name(row.get("股票名称", "")),
                 "up_ratio": to_float(row.get("上涨满足率")),
                 "down_ratio": to_float(row.get("抗跌满足率")),
             }
@@ -452,7 +468,7 @@ def _load_theme_picks(date_yyyymmdd: str, *, max_stale_days: int = 3) -> tuple[d
             if not code:
                 continue
             picks[code] = {
-                "name": (row.get("股票名称") or "").strip(),
+                "name": _normalize_name(row.get("股票名称", "")),
                 "score": to_float(row.get("综合分")),
                 "theme": (row.get("题材标签") or "").strip(),
             }
@@ -472,7 +488,7 @@ def _load_cctv_picks(date_yyyymmdd: str, *, max_stale_days: int = 3) -> tuple[di
             if not code:
                 continue
             picks[code] = {
-                "name": (row.get("股票名称") or "").strip(),
+                "name": _normalize_name(row.get("股票名称", "")),
                 "sector": (row.get("板块") or "").strip(),
                 "heat": to_float(row.get("热度分")),
             }
@@ -492,7 +508,7 @@ def _load_momentum_picks(date_yyyymmdd: str, *, max_stale_days: int = 3) -> tupl
             if not code:
                 continue
             picks[code] = {
-                "name": (row.get("股票名称") or "").strip(),
+                "name": _normalize_name(row.get("股票名称", "")),
                 "momentum": to_float(row.get("动量分")),
             }
     return picks, actual_date
@@ -655,7 +671,7 @@ def fuse_signals(
             buy_price = levels.get("close")
 
         # ── 名字兜底：所有策略 CSV 都缺名字时从 stock_info / baostock 补查 ────────
-        if not name:
+        if not _normalize_name(name):
             name = lookup_stock_name(code)
 
         # 多策略命中加分
