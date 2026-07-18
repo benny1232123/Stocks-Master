@@ -330,7 +330,7 @@ def daily_backtest_summary() -> dict:
     """聚合全部每日前向回测批次（Multi-Backtest-*-summary.csv），产出总体总结指标。
 
     与 daily_backtest.py 的 _filter_incomplete 对齐：
-    策略数 < BACKTEST_MIN_STRATEGIES（默认 3）的信号日视为残缺，
+    策略数 < BACKTEST_MIN_STRATEGIES（默认 2）的信号日视为残缺，
     不纳入总体统计（避免少数策略的偏小组合污染回测结论）。
     """
     import glob as _glob
@@ -339,7 +339,7 @@ def daily_backtest_summary() -> dict:
     from smcore.artifacts import STOCK_DATA_DIR
 
     # ── 可配置阈值（与 daily_backtest.py 一致）──
-    _MIN_STRATEGIES = int(os.environ.get("BACKTEST_MIN_STRATEGIES", "3"))
+    _MIN_STRATEGIES = int(os.environ.get("BACKTEST_MIN_STRATEGIES", "2"))
 
     def _count_active_strategies(date_tag: str) -> int:
         """读取对应日期的 Daily-Action-List，统计「来源策略」列去重后的活跃策略数。"""

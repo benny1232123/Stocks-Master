@@ -440,7 +440,7 @@ def main() -> int:
     # 某些信号日清单只融合了部分策略（如某天 Theme/CCTV step 失败被吞），
     # 用残缺清单回测会污染统计（组合偏小、与齐全日不可比）。
     # 跳过有效策略数 < BACKTEST_MIN_STRATEGIES 的信号日。
-    _min_strat = int(os.environ.get("BACKTEST_MIN_STRATEGIES", "3"))
+    _min_strat = int(os.environ.get("BACKTEST_MIN_STRATEGIES", "2"))
     lists, incomplete_skipped = _filter_incomplete(lists, _min_strat)
     print(f"[回测] 策略完整性筛选：有效策略 < {_min_strat} 的信号日跳过 {incomplete_skipped} 个")
 
