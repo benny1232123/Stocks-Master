@@ -8,6 +8,7 @@ import pandas as pd
 
 from smcore.config.defaults import BETA_FALLBACK, MAX_SINGLE_WEIGHT_PCT
 from smcore.strategy import fusion as fusion_mod
+from smcore.strategy import position_sizing as ps_mod
 from smcore.strategy.sectors import apply_sector_weight_cap
 
 
@@ -80,8 +81,8 @@ def test_beta_cap_trims_highest_beta():
 
 def test_estimate_betas_fallback_without_index(monkeypatch):
     """沪深300 序列不可得时，所有个股回退 BETA_FALLBACK，不抛、不阻断。"""
-    monkeypatch.setattr(fusion_mod, "_get_hs300_close", lambda: None)
-    betas = fusion_mod._estimate_betas(["000001", "000002"], "20260731")
+    monkeypatch.setattr(ps_mod, "_get_hs300_close", lambda: None)
+    betas = ps_mod._estimate_betas(["000001", "000002"], "20260731")
     assert all(v == BETA_FALLBACK for v in betas.values())
 
 
@@ -94,7 +95,7 @@ def test_estimate_betas_local_kdata(monkeypatch, tmp_path):
         np.cumprod(1 + np.random.RandomState(0).normal(0.001, 0.01, 80)),
         index=pd.date_range("2026-03-01", periods=80, freq="B"),
     )
-    monkeypatch.setattr(fusion_mod, "_get_hs300_close", lambda: idx)
+    monkeypatch.setattr(ps_mod, "_get_hs300_close", lambda: idx)
 
     # 写一只合成个股 k_data（与指数高度相关）到临时目录
     kdir = tmp_path / "k_data"
@@ -106,8 +107,8 @@ def test_estimate_betas_local_kdata(monkeypatch, tmp_path):
     })
     d.to_csv(kdir / "000001_qfq_full.csv", index=False)
 
-    monkeypatch.setattr(fusion_mod, "STOCK_DATA_DIR", tmp_path)
-    betas = fusion_mod._estimate_betas(["000001"], "20260731")
+    monkeypatch.setattr(ps_mod, "STOCK_DATA_DIR", tmp_path)
+    betas = ps_mod._estimate_betas(["000001"], "20260731")
     assert "000001" in betas
     assert isinstance(betas["000001"], float)
     assert betas["000001"] > 0  # 正相关应得正 β

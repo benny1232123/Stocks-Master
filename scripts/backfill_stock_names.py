@@ -24,7 +24,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 
-from smcore.strategy.fusion import (  # noqa: E402
+from smcore.strategy.name_lookup import (  # noqa: E402
     _build_stock_name_cache_from_akshare,
     _normalize_name,
 )
@@ -50,9 +50,9 @@ def main() -> int:
     if not _build_stock_name_cache_from_akshare(STOCK_DATA / "stock_info_a_code_name.csv"):
         print("  ⚠️ akshare 拉取失败，将沿用已有缓存文件")
     # 重新加载映射
-    from smcore.strategy.fusion import _get_stock_name_map, _stock_name_cache
-    import smcore.strategy.fusion as fusion_mod
-    fusion_mod._stock_name_cache = None  # 强制重建
+    from smcore.strategy.name_lookup import _get_stock_name_map, _stock_name_cache
+    import smcore.strategy.name_lookup as name_lookup_mod
+    name_lookup_mod._stock_name_cache = None  # 强制重建
     name_map = _get_stock_name_map()
     print(f"  权威映射共 {len(name_map)} 只")
 
