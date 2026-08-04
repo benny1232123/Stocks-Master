@@ -1,0 +1,93 @@
+# Python bytecode and caches
+__pycache__/
+*.py[cod]
+*.pyo
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# Virtual environments
+.venv/
+venv/
+env/
+
+# Coverage and test artifacts
+.coverage
+coverage.xml
+htmlcov/
+
+# IDE settings
+.vscode/
+.idea/
+.claude/
+
+# Runtime-generated cache/result artifacts
+Frequently-Used-Program/boll-visualizer/stock_data/cache/
+Frequently-Used-Program/boll-visualizer/stock_data/checkpoints/
+stock_data/checkpoints/
+
+# SQLite databases (runtime-generated)
+*.db
+*.db-journal
+*.db-wal
+*.db-shm
+
+# Large data directories (runtime-generated)
+stock_data/archive/
+stock_data/plots/
+stock_data/tasks/
+stock_data/ui_uploads/
+stock_data/cache/
+stock_data/*.csv
+!stock_data/Daily-Action-List-*.csv
+!stock_data/Multi-Backtest-*.csv
+!stock_data/Stock-Selection-*.csv
+!stock_data/CCTV-Sector-Stock-Pool-*.csv
+
+# walk-forward 重验产物（CI 产出，不入库）
+stock_data/walk_forward_recommendation.json
+stock_data/walk_forward_results.json
+
+# 监控产物（衰减监控 / 纸盘模拟，CI 或本地跑出的中间产物，不入库）
+stock_data/decay.json
+stock_data/decay_monitor.json
+stock_data/paper.json
+stock_data/paper.md
+stock_data/paper_tracker.json
+stock_data/paper_tracker_report.md
+stock_data/factor_ic.json
+
+# 当前规则重筛历史产物（本地跑出，不入库）
+stock_data/replay_current_rules.json
+stock_data/replay_current_rules.md
+
+# 看板缓存（GitHub Actions 预热后提交回仓库）
+!stock_data/daily_cache/
+# K 线缓存（个股日 K 全量 CSV，跨 GitHub Actions run 复用，避免每次冷启动重抓）
+!stock_data/k_data/
+
+# Secrets (Supabase keys etc.)
+.streamlit/secrets.toml
+.env
+.env.*
+.workbuddy/
+
+# Misc
+*.log
+*.tmp
+
+# 前端构建产物与依赖（由 GitHub Actions 生成并提交，本地忽略）
+frontend/node_modules/
+frontend/dist/
+frontend/public/data/api/
+# Local forensic backup of broken .git (2026-08-05 pack corruption)
+.git.broken-2026-08-05/
+
+# Session residue (do NOT commit)
+*.bundle
+.tmp_*.sh
+*.patch
+
+# Residue from earlier audit/sandbox sessions (kept locally, not in repo)
+_t_normal.py
+_t_secret.py

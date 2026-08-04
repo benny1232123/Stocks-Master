@@ -1,0 +1,124 @@
+name: 策略监控（衰减告警 + 纸盘模拟）
+
+on:
+  schedule:
+    # 每周一 02:00 UTC（北京 10:00）运行；纯本地、有界、不联网。
+    - cron: "0 2 * * 1"
+  workflow_dispatch: {}
+
+permissions:
+  contents: read
+  issues: write
+
+jobs:
+  monitor:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - name: 检出（浅克隆，只取最新数据文件）
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
+
+      - name: 配置 Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: 安装依赖（仅 pandas）
+        run: pip install --quiet pandas
+
+      - name: 策略衰减监控
+        id: decay
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          python scripts/strategy_decay_monitor.py \
+            --emit-json stock_data/decay_monitor.json
+
+          python - <<'PY'
+          import json, subprocess, sys
+          res = json.load(open("stock_data/decay_monitor.json"))
+          decayed = res.get("decayed") or []
+          if not decayed:
+              print("无策略衰减，跳过开 issue。")
+              sys.exit(0)
+          # 去重：已有未关闭同标题 issue 则不再开
+          title = "⚠️ 策略衰减告警（自动）"
+          try:
+              out = subprocess.run(
+                  ["gh", "issue", "list", "--state", "open", "--search",
+                   title, "--json", "number,title"],
+                  capture_output=True, text=True, check=True).stdout
+              existing = [x for x in json.loads(out) if x["title"] == title]
+          except Exception as e:
+              print("查询已有 issue 失败，仍尝试创建：", e)
+              existing = []
+          if existing:
+              print(f"已存在未关闭的衰减 issue #{existing[0]['number']}，跳过。")
+              sys.exit(0)
+          # 复用脚本生成的 issue 正文
+          import sys
+          sys.path.insert(0, "scripts")
+          import strategy_decay_monitor
+          body = strategy_decay_monitor._format_issue_body(res)
+          subprocess.run(
+              ["gh", "issue", "create", "--title", title, "--body", body,
+               "--label", "monitoring,auto"], check=True)
+          print("已创建衰减告警 issue，触发策略：", decayed)
+          PY
+
+      - name: 因子 IC/IR 监控
+        id: factoric
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          python scripts/factor_ic_monitor.py \
+            --emit-json stock_data/factor_ic.json
+
+          python - <<'PY'
+          import json, subprocess, sys
+          res = json.load(open("stock_data/factor_ic.json"))
+          if not res.get("alert"):
+              print("无因子 IC 告警，跳过开 issue。")
+              sys.exit(0)
+          title = "⚠️ 因子 IC/IR 监控告警（自动）"
+          try:
+              out = subprocess.run(
+                  ["gh", "issue", "list", "--state", "open", "--search",
+                   title, "--json", "number,title"],
+                  capture_output=True, text=True, check=True).stdout
+              existing = [x for x in json.loads(out) if x["title"] == title]
+          except Exception as e:
+              print("查询已有 issue 失败，仍尝试创建：", e)
+              existing = []
+          if existing:
+              print(f"已存在未关闭的因子 IC issue #{existing[0]['number']}，跳过。")
+              sys.exit(0)
+          sys.path.insert(0, "scripts")
+          import factor_ic_monitor
+          body = factor_ic_monitor._format_issue_body(res)
+          subprocess.run(
+              ["gh", "issue", "create", "--title", title, "--body", body,
+               "--label", "monitoring,auto"], check=True)
+          print("已创建因子 IC 告警 issue。")
+          PY
+
+      - name: 纸盘模拟（跟随已发布清单，近似生产现金缓冲 invest_frac=0.3）
+        run: |
+          python scripts/paper_tracker.py \
+            --invest-frac 0.3 \
+            --emit-json stock_data/paper_tracker.json \
+            --emit-md stock_data/paper_tracker_report.md
+
+      - name: 上传监控产物
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: monitor-report
+          path: |
+            stock_data/decay_monitor.json
+            stock_data/factor_ic.json
+            stock_data/paper_tracker.json
+            stock_data/paper_tracker_report.md
+          retention-days: 30

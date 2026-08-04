@@ -1,0 +1,17 @@
+{
+  "name": "Stocks Master",
+  "short_name": "Stocks",
+  "description": "股票分析与交易记录工具",
+  "start_url": "./",
+  "display": "standalone",
+  "background_color": "#ffffff",
+  "theme_color": "#1f77b4",
+  "orientation": "portrait-primary",
+  "icons": [
+    {
+      "src": "data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><rect width='100' height='100' rx='20' fill='%231f77b4'/><text x='50' y='68' font-size='50' text-anchor='middle' fill='white'>📈</text></svg>",
+      "sizes": "any",
+      "type": "image/svg+xml"
+    }
+  ]
+}

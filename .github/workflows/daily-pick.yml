@@ -1,0 +1,387 @@
+name: 每日选股
+
+on:
+  schedule:
+    - cron: "30 8 * * 1-5"
+  workflow_dispatch:
+    inputs:
+      signal_date:
+        description: '信号日 YYYYMMDD（留空 = 今天）。用于补跑历史某天的 daily-action-list + 回测。'
+        required: false
+        default: ''
+        type: string
+
+jobs:
+  daily-pick:
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    permissions:
+      contents: write
+      issues: write
+    env:
+      # GitHub 海外 Runner 连不上国内券商 Tdx 服务器，关闭直连避免 ~24s 试探浪费，
+      # 走下方加固的 akshare 兜底。国内自托管 Runner 请覆盖为 "1" 或 "auto" 启用 Tdx 提速。
+      TDX_ENABLED: "0"
+    steps:
+      - name: 计算信号日 $TODAY
+        id: today
+        run: |
+          if [ -n "${{ github.event.inputs.signal_date }}" ]; then
+            TODAY="${{ github.event.inputs.signal_date }}"
+          else
+            TODAY=$(date +%Y%m%d)
+          fi
+          echo "today=$TODAY" >> $GITHUB_OUTPUT
+          echo "[daily-pick] 信号日: $TODAY"
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: pip 缓存
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/pip
+          key: pip-${{ runner.os }}-${{ hashFiles('Frequently-Used-Program/auto_notify_boll.py') }}
+          restore-keys: pip-${{ runner.os }}-
+
+      - name: 安装依赖
+        run: |
+          pip install --upgrade pip
+          pip install --retries 3 akshare pandas requests baostock matplotlib cos-python-sdk-v5 supabase backtrader
+
+      - name: 尝试安装 pytdx（国内自托管 Runner 可选；GitHub 海外 Runner 自动跳过）
+        continue-on-error: true
+        run: pip install "pypandoc<1.10" pytdx 2>/dev/null || pip install pytdx 2>/dev/null || true
+
+      - name: 策略1 Boll 扫描
+        id: boll
+        continue-on-error: true
+        timeout-minutes: 25
+        env:
+          KLINE_BACKEND: akshare
+          ENABLE_VISUALIZATION: "0"
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_KEY: ${{ secrets.SUPABASE_KEY }}
+        run: |
+          TODAY=${{ steps.today.outputs.today }}
+          python scripts/strategy_cache.py pull boll $TODAY && echo "skip=true" >> $GITHUB_OUTPUT && exit 0
+          python -m smcore.strategies.boll $TODAY
+          python scripts/strategy_cache.py push boll $TODAY
+          # ── 策略产出摘要 ──
+          echo "### Boll 策略产出" >> $GITHUB_STEP_SUMMARY
+          F="stock_data/Stock-Selection-Boll-${TODAY}.csv"
+          if [ -f "$F" ]; then
+            N=$(tail -n +2 "$F" | wc -l)
+            echo "✅ ${F}: **${N}** 只候选" >> $GITHUB_STEP_SUMMARY
+          else
+            echo "::error::Boll 策略未生成输出文件 ${F}"
+            echo "❌ 文件不存在: ${F}" >> $GITHUB_STEP_SUMMARY
+          fi
+
+      - name: 策略2 题材热度
+        id: theme
+        continue-on-error: true
+        timeout-minutes: 20
+        env:
+          KLINE_BACKEND: akshare
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_KEY: ${{ secrets.SUPABASE_KEY }}
+        run: |
+          TODAY=${{ steps.today.outputs.today }}
+          python scripts/strategy_cache.py pull theme $TODAY && echo "skip=true" >> $GITHUB_OUTPUT && exit 0
+          # theme 内部 datetime.now() 硬编码，用 SIGNAL_DATE 包装脚本注入指定日期
+          SIGNAL_DATE=$TODAY python scripts/run_strategy_for_date.py theme
+          python scripts/strategy_cache.py push theme $TODAY
+          echo "### Theme 策略产出" >> $GITHUB_STEP_SUMMARY
+          F="stock_data/Stock-Selection-Ashare-Theme-Turnover-${TODAY}.csv"
+          if [ -f "$F" ]; then
+            N=$(tail -n +2 "$F" | wc -l)
+            echo "✅ ${F}: **${N}** 只候选" >> $GITHUB_STEP_SUMMARY
+          else
+            echo "::error::Theme 策略未生成输出文件 ${F}"
+            echo "❌ 文件不存在: ${F}" >> $GITHUB_STEP_SUMMARY
+          fi
+
+      - name: 策略3 CCTV 板块
+        id: cctv
+        continue-on-error: true
+        timeout-minutes: 25
+        env:
+          KLINE_BACKEND: akshare
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_KEY: ${{ secrets.SUPABASE_KEY }}
+        run: |
+          TODAY=${{ steps.today.outputs.today }}
+          python scripts/strategy_cache.py pull cctv $TODAY && echo "skip=true" >> $GITHUB_OUTPUT && exit 0
+          SIGNAL_DATE=$TODAY python scripts/run_strategy_for_date.py cctv
+          python scripts/strategy_cache.py push cctv $TODAY
+          echo "### CCTV 策略产出" >> $GITHUB_STEP_SUMMARY
+          F="stock_data/CCTV-Sector-Stock-Pool-${TODAY}.csv"
+          if [ -f "$F" ]; then
+            N=$(tail -n +2 "$F" | wc -l)
+            echo "✅ ${F}: **${N}** 只候选" >> $GITHUB_STEP_SUMMARY
+          else
+            echo "::warning::CCTV 策略未生成个股池（新闻稀薄/板块未匹配属正常现象）"
+            echo "⚪ 文件不存在（可能无新闻或板块匹配失败）: ${F}" >> $GITHUB_STEP_SUMMARY
+          fi
+
+      - name: 策略4 相对强弱
+        id: relativity
+        continue-on-error: true
+        timeout-minutes: 20
+        env:
+          KLINE_BACKEND: akshare
+          RELATIVITY_MAX_WORKERS: "1"
+          RELATIVITY_SLEEP_SECONDS: "0.3"
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_KEY: ${{ secrets.SUPABASE_KEY }}
+        run: |
+          TODAY=${{ steps.today.outputs.today }}
+          python scripts/strategy_cache.py pull relativity $TODAY && echo "skip=true" >> $GITHUB_OUTPUT && exit 0
+          # relativity --max-workers 1 仍可通过 env 注入信号日
+          SIGNAL_DATE=$TODAY python scripts/run_strategy_for_date.py relativity
+          python scripts/strategy_cache.py push relativity $TODAY
+          echo "### Relativity 策略产出" >> $GITHUB_STEP_SUMMARY
+          F="stock_data/Stock-Selection-Relativity-${TODAY}.csv"
+          if [ -f "$F" ]; then
+            N=$(tail -n +2 "$F" | wc -l)
+            echo "✅ ${F}: **${N}** 只候选" >> $GITHUB_STEP_SUMMARY
+          else
+            echo "::error::Relativity 策略未生成输出文件 ${F}"
+            echo "❌ 文件不存在: ${F}" >> $GITHUB_STEP_SUMMARY
+          fi
+
+      - name: 策略5 动量/相对强度
+        id: momentum
+        continue-on-error: true
+        timeout-minutes: 25
+        env:
+          KLINE_BACKEND: akshare
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_KEY: ${{ secrets.SUPABASE_KEY }}
+        run: |
+          TODAY=${{ steps.today.outputs.today }}
+          python scripts/strategy_cache.py pull momentum $TODAY && echo "skip=true" >> $GITHUB_OUTPUT && exit 0
+          SIGNAL_DATE=$TODAY python scripts/run_strategy_for_date.py momentum
+          python scripts/strategy_cache.py push momentum $TODAY
+          echo "### Momentum 策略产出" >> $GITHUB_STEP_SUMMARY
+          F="stock_data/Stock-Selection-Momentum-${TODAY}.csv"
+          if [ -f "$F" ]; then
+            N=$(tail -n +2 "$F" | wc -l)
+            echo "✅ ${F}: **${N}** 只候选" >> $GITHUB_STEP_SUMMARY
+          else
+            echo "::error::Momentum 策略未生成输出文件 ${F}"
+            echo "❌ 文件不存在: ${F}" >> $GITHUB_STEP_SUMMARY
+          fi
+
+      - name: 生成操作清单 + 上传 COS
+        env:
+          KLINE_BACKEND: akshare
+          COS_SECRET_ID: ${{ secrets.COS_SECRET_ID }}
+          COS_SECRET_KEY: ${{ secrets.COS_SECRET_KEY }}
+          COS_BUCKET: ${{ secrets.COS_BUCKET }}
+          COS_REGION: ${{ secrets.COS_REGION }}
+        run: |
+          TODAY=${{ steps.today.outputs.today }}
+          SIGNAL_DATE=$TODAY python -c "
+          import os, sys; sys.path.insert(0, '.')
+          from smcore.strategy import fuse_signals, save_action_list
+          from smcore.storage import upload_file
+
+          today = os.environ.get('SIGNAL_DATE') or __import__('datetime').date.today().strftime('%Y%m%d')
+          df, report = fuse_signals(today, total_capital=100000, max_picks=15, fetch_levels=True)
+          print(f'操作清单: {len(df)} 只候选 @ {today}')
+          if not df.empty:
+              path = save_action_list(df, today)
+              print(f'已保存: {path}')
+              remote = f'Daily-Action-List-{today}.csv'
+              if upload_file(path, remote):
+                  print(f'已上传 COS: {remote}')
+              else:
+                  print('COS 未配置或上传失败，操作清单仅存本地')
+              print('--- 日报段落 ---')
+              print(report)
+          else:
+              print('无候选，跳过上传')
+          "
+
+      - name: 上传结果产物
+        uses: actions/upload-artifact@v4
+        with:
+          name: stock-results-${{ github.run_number }}
+          path: |
+            stock_data/Stock-Selection-Boll-*.csv
+            stock_data/Stock-Selection-Relativity-*.csv
+            stock_data/Stock-Selection-Ashare-Theme-Turnover-*.csv
+            stock_data/CCTV-Sector-Stock-Pool-*.csv
+            stock_data/Stock-Selection-Momentum-*.csv
+            stock_data/Daily-Action-List-*.csv
+            stock_data/backtest_status.txt
+          retention-days: 30
+
+      - name: 预热看板数据
+        continue-on-error: true
+        env:
+          KLINE_BACKEND: akshare
+        run: python scripts/prewarm_dashboard.py
+
+      - name: 每日清单前向信号回测
+        continue-on-error: true
+        timeout-minutes: 55
+        env:
+          KLINE_BACKEND: akshare
+          HOLD_DAYS: "10"
+          LOOKBACK_DAYS: "14"          # 从30降到14：海外akshare慢，已完成的历史结果会自动跳过
+          PREPULL_INTERVAL: "0.3"      # 串行预拉每只间隔0.3s，保护akshare接口不被打崩（不用多线程）
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_KEY: ${{ secrets.SUPABASE_KEY }}
+        run: |
+          python scripts/daily_backtest.py || true
+          echo "=== 回测状态 ==="
+          cat stock_data/backtest_status.txt 2>/dev/null || echo "无状态文件"
+
+      # 前端由 Render 在部署时自行构建（见 render.yaml buildCommand），
+      # 此处只负责生成/提交数据，不再构建前端或生成静态 JSON。
+
+      - name: 提交缓存与数据到仓库
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          # 治本：只提交「被 git 跟踪、需跨 run 持久化」的缓存与产物。
+          # - stock_data/daily_cache/、stock_data/k_data/：预热看板 + 回测 K 线文件缓存，
+          #   用于下次 CI 暖启动（否则每次都是冷启动超时）。二者已在 git 中跟踪。
+          # - stock_data/cache/：在 .gitignore 显式忽略（本地临时态，如 realtime_snapshot.pkl；
+          #   strategy_cache 走 Supabase 云端，不用此目录），故【不提交】——此前正是它不存在
+          #   触发 pathspec 错误，把整个提交步骤 abort，连上面的 k_data 都提交不出去。
+          # 每个 add 先判路径存在，避免缺失路径再次触发 fatal exit 128。
+          [ -d stock_data/daily_cache/ ] && git add -f stock_data/daily_cache/ || true
+          [ -d stock_data/k_data/ ] && git add -f stock_data/k_data/ || true
+          ls stock_data/Daily-Action-List-*.csv >/dev/null 2>&1 && git add -f stock_data/Daily-Action-List-*.csv || true
+          ls stock_data/Multi-Backtest-*.csv >/dev/null 2>&1 && git add -f stock_data/Multi-Backtest-*.csv || true
+          ls stock_data/Stock-Selection-*.csv >/dev/null 2>&1 && git add -f stock_data/Stock-Selection-*.csv || true
+          ls stock_data/CCTV-Sector-Stock-Pool-*.csv >/dev/null 2>&1 && git add -f stock_data/CCTV-Sector-Stock-Pool-*.csv || true
+          [ -f stock_data/backtest_status.txt ] && git add -f stock_data/backtest_status.txt || true
+          if git diff --cached --quiet; then
+            echo "无变更，跳过提交"
+          else
+            git commit -m "chore: 缓存看板数据 $(date +%Y%m%d)"
+            PUSH_OK=0
+            CI_SHA=""
+            # ── 推送策略（三层容错 + 落库校验）──
+            # 数据文件（k_data/daily_cache/Daily-Action-List/Multi-Backtest）CI 是唯一写入方；
+            # 但仍可能因「手动强推 / 并发 push」导致 CI 提交被覆盖——故第2层冲突合并
+            # 改保留本地(ours)而非远程(theirs)，并在末尾校验提交是否真的落库。
+            #
+            # 第1层（首选）：rebase 干净线性合并远程新提交后直推。
+            if git pull --rebase --autostash origin master 2>/dev/null; then
+              echo "[push] rebase 成功"
+              if git push origin master 2>/dev/null; then
+                PUSH_OK=1; CI_SHA=$(git rev-parse HEAD)
+              fi
+            fi
+            # 第2层（rebase 冲突）：abort → 回退 → 重提，merge 用 ours 保留 CI 本地数据
+            #   （原 -Xtheirs 会在冲突时丢弃本地 CI 数据，导致静默丢失，已修复）。
+            if [ "$PUSH_OK" -eq 0 ]; then
+              echo "[push] rebase 冲突，切换为 merge(保留本地最新数据)"
+              git rebase --abort 2>/dev/null || true
+              git reset HEAD~ 2>/dev/null || true
+              git checkout master 2>/dev/null || true
+              # 重新 stage（可能被 reset 清掉了）
+              [ -d stock_data/daily_cache/ ] && git add -f stock_data/daily_cache/ || true
+              [ -d stock_data/k_data/ ] && git add -f stock_data/k_data/ || true
+              ls stock_data/Daily-Action-List-*.csv >/dev/null 2>&1 && git add -f stock_data/Daily-Action-List-*.csv || true
+              ls stock_data/Multi-Backtest-*.csv >/dev/null 2>&1 && git add -f stock_data/Multi-Backtest-*.csv || true
+              ls stock_data/Stock-Selection-*.csv >/dev/null 2>&1 && git add -f stock_data/Stock-Selection-*.csv || true
+              ls stock_data/CCTV-Sector-Stock-Pool-*.csv >/dev/null 2>&1 && git add -f stock_data/CCTV-Sector-Stock-Pool-*.csv || true
+              [ -f stock_data/backtest_status.txt ] && git add -f stock_data/backtest_status.txt || true
+              if git diff --cached --quiet; then
+                echo "无变更（冲突回退后为空），跳过推送"
+              else
+                git commit -m "chore: 缓存看板数据 $(date +%Y%m%d)"
+                if git pull --no-rebase -Xours origin master 2>/dev/null; then
+                  if git push origin master 2>/dev/null; then
+                    PUSH_OK=1; CI_SHA=$(git rev-parse HEAD)
+                  fi
+                fi
+              fi
+            fi
+            # 第3层（兜底）：force-with-lease（仅当远程自上次 fetch 后未变，不会误覆盖他人提交）
+            if [ "$PUSH_OK" -eq 0 ]; then
+              echo "[push] 前两层失败，使用 force-with-lease 兜底"
+              if git push --force-with-lease origin master 2>/dev/null; then
+                PUSH_OK=1; CI_SHA=$(git rev-parse HEAD)
+              fi
+            fi
+            # ── 落库校验：CI 提交是否真的在远程 master（防并发强推静默覆盖）──
+            git fetch origin master 2>/dev/null || true
+            DAL="stock_data/Daily-Action-List-${TODAY}.csv"
+            if [ "$PUSH_OK" -eq 1 ] && [ -n "$CI_SHA" ]; then
+              if git cat-file -e "origin/master:${DAL}" 2>/dev/null; then
+                if git merge-base --is-ancestor "$CI_SHA" origin/master 2>/dev/null; then
+                  echo "[verify] CI 提交已落库 ✅ (${CI_SHA})"
+                else
+                  # DAL 在远程但我们的提交不是其祖先 → 推送报成功却已被覆盖，真实异常
+                  echo "::warning::[verify] DAL 在远程但 CI 提交非祖先（疑似被并发强推覆盖），信号日=${TODAY}"
+                  TITLE="daily-pick 推送校验失败：${TODAY} 数据可能未落库"
+                  if ! gh issue list --repo "${{ github.repository }}" --state open --search "$TITLE" --json title 2>/dev/null | grep -qF "$TITLE"; then
+                    gh issue create --repo "${{ github.repository }}" \
+                      --title "$TITLE" \
+                      --body "信号日 **${TODAY}** 的 daily-pick 推送返回成功，但校验发现 CI 提交不在远程 master（可能被并发手动强推覆盖）。\n\n请检查 [Actions 运行日志](https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }})，并确认远程分支状态。\n\n_本 issue 由 GitHub Actions 自动创建。_" \
+                      --label "automated,daily-pick-failure"
+                  fi
+                fi
+              else
+                echo "::warning::[verify] 远程无当日 DAL（可能当日无候选或推送未含该文件），跳过落库校验"
+              fi
+            elif [ "$PUSH_OK" -eq 0 ]; then
+              echo "::warning::[verify] 三层推送均未成功，信号日=${TODAY} 数据未落库，请查日志"
+            fi
+          fi
+
+      - name: 失败告警（无候选且无策略产出时开 issue）
+        if: always()
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TODAY: ${{ steps.today.outputs.today }}
+        run: |
+          # 兜底：若 earlier step 未设置 TODAY，取当前日期
+          TODAY="${TODAY:-$(date +%Y%m%d)}"
+
+          # 区分「真无信号」与「数据源/脚本挂了」：
+          # - 有策略产出文件但 Daily-Action-List 为空 → 正常过滤，不告警
+          # - 无任何策略产出文件且 Daily-Action-List 不存在/为空 → 疑似执行链路故障，开 issue
+          n_boll=$(ls stock_data/Stock-Selection-Boll-${TODAY}.csv 2>/dev/null | wc -l)
+          n_theme=$(ls stock_data/Stock-Selection-Ashare-Theme-Turnover-${TODAY}.csv 2>/dev/null | wc -l)
+          n_cctv=$(ls stock_data/CCTV-Sector-Stock-Pool-${TODAY}.csv 2>/dev/null | wc -l)
+          n_rel=$(ls stock_data/Stock-Selection-Relativity-${TODAY}.csv 2>/dev/null | wc -l)
+          n_mom=$(ls stock_data/Stock-Selection-Momentum-${TODAY}.csv 2>/dev/null | wc -l)
+          n_strat=$((n_boll + n_theme + n_cctv + n_rel + n_mom))
+
+          action_file="stock_data/Daily-Action-List-${TODAY}.csv"
+          if [ -f "$action_file" ]; then
+            n_action=$(tail -n +2 "$action_file" | wc -l | tr -d ' ')
+          else
+            n_action=0
+          fi
+
+          echo "[alert] 信号日=${TODAY} 策略产出文件数=${n_strat} 候选股数=${n_action}"
+
+          if [ "$n_strat" -eq 0 ] && [ "$n_action" -eq 0 ]; then
+            echo "::error::今日选股链路疑似故障：无任何策略产出且无候选股"
+            title="daily-pick 故障：${TODAY} 无策略产出与候选股"
+            # 避免重复开 issue：同一天已存在未关闭告警则跳过
+            if gh issue list --repo "${{ github.repository }}" --state open --search "$title" --json title | grep -qF "$title"; then
+              echo "[alert] 已存在未关闭告警 issue，跳过创建"
+              exit 0
+            fi
+            gh issue create --repo "${{ github.repository }}" \
+              --title "$title" \
+              --body "信号日 **${TODAY}** 的 daily-pick 未生成任何策略产出文件，且 Daily-Action-List 为空/缺失。\n\n可能原因：\n- akshare/baostock 数据源在海外 Runner 不可用\n- 全部策略步骤异常退出\n- 网络/权限问题导致依赖安装失败\n\n请检查 [Actions 运行日志](https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }})。\n\n_本 issue 由 GitHub Actions 自动创建。_" \
+              --label "automated,daily-pick-failure"
+          else
+            echo "[alert] 选股链路正常（策略文件=${n_strat}, 候选=${n_action}），无需告警"
+          fi

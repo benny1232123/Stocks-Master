@@ -1,0 +1,25 @@
+name: 保活 Ping
+
+# 每 10 分钟访问一次 Render URL，防止免费版休眠
+on:
+  schedule:
+    - cron: "*/10 * * * *"
+  workflow_dispatch:
+
+jobs:
+  ping:
+    runs-on: ubuntu-latest
+    timeout-minutes: 2
+    steps:
+      - name: Ping Render
+        env:
+          RENDER_URL: ${{ secrets.RENDER_URL }}
+        run: |
+          if [ -z "$RENDER_URL" ]; then
+            echo "未配置 RENDER_URL secret，跳过"
+            exit 0
+          fi
+          echo "Pinging $RENDER_URL ..."
+          curl -s -o /dev/null -w "HTTP %{http_code} | %{time_total}s" \
+            --max-time 60 \
+            "$RENDER_URL" || echo "请求失败，下次重试"

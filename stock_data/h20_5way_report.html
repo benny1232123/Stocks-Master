@@ -1,0 +1,111 @@
+<!DOCTYPE html><html lang='zh'><head><meta charset='utf-8'><style>
+    * { box-sizing: border-box; }
+    body { font-family: -apple-system, "Segoe UI", "Microsoft YaHei", sans-serif;
+           background:#f5f6f8; color:#1f2733; margin:0; padding:28px; }
+    .wrap { max-width:1040px; margin:0 auto; }
+    h1 { font-size:22px; margin:0 0 4px; }
+    .sub { color:#6b7685; font-size:13px; margin-bottom:18px; }
+    .cards { display:flex; gap:12px; margin-bottom:20px; flex-wrap:wrap; }
+    .card { flex:1; min-width:160px; background:#fff; border:1px solid #e6e9ee;
+            border-radius:12px; padding:13px 15px; border-top:3px solid #ccc; }
+    .card .k { font-size:11px; color:#8a93a2; }
+    .card .v { font-size:21px; font-weight:700; margin-top:3px; }
+    .card .s { font-size:11px; color:#9aa3b1; margin-top:2px; }
+    table { width:100%; border-collapse:collapse; background:#fff;
+            border:1px solid #e6e9ee; border-radius:12px; overflow:hidden; }
+    thead th { background:#eef1f5; color:#5a6473; font-weight:600; padding:10px 10px;
+               text-align:right; font-size:12px; }
+    thead th:first-child { text-align:left; }
+    td { padding:8px 10px; text-align:right; font-size:12.5px; font-variant-numeric:tabular-nums; }
+    td.name { text-align:left; color:#3a4350; font-weight:500; }
+    td.best { background:#e9f7ee; font-weight:700; }
+    .chart { background:#fff; border:1px solid #e6e9ee; border-radius:12px;
+             padding:14px 18px; margin:18px 0; }
+    .legend span { display:inline-block; margin-right:16px; font-size:12px; }
+    .verdict { background:#fff; border:1px solid #e6e9ee; border-radius:12px;
+               padding:16px 18px; margin:18px 0; font-size:14px; line-height:1.6; }
+    .verdict ul { margin:8px 0 0; padding-left:20px; }
+    .verdict li { margin:6px 0; }
+    .method { background:#fff; border:1px solid #e6e9ee; border-radius:12px;
+              padding:14px 18px; font-size:13px; color:#4a5462; line-height:1.7; }
+    code { background:#eef1f5; padding:1px 5px; border-radius:4px; }
+    .g { color:#2e9e5b; } .r { color:#d1495b; }
+    </style></head>
+    <div class="wrap">
+      <h1>五路历史回测 · 出场是不是真瓶颈？</h1>
+      <div class="sub">区间 2026-01-01 ~ 2026-07-18 · 出场复用线上引擎
+        （布林上轨止盈 + 6% 止盈 + 5% 跟踪 + MA60 破位）· 仓位缩放同档
+        · D 行来自 ③ Param-Scan 聚合（无逐日，合计为估算）</div>
+
+      <div class="cards">
+        <div class="card" style="border-top-color:#2e9e5b">
+          <div class="k">C20 增强·持20（本次）</div>
+          <div class="v" style="color:#2e9e5b">-0.29%</div>
+          <div class="s">正收益日 42.40% · 夏普 -1.94</div></div>
+        <div class="card" style="border-top-color:#1f5fbf">
+          <div class="k">C 增强·持5</div>
+          <div class="v" style="color:#1f5fbf">-0.26%</div>
+          <div class="s">正收益日 42.40% · 夏普 -1.66</div></div>
+        <div class="card" style="border-top-color:#7b4ea8">
+          <div class="k">D 基线·持20（③）</div>
+          <div class="v" style="color:#7b4ea8">-0.30%</div>
+          <div class="s">正收益日 43.30% · 夏普 -1.57</div></div>
+        <div class="card" style="border-top-color:#e08a00">
+          <div class="k">B 同池·持5（线上现状）</div>
+          <div class="v" style="color:#e08a00">-0.29%</div>
+          <div class="s">正收益日 39.17% · 夏普 -2.01</div></div>
+      </div>
+
+      <table>
+        <thead><tr><th>指标</th>
+          <th style="color:#d1495b">A · 基线全量</th>
+          <th style="color:#e08a00">B · 同池对照</th>
+          <th style="color:#1f5fbf">C · 增强·持5</th>
+          <th style="color:#2e9e5b">C20 · 增强·持20</th>
+          <th style="color:#7b4ea8">D · 基线·持20</th></tr></thead>
+        <tbody><tr><td class="name">有效信号日（有成交）</td><td class="num best" style="color:#d1495b">120.00天</td><td class="num best" style="color:#e08a00">120.00天</td><td class="num" style="color:#1f5fbf">125.00天</td><td class="num" style="color:#2e9e5b">125.00天</td><td class="num best" style="color:#7b4ea8">120.00天</td></tr><tr><td class="name">总交易笔数</td><td class="num" style="color:#d1495b">2448.00笔</td><td class="num" style="color:#e08a00">2445.00笔</td><td class="num" style="color:#1f5fbf">1153.00笔</td><td class="num best" style="color:#2e9e5b">1138.00笔</td><td class="num" style="color:#7b4ea8">2384.00笔</td></tr><tr><td class="name">平均日收益</td><td class="num" style="color:#d1495b">-0.30%</td><td class="num" style="color:#e08a00">-0.29%</td><td class="num best" style="color:#1f5fbf">-0.26%</td><td class="num" style="color:#2e9e5b">-0.29%</td><td class="num" style="color:#7b4ea8">-0.30%</td></tr><tr><td class="name">中位日收益</td><td class="num" style="color:#d1495b">-0.20%</td><td class="num best" style="color:#e08a00">-0.19%</td><td class="num" style="color:#1f5fbf">-0.35%</td><td class="num" style="color:#2e9e5b">-0.70%</td><td class="num" style="color:#7b4ea8">-0.26%</td></tr><tr><td class="name">正收益日占比</td><td class="num" style="color:#d1495b">38.33%</td><td class="num" style="color:#e08a00">39.17%</td><td class="num" style="color:#1f5fbf">42.40%</td><td class="num" style="color:#2e9e5b">42.40%</td><td class="num best" style="color:#7b4ea8">43.30%</td></tr><tr><td class="name">日收益合计</td><td class="num" style="color:#d1495b">-35.58%</td><td class="num" style="color:#e08a00">-35.31%</td><td class="num best" style="color:#1f5fbf">-32.78%</td><td class="num" style="color:#2e9e5b">-36.58%</td><td class="num" style="color:#7b4ea8">-36.00%</td></tr><tr><td class="name">复利累计</td><td class="num" style="color:#d1495b">-30.36%</td><td class="num best" style="color:#e08a00">-30.17%</td><td class="num" style="color:#1f5fbf">-30.54%</td><td class="num" style="color:#2e9e5b">-33.86%</td><td class="num" style="color:#7b4ea8">—%</td></tr><tr><td class="name">平均夏普</td><td class="num" style="color:#d1495b">-2.03</td><td class="num" style="color:#e08a00">-2.01</td><td class="num" style="color:#1f5fbf">-1.66</td><td class="num" style="color:#2e9e5b">-1.94</td><td class="num best" style="color:#7b4ea8">-1.57</td></tr><tr><td class="name">平均胜率</td><td class="num" style="color:#d1495b">39.69%</td><td class="num" style="color:#e08a00">39.71%</td><td class="num best" style="color:#1f5fbf">43.53%</td><td class="num" style="color:#2e9e5b">42.31%</td><td class="num" style="color:#7b4ea8">38.80%</td></tr><tr><td class="name">平均盈亏比</td><td class="num" style="color:#d1495b">2.87</td><td class="num" style="color:#e08a00">2.87</td><td class="num best" style="color:#1f5fbf">13.34</td><td class="num" style="color:#2e9e5b">11.14</td><td class="num" style="color:#7b4ea8">—</td></tr></tbody>
+      </table>
+
+      <div class="chart">
+        <div class="legend">
+          <span style="color:#d1495b">— A 基线逐日收益</span>
+          <span style="color:#e08a00">— B 同池对照</span>
+          <span style="color:#1f5fbf">— C 增强·持5</span>
+          <span style="color:#2e9e5b">— C20 增强·持20</span></div>
+        <svg viewBox="0 0 960 300" width="100%" height="300">
+          <line x1="46" y1="270.0" x2="948" y2="270.0" stroke="#eee" stroke-width="1"/><text x="41" y="273.0" font-size="9" fill="#888" text-anchor="end">-4.7</text><line x1="46" y1="241.9" x2="948" y2="241.9" stroke="#eee" stroke-width="1"/><text x="41" y="244.9" font-size="9" fill="#888" text-anchor="end">-2.4</text><line x1="46" y1="213.8" x2="948" y2="213.8" stroke="#eee" stroke-width="1"/><text x="41" y="216.8" font-size="9" fill="#888" text-anchor="end">0.0</text><line x1="46" y1="114.9" x2="948" y2="114.9" stroke="#eee" stroke-width="1"/><text x="41" y="117.9" font-size="9" fill="#888" text-anchor="end">8.3</text><line x1="46" y1="16.0" x2="948" y2="16.0" stroke="#eee" stroke-width="1"/><text x="41" y="19.0" font-size="9" fill="#888" text-anchor="end">16.7</text>
+          <line x1="46" y1="213.8" x2="948" y2="213.8" stroke="#bbb" stroke-width="1.5"/>
+          <polyline fill="none" stroke="#d1495b" stroke-width="1.2" points="46.0,210.1 53.0,208.9 60.1,216.9 67.1,213.8 74.2,219.3 81.2,210.1 88.3,216.3 95.3,212.1 102.4,221.4 109.4,209.3 116.5,213.8 123.5,214.5 130.6,213.8 137.6,213.8 144.7,213.8 151.7,213.8 158.8,195.9 165.8,207.2 172.8,213.5 179.9,207.6 186.9,212.0 194.0,210.8 201.0,213.3 208.1,207.6 215.1,210.0 222.2,213.2 229.2,218.0 236.3,217.7 243.3,215.4 250.4,209.7 257.4,224.7 264.5,234.4 271.5,233.8 278.5,231.8 285.6,223.9 292.6,206.5 299.7,208.2 306.7,204.2 313.8,213.3 320.8,214.0 327.9,212.9 334.9,228.4 342.0,222.2 349.0,231.9 356.1,237.7 363.1,247.5 370.2,243.5 377.2,229.8 384.2,214.5 391.3,206.5 398.3,217.9 405.4,215.5 412.4,209.6 419.5,212.0 426.5,225.7 433.6,224.1 440.6,238.3 447.7,208.2 454.7,200.7 461.8,218.3 468.8,216.0 475.9,213.8 482.9,215.4 490.0,213.8 497.0,218.9 504.0,220.3 511.1,223.4 518.1,220.5 525.2,216.6 532.2,214.8 539.3,216.3 546.3,217.6 553.4,191.6 560.4,217.2 567.5,193.4 574.5,213.6 581.6,205.7 588.6,204.4 595.7,222.3 602.7,243.9 609.8,241.9 616.8,228.2 623.8,226.0 630.9,231.4 637.9,209.7 645.0,206.8 652.0,214.7 659.1,198.6 666.1,215.7 673.2,217.4 680.2,215.8 687.3,211.0 694.3,205.9 701.4,219.3 708.4,224.1 715.5,219.1 722.5,221.8 729.5,219.5 736.6,222.3 743.6,211.3 750.7,201.8 757.7,209.4 764.8,191.6 771.8,203.7 778.9,211.9 785.9,236.2 793.0,215.2 800.0,228.7 807.1,231.2 814.1,231.8 821.2,219.6 828.2,218.7 835.2,216.4 842.3,199.3 849.3,199.6 856.4,197.5 863.4,209.7 870.5,227.2 877.5,230.6 884.6,243.0 891.6,226.0 898.7,223.5 905.7,215.5 912.8,220.6 919.8,222.8 926.9,234.1 933.9,231.6 941.0,223.0 948.0,213.8"/>
+          <polyline fill="none" stroke="#e08a00" stroke-width="1.2" points="46.0,210.1 53.0,208.9 60.1,216.9 67.1,213.8 74.2,219.3 81.2,210.1 88.3,216.3 95.3,212.1 102.4,221.4 109.4,209.3 116.5,213.8 123.5,214.5 130.6,213.8 137.6,213.8 144.7,213.8 151.7,213.8 158.8,195.9 165.8,207.2 172.8,213.5 179.9,207.6 186.9,212.0 194.0,210.8 201.0,213.3 208.1,207.6 215.1,210.0 222.2,213.2 229.2,218.0 236.3,217.7 243.3,215.4 250.4,209.7 257.4,224.7 264.5,234.4 271.5,233.8 278.5,231.8 285.6,223.9 292.6,206.5 299.7,208.2 306.7,204.2 313.8,213.3 320.8,214.0 327.9,212.9 334.9,228.4 342.0,222.2 349.0,231.9 356.1,237.7 363.1,247.5 370.2,243.5 377.2,229.8 384.2,214.5 391.3,206.5 398.3,217.9 405.4,215.5 412.4,209.6 419.5,212.0 426.5,225.7 433.6,224.1 440.6,238.3 447.7,208.2 454.7,200.7 461.8,218.3 468.8,212.8 475.9,213.8 482.9,215.4 490.0,213.8 497.0,218.9 504.0,220.3 511.1,223.4 518.1,220.5 525.2,216.6 532.2,214.8 539.3,216.3 546.3,217.6 553.4,191.6 560.4,217.2 567.5,193.4 574.5,213.6 581.6,205.7 588.6,204.4 595.7,222.3 602.7,243.9 609.8,241.9 616.8,228.2 623.8,226.0 630.9,231.4 637.9,209.7 645.0,206.8 652.0,214.7 659.1,198.6 666.1,215.7 673.2,217.4 680.2,215.8 687.3,211.0 694.3,205.9 701.4,219.3 708.4,224.1 715.5,219.1 722.5,221.8 729.5,219.5 736.6,222.3 743.6,211.3 750.7,201.8 757.7,209.4 764.8,191.6 771.8,203.7 778.9,211.9 785.9,236.2 793.0,215.2 800.0,228.7 807.1,231.2 814.1,231.8 821.2,219.6 828.2,218.7 835.2,216.4 842.3,199.3 849.3,199.6 856.4,197.5 863.4,209.7 870.5,227.2 877.5,230.6 884.6,243.0 891.6,226.0 898.7,223.5 905.7,215.5 912.8,220.6 919.8,222.8 926.9,234.1 933.9,231.6 941.0,223.0 948.0,213.8"/>
+          <polyline fill="none" stroke="#1f5fbf" stroke-width="1.4" points="46.0,207.1 53.0,206.6 60.1,200.4 67.1,131.2 74.2,234.6 81.2,197.9 88.3,206.2 95.3,202.3 102.4,229.4 109.4,194.0 116.5,213.8 123.5,238.6 130.6,213.9 137.6,203.8 144.7,251.6 151.7,185.2 158.8,215.9 165.8,219.9 172.8,208.8 179.9,199.3 186.9,209.9 194.0,210.1 201.0,202.6 208.1,188.7 215.1,192.1 222.2,221.7 229.2,221.2 236.3,212.0 243.3,205.6 250.4,202.5 257.4,235.5 264.5,243.3 271.5,240.2 278.5,270.0 285.6,221.6 292.6,207.2 299.7,208.3 306.7,223.5 313.8,184.9 320.8,219.7 327.9,242.1 334.9,147.8 342.0,216.6 349.0,257.0 356.1,246.9 363.1,249.6 370.2,252.1 377.2,209.9 384.2,206.6 391.3,209.1 398.3,198.9 405.4,229.4 412.4,190.3 419.5,251.4 426.5,227.4 433.6,227.5 440.6,226.6 447.7,215.1 454.7,204.8 461.8,218.0 468.8,174.9 475.9,209.9 482.9,206.2 490.0,213.8 497.0,212.3 504.0,208.9 511.1,194.0 518.1,223.1 525.2,223.5 532.2,225.3 539.3,231.0 546.3,208.0 553.4,147.0 560.4,218.2 567.5,206.6 574.5,217.7 581.6,206.2 588.6,223.4 595.7,217.0 602.7,246.3 609.8,232.6 616.8,242.8 623.8,244.1 630.9,219.3 637.9,198.6 645.0,213.9 652.0,252.8 659.1,191.8 666.1,226.6 673.2,216.7 680.2,216.1 687.3,16.0 694.3,209.4 701.4,220.6 708.4,231.3 715.5,257.3 722.5,239.0 729.5,238.2 736.6,237.0 743.6,203.2 750.7,223.1 757.7,173.2 764.8,200.8 771.8,222.1 778.9,212.9 785.9,240.0 793.0,207.1 800.0,222.5 807.1,237.7 814.1,231.1 821.2,239.6 828.2,204.3 835.2,217.9 842.3,204.3 849.3,189.6 856.4,200.4 863.4,220.9 870.5,252.8 877.5,251.1 884.6,259.1 891.6,261.7 898.7,247.2 905.7,236.0 912.8,229.5 919.8,237.7 926.9,242.6 933.9,243.3 941.0,250.4 948.0,213.8"/>
+          <polyline fill="none" stroke="#2e9e5b" stroke-width="2.2" points="46.0,214.6 53.0,226.3 60.1,199.5 67.1,131.2 74.2,234.6 81.2,216.3 88.3,204.6 95.3,193.5 102.4,194.5 109.4,194.0 116.5,213.8 123.5,232.5 130.6,168.0 137.6,225.5 144.7,243.5 151.7,183.4 158.8,183.6 165.8,205.5 172.8,208.0 179.9,201.0 186.9,210.6 194.0,203.8 201.0,211.6 208.1,205.7 215.1,212.5 222.2,240.6 229.2,158.5 236.3,150.1 243.3,212.3 250.4,215.5 257.4,255.2 264.5,258.8 271.5,249.1 278.5,270.0 285.6,227.2 292.6,220.8 299.7,220.5 306.7,245.4 313.8,190.3 320.8,237.7 327.9,269.9 334.9,147.8 342.0,249.0 349.0,252.2 356.1,247.3 363.1,239.4 370.2,245.4 377.2,207.6 384.2,204.3 391.3,201.7 398.3,196.2 405.4,233.7 412.4,176.3 419.5,235.5 426.5,192.1 433.6,205.5 440.6,203.3 447.7,208.3 454.7,209.3 461.8,224.4 468.8,178.5 475.9,239.0 482.9,221.7 490.0,213.8 497.0,198.5 504.0,174.7 511.1,195.6 518.1,226.6 525.2,210.3 532.2,132.5 539.3,224.2 546.3,202.5 553.4,169.6 560.4,236.3 567.5,205.2 574.5,215.5 581.6,228.6 588.6,243.0 595.7,201.1 602.7,249.0 609.8,238.9 616.8,240.0 623.8,247.3 630.9,239.5 637.9,205.5 645.0,227.8 652.0,261.3 659.1,179.0 666.1,227.4 673.2,244.6 680.2,232.2 687.3,20.2 694.3,218.6 701.4,236.2 708.4,226.6 715.5,260.6 722.5,255.2 729.5,228.1 736.6,222.8 743.6,202.3 750.7,233.6 757.7,174.6 764.8,204.4 771.8,245.1 778.9,212.3 785.9,231.2 793.0,221.7 800.0,243.3 807.1,242.1 814.1,234.9 821.2,241.5 828.2,191.9 835.2,222.8 842.3,205.7 849.3,173.4 856.4,206.8 863.4,222.1 870.5,263.2 877.5,251.1 884.6,259.1 891.6,262.4 898.7,247.1 905.7,239.2 912.8,229.5 919.8,237.7 926.9,242.6 933.9,243.3 941.0,250.4 948.0,213.8"/>
+        </svg>
+      </div>
+
+      <div class="verdict">
+        <b>变量隔离解读</b>
+        <ul>
+    <li><b>持有周期效应 (C20 vs C) · 同增强入场</b>：持有 5日→20日，
+        正收益日 ＝ 持平pp、平均日收益 ▼ -0.03（恶化）%、平均夏普 ▼ -0.28（恶化）。
+        → 延长持有未改善。</li>
+    <li><b>入场增强效应 (C20 vs D) · 同持有20日</b>：基础→增强入场，
+        正收益日 ▼ -0.90（恶化）pp、平均日收益 ▲ +0.01（改善）%、平均夏普 ▼ -0.36（恶化）。
+        → 入场增强在长持有下边际消失/转负。</li>
+    <li><b>组合效应 (C20 vs B) · 跨两变量</b>：基础持5→增强持20，
+        正收益日 ▲ +3.23（改善）pp、平均日收益 ▲ +0.00（改善）%、平均夏普 ▲ +0.07（改善）。
+        这是「增强入场＋更长持有」相对线上现状(B)的总提升。</li>
+    </ul>
+        <p style="margin:10px 0 0;"><b>判定：</b><b>两者都未能改善。</b>入场与出场调参均失效，策略框架需换信号源或加牛熊择时。</p>
+      </div>
+
+      <div class="method">
+        <b>方法</b><br>
+        五路均用 <b>2026-07-18</b> 同档波动率下定价的 <code>capital_scale</code>，保证仓位缩放一致。
+        A/B/C/C20 的逐日收益、夏普、胜率、盈亏比均按同一口径从各自
+        <code>*-ALL-summary.csv</code> 的 <code>total_return</code> 列计算。
+        D(③ hold20) 直接取自早前 <code>Param-Scan</code> 实验的聚合行
+        （与 B 同池同基础入场、仅持有 20 日），其「复利累计 / 平均盈亏比」两项 Param-Scan 未留存，表中以「—」标示，
+        日收益合计按 均值×天数 估算。
+      </div>
+    </div>
+    </html>

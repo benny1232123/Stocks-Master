@@ -1,0 +1,35 @@
+# 依赖版本策略：框架/稳定库用 ~= 锁次要版本（兼容补丁，避免 Render/本地漂移导致「在我机器上能跑」）；
+# akshare/baostock 为滚动发布，刻意保留 >=（固定版本易因上游改动而安装失败）。
+
+# Web 框架（锁次要版本）
+fastapi~=0.115.0
+uvicorn~=0.30.0
+pandas>=2.0
+python-dotenv~=1.0.0
+
+# 数据源（滚动发布，保留 >=）
+akshare
+baostock
+matplotlib
+pillow              # 仅 Frequently-Used-Program/boll-visualizer 用到；后端不依赖，可考虑移除
+requests
+
+# 可选：云端交易同步（TRADES_BACKEND=supabase）
+supabase>=2.0
+
+# ── 多策略回测引擎（Backtrader）──
+backtrader~=1.9.78
+
+# ── 腾讯云 COS 上传（storage/cos.py 懒加载；启用 COS 上传时必须）──
+# 此前只在 CI 的 daily-pick.yml 单独 pip 安装，render.yaml 的 buildCommand 未包含；
+# 若将来在 Render 启用 COS 上传会 ImportError，这里补上以便 Render 构建即具备。
+cos-python-sdk-v5
+
+# ── 可选高速数据源：通达信(pytdx) ──
+# 直连券商行情服务器，毫秒级、最稳，国内服务器/本地默认启用（环境变量 TDX_ENABLED 默认 auto）。
+# 注意：pytdx 1.72 的 setup.py 调用了已废弃的 pypandoc.convert，直接 `pip install pytdx`
+# 会构建失败。请单独用以下任一方式安装（CI 不装也能跑，会自动回退 akshare）：
+#   pip install "pypandoc<1.10" pytdx      # 装旧版 pypandoc 提供 convert()
+#   # 或手动打补丁：下载源码改 setup.py 的 except 子句为 except Exception 后本地安装
+#   # 或 pip install pytdx --no-build-isolation   （需先装好 pypandoc）
+# 未安装 pytdx 时不影响任何功能，数据层会自动降级到 akshare / baostock 兜底。

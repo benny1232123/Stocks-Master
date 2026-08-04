@@ -1,0 +1,768 @@
+"""FastAPI entrypoint for Stocks-Master."""
+from __future__ import annotations
+
+import os
+import sys
+import threading
+import time
+import uuid
+from contextlib import asynccontextmanager
+from datetime import date, datetime, timedelta
+from pathlib import Path
+
+from dotenv import load_dotenv
+from fastapi import Depends, FastAPI, Header, HTTPException
+from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import FileResponse, JSONResponse
+from fastapi.staticfiles import StaticFiles
+
+ROOT = Path(__file__).resolve().parent.parent
+FRONTEND_DIST = ROOT / "frontend" / "dist"
+
+load_dotenv(ROOT / ".env")
+
+if str(ROOT) not in sys.path:
+    sys.path.insert(0, str(ROOT))
+
+os.environ.setdefault("KLINE_BACKEND", "akshare")
+
+from smcore.artifacts import ArtifactFile, find_latest_file, find_latest_file_any, preview_csv, read_csv_file, STOCK_DATA_DIR
+from smcore.analysis import build_stock_analysis
+from smcore.backtest import run_signal_backtest, run_multi_strategy_backtest
+from smcore.dashboard import build_dashboard_payload, prewarm_dashboard_cache
+from smcore.holdings import add_trade, clear_trades, portfolio_snapshot, trades_backend_name
+from smcore.selection import get_candidate_codes, run_strategy_fusion, scan_boll_batch
+
+import hmac
+
+from backend.trade_sanitize import _is_corrupt_trade
+from backend.api_auth import _check_api_key
+
+# ── 可选 API 鉴权 ──
+# 仅当环境变量 API_AUTH_TOKEN 非空时生效：所有「写操作 / 高开销」POST 端点
+# 必须携带正确的 `X-API-Key` 头，否则返回 401。未配置则向后兼容（与旧部署行为一致），
+# 方便个人部署先不配、需要时再开启。Render 部署可在 Dashboard 设 API_AUTH_TOKEN 启用。
+def _require_api_key(x_api_key: str | None = Header(default=None)) -> None:
+    try:
+        _check_api_key(x_api_key)
+    except ValueError:
+        raise HTTPException(status_code=401, detail="Invalid or missing API key")
+
+
+@asynccontextmanager
+async def lifespan(_app: FastAPI):
+    threading.Thread(target=prewarm_dashboard_cache, daemon=True).start()
+    threading.Thread(target=_periodic_sweep, daemon=True).start()
+    yield
+
+
+app = FastAPI(title="Stocks-Master API", version="0.1.0", lifespan=lifespan)
+
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_credentials=False,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
+if FRONTEND_DIST.exists():
+    assets_dir = FRONTEND_DIST / "assets"
+    if assets_dir.exists():
+        app.mount("/assets", StaticFiles(directory=assets_dir), name="assets")
+
+
+_tasks_lock = threading.Lock()
+_tasks: dict[str, dict] = {}
+_TASK_TTL = 1800  # 30 minutes
+
+
+def _sweep_tasks() -> None:
+    """Remove completed tasks older than _TASK_TTL to prevent memory leak."""
+    now = time.time()
+    with _tasks_lock:
+        expired = [
+            tid for tid, t in _tasks.items()
+            if t["status"] != "running" and (now - t.get("started_at", now)) > _TASK_TTL
+        ]
+        for tid in expired:
+            del _tasks[tid]
+
+
+def _periodic_sweep() -> None:
+    """Background thread that sweeps stale tasks every 5 minutes."""
+    while True:
+        time.sleep(300)
+        try:
+            _sweep_tasks()
+        except Exception:
+            pass
+
+
+def _new_task(task_type: str) -> str:
+    task_id = uuid.uuid4().hex[:12]
+    with _tasks_lock:
+        _tasks[task_id] = {
+            "type": task_type,
+            "status": "running",
+            "logs": [],
+            "result": None,
+            "cancelled": False,
+            "started_at": time.time(),
+        }
+    return task_id
+
+
+def _is_cancelled(task_id: str) -> bool:
+    with _tasks_lock:
+        t = _tasks.get(task_id)
+        return t is not None and t.get("cancelled", False)
+
+
+def _append_log(task_id: str, msg: str) -> None:
+    with _tasks_lock:
+        t = _tasks.get(task_id)
+        if t is not None:
+            t["logs"].append(msg)
+
+
+def _finish_task(task_id: str, result=None, error: str | None = None) -> None:
+    with _tasks_lock:
+        t = _tasks.get(task_id)
+        if t is not None:
+            t["status"] = "error" if error else "done"
+            t["result"] = result
+            if error:
+                t["logs"].append(f"[错误] {error}")
+
+
+@app.get("/")
+def root():
+    if FRONTEND_DIST.exists():
+        index_file = FRONTEND_DIST / "index.html"
+        if index_file.exists():
+            return FileResponse(index_file)
+    return {"message": "Stocks-Master API", "status": "ok"}
+
+
+@app.get("/health")
+def health() -> dict[str, str]:
+    return {"status": "ok"}
+
+
+@app.get("/api/status")
+def app_status() -> dict:
+    backend = trades_backend_name()
+    supabase_configured = bool(os.getenv("SUPABASE_URL", "").strip() and os.getenv("SUPABASE_KEY", "").strip())
+    return {
+        "storage_backend": backend,
+        "supabase_configured": supabase_configured,
+        "supabase_url": os.getenv("SUPABASE_URL", "")[:30] + "..." if os.getenv("SUPABASE_URL", "") else "",
+    }
+
+
+@app.get("/api/dashboard")
+def dashboard() -> dict:
+    return build_dashboard_payload()
+
+
+@app.post("/api/dashboard/prewarm", dependencies=[Depends(_require_api_key)])
+def prewarm_dashboard() -> dict:
+    return prewarm_dashboard_cache()
+
+
+@app.get("/api/artifacts/daily-action-list")
+def daily_action_list() -> dict:
+    latest = find_latest_file("Daily-Action-List-*.csv")
+    if latest is None:
+        return {"latest": None, "preview": {"rows": [], "columns": []}}
+
+    return {"latest": latest.__dict__, "preview": preview_csv(latest.path)}
+
+
+@app.get("/api/artifacts/daily-action-list/full")
+def daily_action_list_full(date: str = None) -> dict:
+    """返回完整日报数据（全部行），供前端「日报」页全量查看。
+    可选 ?date=YYYYMMDD 指定某天；缺省返回最新一天。"""
+    target = None
+    if date:
+        p = STOCK_DATA_DIR / f"Daily-Action-List-{date}.csv"
+        if p.exists():
+            target = ArtifactFile(name=p.name, path=str(p.relative_to(ROOT)), modified_at=p.stat().st_mtime)
+    if target is None:
+        target = find_latest_file("Daily-Action-List-*.csv")
+    if target is None:
+        return {"latest": None, "columns": [], "rows": [], "total": 0}
+
+    frame = read_csv_file(target.path)
+    if frame.empty:
+        return {"latest": target.__dict__, "columns": frame.columns.tolist(), "rows": [], "total": 0}
+
+    return {
+        "latest": target.__dict__,
+        "columns": frame.columns.tolist(),
+        "rows": frame.to_dict(orient="records"),
+        "total": len(frame),
+    }
+
+
+@app.get("/api/artifacts/daily-action-list/dates")
+def daily_action_list_dates() -> dict:
+    """返回全部历史日报日期列表，供前端日报页「日期选择器」切换。"""
+    import glob as _glob
+    import re as _re
+
+    files = sorted(_glob.glob(str(STOCK_DATA_DIR / "Daily-Action-List-*.csv")), reverse=True)
+    items = []
+    for f in files:
+        m = _re.search(r"(\d{8})", os.path.basename(f))
+        if not m:
+            continue
+        tag = m.group(1)
+        try:
+            df = read_csv_file(str(Path(f).relative_to(ROOT)))
+        except Exception:
+            df = None
+        items.append({
+            "date": tag,
+            "name": os.path.basename(f),
+            "path": str(Path(f).relative_to(ROOT)),
+            "modified_at": Path(f).stat().st_mtime,
+            "total": len(df) if df is not None else 0,
+        })
+    return {"items": items}
+
+
+
+@app.get("/api/portfolio")
+def portfolio() -> dict:
+    return portfolio_snapshot()
+
+
+@app.post("/api/trades", dependencies=[Depends(_require_api_key)])
+def create_trade(payload: dict) -> dict:
+    code = str(payload.get("code", "")).strip()
+    if not code:
+        return JSONResponse({"error": "股票代码不能为空"}, status_code=400)
+    try:
+        price = float(payload.get("price", 0))
+        qty = int(payload.get("qty", 0))
+        fee = float(payload.get("fee", 0))
+    except (TypeError, ValueError):
+        return JSONResponse({"error": "价格/数量/手续费格式无效"}, status_code=400)
+    if price < 0 or qty <= 0 or fee < 0:
+        return JSONResponse({"error": "价格不能为负，数量必须大于0"}, status_code=400)
+    side = payload.get("side", "buy")
+    if side not in ("buy", "sell"):
+        side = "buy"
+    trade = {
+        "date": payload.get("date") or date.today().isoformat(),
+        "code": code,
+        "name": str(payload.get("name", "")).strip() or code,
+        "side": side,
+        "price": price,
+        "qty": qty,
+        "fee": fee,
+        "notes": str(payload.get("notes", "")),
+    }
+    try:
+        trades = add_trade(trade)
+    except ValueError as exc:
+        return JSONResponse({"error": str(exc)}, status_code=400)
+    return {"count": len(trades), "latest": trade}
+
+
+@app.delete("/api/trades", dependencies=[Depends(_require_api_key)])
+def remove_trades() -> dict:
+    clear_trades()
+    return {"status": "ok"}
+
+
+@app.get("/api/backtests/latest")
+def latest_backtest() -> dict:
+    latest = find_latest_file_any(
+        [
+            "Signal-Backtest-*-summary.csv",
+            "Trade-Backtest-*-summary.csv",
+            "*-portfolio-summary.csv",
+        ]
+    )
+    if latest is None:
+        return {"latest": None, "preview": {"rows": [], "columns": []}}
+
+    return {"latest": latest.__dict__, "preview": preview_csv(latest.path)}
+
+
+@app.get("/api/backtests/daily-latest")
+def daily_latest_backtest() -> dict:
+    """读取每日 CI 自动对全策略清单跑出的前向信号回测结果（Multi-Backtest-*）。
+
+    返回全部历史批次（按信号日倒序），前端以「信号日选择器」形式展示，
+    每个信号日对应一次独立的「从历史某天开始 → 往后持有 N 天」的前向回测。
+    """
+    import glob as _glob
+
+    from smcore.artifacts import STOCK_DATA_DIR
+
+    files = sorted(_glob.glob(str(STOCK_DATA_DIR / "Multi-Backtest-*-summary.csv")), reverse=True)
+    items = []
+    excluded_total = 0
+
+    for f in files:
+        name = os.path.basename(f)
+        date_tag = name[len("Multi-Backtest-"):-len("-summary.csv")]
+
+        def _read(suffix: str):
+            nonlocal excluded_total
+            df = read_csv_file(f"stock_data/Multi-Backtest-{date_tag}-{suffix}.csv")
+            recs = df.to_dict(orient="records") if not df.empty else []
+            if suffix == "trades":
+                # 附带股票名称：从当日信号清单读取 代码→名称
+                name_map = {}
+                dal = read_csv_file(f"stock_data/Daily-Action-List-{date_tag}.csv")
+                if not dal.empty and {"股票代码", "股票名称"}.issubset(dal.columns):
+                    for _, nr in dal.iterrows():
+                        c = str(nr.get("股票代码", "")).strip()
+                        if c:
+                            name_map[c] = str(nr.get("股票名称", ""))
+                for rec in recs:
+                    c = str(rec.get("code", "")).strip().zfill(6)
+                    rec["name"] = name_map.get(c, "") or name_map.get(c.lstrip("0"), "")
+                clean = [r for r in recs if not _is_corrupt_trade(r)]
+                excluded_total += len(recs) - len(clean)
+                recs = clean
+            return recs
+
+        summary_df = read_csv_file(f"stock_data/Multi-Backtest-{date_tag}-summary.csv")
+        summary = summary_df.to_dict(orient="records")[0] if not summary_df.empty else None
+        if summary is None:
+            continue
+        items.append({
+            "date": date_tag,
+            "summary": summary,
+            "equity": _read("equity"),
+            "trades": _read("trades"),
+        })
+    latest = items[0] if items else None
+    return {"items": items, "latest": latest, "excluded_trades": excluded_total}
+
+
+@app.get("/api/backtests/daily-summary")
+def daily_backtest_summary() -> dict:
+    """聚合每日前向回测批次（Multi-Backtest-*-summary.csv），产出总体总结指标。
+
+    只聚合「最近 BACKTEST_SUMMARY_LOOKBACK（默认 20）个信号日」，避免被几十个
+    已走完持有窗口、结果被永久冻结的旧批次稀释均值，使总体指标更灵敏地反映
+    近期策略表现。设为 0 表示不限制（沿用旧的全部聚合行为）。
+
+    与 daily_backtest.py 的 _filter_incomplete 对齐：
+    策略数 < BACKTEST_MIN_STRATEGIES（默认 2）的信号日视为残缺，
+    不纳入总体统计（避免少数策略的偏小组合污染回测结论）。
+    """
+    import glob as _glob
+    import statistics as _stats
+
+    from smcore.artifacts import STOCK_DATA_DIR
+
+    # ── 可配置阈值（与 daily_backtest.py 一致）──
+    _MIN_STRATEGIES = int(os.environ.get("BACKTEST_MIN_STRATEGIES", "2"))
+    # 总体总结只聚合「最近 N 个信号日」，避免被几十个已走完窗口的冻结旧批次稀释，
+    # 让均值更灵敏地反映近期策略表现。设为 0 表示不限制（沿用旧的全部聚合行为）。
+    _SUMMARY_LOOKBACK = int(os.environ.get("BACKTEST_SUMMARY_LOOKBACK", "20"))
+
+    def _count_active_strategies(date_tag: str) -> int:
+        """读取对应日期的 Daily-Action-List，统计「来源策略」列去重后的活跃策略数。"""
+        try:
+            dal = read_csv_file(f"stock_data/Daily-Action-List-{date_tag}.csv")
+            if dal.empty or "来源策略" not in dal.columns:
+                return 0
+            strategies = set()
+            for raw in dal["来源策略"].dropna().astype(str):
+                for s in raw.split("/"):
+                    s = s.strip()
+                    if s:
+                        strategies.add(s)
+            return len(strategies)
+        except Exception:
+            return 0
+
+    files = sorted(_glob.glob(str(STOCK_DATA_DIR / "Multi-Backtest-*-summary.csv")), reverse=True)
+    rows = []
+    for f in files:
+        name = os.path.basename(f)
+        date_tag = name[len("Multi-Backtest-"):-len("-summary.csv")]
+        # 策略完整性筛除：与 daily_backtest.py Stage 0.7 对齐
+        if _count_active_strategies(date_tag) < _MIN_STRATEGIES:
+            continue
+        summary_df = read_csv_file(f"stock_data/Multi-Backtest-{date_tag}-summary.csv")
+        if summary_df.empty:
+            continue
+        rec = summary_df.to_dict(orient="records")[0]
+        rec["date"] = date_tag
+        rows.append(rec)
+
+    # 只保留最近 N 个信号日（rows 已按信号日倒序，故直接截断）。
+    # 旧的、已走完 10 天持有窗口的批次结果被永久冻结，纳入均值只会稀释近期表现。
+    if _SUMMARY_LOOKBACK and len(rows) > _SUMMARY_LOOKBACK:
+        rows = rows[:_SUMMARY_LOOKBACK]
+
+    if not rows:
+        return {"count": 0, "lookback": _SUMMARY_LOOKBACK}
+
+    def _num(x, default=0.0):
+        try:
+            return float(x)
+        except (TypeError, ValueError):
+            return default
+
+    # 区分「已完成」（有真实成交）与「未走完」（num_trades=0 的部分前向批次）。
+    # 未走完批次收益≈0、win_rate=0，纳入均值会严重低估真实表现，故聚合指标只基于已完成批次。
+    completed = [r for r in rows if _num(r.get("num_trades")) > 0]
+    base_rows = completed if completed else rows
+
+    rets = [_num(r.get("total_return")) for r in base_rows]
+    dds = [_num(r.get("max_drawdown")) for r in base_rows]
+    wrs = [_num(r.get("win_rate")) for r in base_rows]
+    shps = [_num(r.get("sharpe")) for r in base_rows]
+    holds = [_num(r.get("hold_days")) for r in base_rows]
+
+    # 异常成交判定（与 /api/backtests/daily-latest _read("trades") 同步）：
+    # ① 同日买卖（违反 A 股 T+1，旧引擎退出分支无最少持有保护）；
+    # ② 止盈类退出(take_band/take_pct)却亏损（旧引擎把布林上轨止盈套到动量入场）。
+    # ── 交易级指标：走全量信号日（与 /api/backtests/daily-latest 持仓 tab 完全一致） ──
+    # 笔均收益/胜率/总笔数不应受 LOOKBACK 截断，否则与持仓 tab 的 -2.40% 对不上。
+    _all_files = sorted(_glob.glob(str(STOCK_DATA_DIR / "Multi-Backtest-*-summary.csv")), reverse=True)
+    _all_date_tags = []
+    for _f in _all_files:
+        _name = os.path.basename(_f)
+        _tag = _name[len("Multi-Backtest-"):-len("-summary.csv")]
+        # 同样过滤策略数不足的残缺批次
+        if _count_active_strategies(_tag) < _MIN_STRATEGIES:
+            continue
+        _all_date_tags.append(_tag)
+
+    win_trades = 0
+    clean_total_trades = 0
+    excluded_summary = 0
+    _clean_return_pcts: list[float] = []  # 笔均收益（与持仓 tab 同口径）
+    for tag in _all_date_tags:
+        tdf = read_csv_file(f"stock_data/Multi-Backtest-{tag}-trades.csv")
+        if tdf.empty or "return_pct" not in tdf.columns:
+            continue
+        clean_df = tdf[~tdf.apply(_is_corrupt_trade, axis=1)]
+        excl = len(tdf) - len(clean_df)
+        excluded_summary += excl
+        clean_total_trades += len(clean_df)
+        if not clean_df.empty:
+            win_trades += int((clean_df["return_pct"] > 0).sum())
+            _clean_return_pcts.extend(clean_df["return_pct"].tolist())
+    avg_win_rate = round(win_trades / clean_total_trades * 100, 1) if clean_total_trades else 0.0
+    # 笔均收益率：全部干净成交 return_pct 的算术平均（与持仓 tab「平均收益率」严格一致）
+    avg_trade_return = round(_stats.mean(_clean_return_pcts), 2) if _clean_return_pcts else 0.0
+
+    positive_days = sum(1 for v in rets if v > 0)
+    best = max(base_rows, key=lambda r: _num(r.get("total_return")))
+    worst = min(base_rows, key=lambda r: _num(r.get("total_return")))
+
+    def _med(lst):
+        return _stats.median(lst) if lst else 0.0
+
+    # ── 基准对比：沪深300 同期收益 ──
+    benchmark_returns = []
+    try:
+        from smcore.strategy.fusion import _get_hs300_close
+        from datetime import datetime as _dt
+
+        hs_series = _get_hs300_close()
+        if hs_series is not None and len(hs_series) > 0:
+            for r in base_rows:
+                try:
+                    sd_str = r.get("signal_start") or r.get("date", "")
+                    ed_str = r.get("signal_end") or ""
+                    hd = int(_num(r.get("hold_days"), 10))
+                    if not sd_str:
+                        continue
+                    # 解析信号开始日期
+                    if len(sd_str) == 8:
+                        sig_dt = _dt.strptime(sd_str, "%Y%m%d").date()
+                    else:
+                        sig_dt = _dt.strptime(sd_str[:10], "%Y-%m-%d").date()
+                    # 结束日期：优先用 signal_end（若与 start 不同则用），否则按持有天数推算
+                    if ed_str and len(ed_str) >= 8:
+                        if len(ed_str) == 8:
+                            end_dt = _dt.strptime(ed_str, "%Y%m%d").date()
+                        else:
+                            end_dt = _dt.strptime(ed_str[:10], "%Y-%m-%d").date()
+                        # 如果 signal_end 和 signal_start 是同一天，说明需要按持有期推算
+                        if end_dt == sig_dt:
+                            from datetime import timedelta as _td
+                            end_dt = sig_dt + _td(days=max(hd, 1))
+                    else:
+                        from datetime import timedelta as _td
+                        end_dt = sig_dt + _td(days=max(hd, 1))
+
+                    # 在沪深300序列中找最接近的交易日收盘价
+                    idx_dates = [d.date() if hasattr(d, 'date') else _dt.strptime(str(d)[:10], "%Y-%m-%d").date()
+                                 for d in hs_series.index]
+                    # 找信号日之前最近的收盘价
+                    before = [(i, d) for i, d in enumerate(idx_dates) if d <= sig_dt]
+                    after = [(i, d) for i, d in enumerate(idx_dates) if d >= end_dt]
+                    if before and after:
+                        start_price = float(hs_series.iloc[before[-1][0]])
+                        end_price = float(hs_series.iloc[after[0][0]])
+                        if start_price and start_price > 0:
+                            bret = (end_price / start_price - 1) * 100
+                            benchmark_returns.append(bret)
+                except Exception:
+                    continue
+    except Exception:
+        pass
+
+    avg_benchmark = round(_stats.mean(benchmark_returns), 2) if benchmark_returns else None
+    avg_excess = None
+    if avg_benchmark is not None and rets:
+        avg_excess = round(_stats.mean(rets) - avg_benchmark, 2)
+
+    return {
+        "count": len(rows),
+        "lookback": _SUMMARY_LOOKBACK,
+        "completed_count": len(completed),
+        "avg_return": round(_stats.mean(rets), 2),
+        "median_return": round(_med(rets), 2),
+        "avg_drawdown": round(_stats.mean(dds), 2),
+        "median_drawdown": round(_med(dds), 2),
+        "avg_win_rate": avg_win_rate,
+        "median_win_rate": round(_med(wrs), 1),
+        "avg_sharpe": round(_stats.mean(shps), 2),
+        "total_trades": clean_total_trades,
+        "positive_days": positive_days,
+        "positive_ratio": round(positive_days / len(base_rows) * 100, 1),
+        "avg_hold_days": round(_stats.mean(holds), 1),
+        "best_day": {"date": best.get("date"), "return": _num(best.get("total_return"))},
+        "worst_day": {"date": worst.get("date"), "return": _num(worst.get("total_return"))},
+        # 基准对比
+        "benchmark_name": "沪深300",
+        "benchmark_return": avg_benchmark,
+        "excess_return": avg_excess,
+        # 异常成交剔除计数（与 /api/backtests/daily-latest 同口径）
+        "excluded_trades": excluded_summary,
+        # 笔均收益率（与持仓 tab 同口径：全部干净成交 return_pct 的算术平均）
+        "avg_trade_return": avg_trade_return,
+    }
+
+
+@app.post("/api/backtests/run-latest", dependencies=[Depends(_require_api_key)])
+def run_latest_backtest(payload: dict | None = None) -> dict:
+    payload = payload or {}
+    latest = find_latest_file("Daily-Action-List-*.csv")
+    if latest is None:
+        return {"summary": {"error": "未找到操作清单"}}
+    signals = read_csv_file(latest.path)
+    result = run_signal_backtest(
+        signals,
+        hold_days=int(payload.get("hold_days", 5)),
+        initial_capital=float(payload.get("initial_capital", 100000)),
+        max_positions=int(payload.get("max_positions", 10)),
+        slippage=float(payload.get("slippage", 0.001)),
+    )
+    return {
+        "source": latest.__dict__,
+        "summary": result.summary,
+        "equity_preview": result.equity.head(25).to_dict(orient="records"),
+        "trades_preview": result.trades.head(25).to_dict(orient="records"),
+    }
+
+
+@app.post("/api/backtests/run", dependencies=[Depends(_require_api_key)])
+def run_backtest(payload: dict) -> dict:
+    codes = payload.get("codes") or []
+    signal_date = payload.get("date") or date.today().strftime("%Y%m%d")
+    if isinstance(codes, str):
+        codes = [c.strip() for c in codes.replace("\n", ",").split(",") if c.strip()]
+    if not codes:
+        return {"summary": {"error": "未提供股票代码"}}
+    codes = codes[:3000]
+
+    # 多策略 Backtrader 模式：传入 mode="multi" + start/end/strategies
+    mode = str(payload.get("mode", "signal")).lower()
+    if mode == "multi":
+        start = _parse_date(payload.get("start"), date.today() - timedelta(days=365))
+        end = _parse_date(payload.get("end"), date.today())
+        strategies = payload.get("strategies", "boll,relativity,theme")
+        task_id = _new_task("backtest")
+        _append_log(task_id, f"开始多策略回测({strategies})，共 {len(codes)} 只股票，区间 {start}~{end}")
+
+        def _run_multi():
+            try:
+                _append_log(task_id, "正在拉取K线并运行多策略 Backtrader 引擎...")
+                result = run_multi_strategy_backtest(
+                    codes,
+                    start,
+                    end,
+                    initial_capital=float(payload.get("initial_capital", 100000)),
+                    strategies=strategies,
+                )
+                _append_log(task_id, f"回测完成：{result.summary.get('num_trades', 0)} 笔交易")
+                _finish_task(task_id, result={
+                    "summary": result.summary,
+                    "equity": result.equity.to_dict(orient="records"),
+                    "trades": result.trades.to_dict(orient="records"),
+                })
+            except Exception as e:
+                _finish_task(task_id, error=str(e))
+
+        threading.Thread(target=_run_multi, daemon=True).start()
+        return {"task_id": task_id}
+
+    import pandas as pd
+    signals = pd.DataFrame({"日期": [signal_date] * len(codes), "代码": codes})
+
+    task_id = _new_task("backtest")
+    _append_log(task_id, f"开始回测，共 {len(codes)} 只股票")
+
+    def _run():
+        try:
+            _append_log(task_id, "正在拉取K线并模拟交易...")
+            result = run_signal_backtest(
+                signals,
+                hold_days=int(payload.get("hold_days", 5)),
+                initial_capital=float(payload.get("initial_capital", 100000)),
+                max_positions=int(payload.get("max_positions", 10)),
+                slippage=float(payload.get("slippage", 0.001)),
+            )
+            _append_log(task_id, f"回测完成：{result.summary.get('num_trades', 0)} 笔交易")
+            _finish_task(task_id, result={
+                "summary": result.summary,
+                "equity": result.equity.to_dict(orient="records"),
+                "trades": result.trades.to_dict(orient="records"),
+            })
+        except Exception as e:
+            _finish_task(task_id, error=str(e))
+
+    threading.Thread(target=_run, daemon=True).start()
+    return {"task_id": task_id}
+
+
+def _parse_date(value, default: date) -> date:
+    """解析 YYYY-MM-DD / YYYYMMDD 为 date，失败返回 default。"""
+    if not value:
+        return default
+    text = str(value).strip()
+    for fmt in ("%Y-%m-%d", "%Y%m%d"):
+        try:
+            return datetime.strptime(text, fmt).date()
+        except ValueError:
+            continue
+    return default
+
+
+@app.get("/api/analysis/{code}")
+def analysis(code: str, window: int = 20, k: float = 1.645, days_back: int = 180) -> dict:
+    return build_stock_analysis(code, window=window, k=k, days_back=days_back)
+
+
+@app.get("/api/selection/candidates")
+def selection_candidates(price_min: float = 5.0, price_max: float = 30.0) -> dict:
+    codes, cache_date = get_candidate_codes(price_min, price_max)
+    return {"codes": codes, "count": len(codes), "cache_date": cache_date}
+
+
+@app.post("/api/selection/boll-scan", dependencies=[Depends(_require_api_key)])
+def selection_boll_scan(payload: dict) -> dict:
+    codes = payload.get("codes") or []
+    if isinstance(codes, str):
+        codes = [item.strip() for item in codes.replace("\n", ",").replace(" ", ",").split(",") if item.strip()]
+    codes = codes[:3000]
+    window = int(payload.get("window", 20))
+    k = float(payload.get("k", 1.645))
+    near_ratio = float(payload.get("near_ratio", 1.015))
+    days_back = int(payload.get("days_back", 180))
+
+    task_id = _new_task("boll-scan")
+    _append_log(task_id, f"开始布林扫描，共 {len(codes)} 只股票")
+
+    def _run():
+        def on_progress(idx, total, code, msg):
+            _append_log(task_id, f"[{idx}/{total}] {code} {msg}")
+        try:
+            result = scan_boll_batch(
+                codes, window=window, k=k, near_ratio=near_ratio,
+                days_back=days_back, on_progress=on_progress,
+                is_cancelled=lambda: _is_cancelled(task_id),
+            )
+            if _is_cancelled(task_id):
+                return
+            _append_log(task_id, f"扫描完成，命中 {len(result)} 只")
+            _finish_task(task_id, result={"count": int(len(result)), "rows": result.to_dict(orient="records")})
+        except Exception as e:
+            if not _is_cancelled(task_id):
+                _finish_task(task_id, error=str(e))
+
+    threading.Thread(target=_run, daemon=True).start()
+    return {"task_id": task_id}
+
+
+@app.get("/api/selection/task-logs/{task_id}")
+def selection_task_logs(task_id: str) -> dict:
+    with _tasks_lock:
+        t = _tasks.get(task_id)
+        if t is None:
+            return {"status": "not_found", "logs": [], "result": None}
+        snapshot = {"status": t["status"], "logs": list(t["logs"]), "result": t.get("result")}
+    return snapshot
+
+
+@app.post("/api/selection/cancel-task/{task_id}", dependencies=[Depends(_require_api_key)])
+def selection_cancel_task(task_id: str) -> dict:
+    with _tasks_lock:
+        t = _tasks.get(task_id)
+        if t is None:
+            return {"ok": False, "error": "task not found"}
+        if t["status"] != "running":
+            return {"ok": False, "error": f"task already {t['status']}"}
+        t["cancelled"] = True
+        t["status"] = "cancelled"
+        t["logs"].append("[系统] 用户取消任务")
+    return {"ok": True}
+
+
+@app.post("/api/selection/fusion", dependencies=[Depends(_require_api_key)])
+def selection_fusion(payload: dict) -> dict:
+    task_id = _new_task("fusion")
+    _append_log(task_id, "开始策略融合")
+
+    def _run():
+        try:
+            _append_log(task_id, "加载四策略 CSV ...")
+            result = run_strategy_fusion(
+                date_yyyymmdd=payload.get("date"),
+                total_capital=float(payload.get("total_capital", 100000.0)),
+                max_picks=int(payload.get("max_picks", 15)),
+            )
+            _append_log(task_id, f"融合完成，命中 {result.get('count', 0)} 只")
+            _finish_task(task_id, result=result)
+        except Exception as e:
+            _finish_task(task_id, error=str(e))
+
+    threading.Thread(target=_run, daemon=True).start()
+    return {"task_id": task_id}
+
+
+@app.get("/{path:path}")
+def spa_fallback(path: str):
+    if FRONTEND_DIST.exists():
+        index_file = FRONTEND_DIST / "index.html"
+        if index_file.exists():
+            return FileResponse(index_file)
+    return JSONResponse({"error": "not found"}, status_code=404)
+
+
+if __name__ == "__main__":
+    import uvicorn
+
+    uvicorn.run(
+        "backend.main:app",
+        host=os.environ.get("HOST", "0.0.0.0"),
+        port=int(os.environ.get("PORT", "8000")),
+        reload=os.environ.get("RELOAD", "0") == "1",
+    )

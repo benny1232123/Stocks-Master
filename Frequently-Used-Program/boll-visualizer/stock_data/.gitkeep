@@ -1,0 +1,63 @@
+# File path: c:\Users\29408\Desktop\Stocks-Master\BollVisualizer.py
+import akshare as ak
+import pandas as pd
+import matplotlib.pyplot as plt
+import os
+import re
+from datetime import datetime, timedelta
+
+class BollingerBandsVisualizer:
+    def __init__(self, stock_code, days_back=60, k=1.645):
+        self.stock_code = stock_code
+        self.days_back = days_back
+        self.k = k
+        self.start_date = (datetime.now() - timedelta(days=self.days_back)).strftime('%Y-%m-%d')
+        self.data = None
+
+    def fetch_data(self):
+        rs = ak.stock_zh_a_hist(symbol=self.stock_code, period='daily', start_date=self.start_date)
+        if rs.empty:
+            print(f"No data found for stock code: {self.stock_code}")
+            return
+        self.data = rs[['date', 'close']]
+        self.data['close'] = pd.to_numeric(self.data['close'], errors='coerce')
+        self.data.dropna(subset=['close'], inplace=True)
+
+    def calculate_bollinger_bands(self):
+        if self.data is None:
+            print("Data not fetched. Please run fetch_data() first.")
+            return
+        self.data['MA20'] = self.data['close'].rolling(window=20).mean()
+        self.data['STD20'] = self.data['close'].rolling(window=20).std()
+        self.data['Upper'] = self.data['MA20'] + self.k * self.data['STD20']
+        self.data['Lower'] = self.data['MA20'] - self.k * self.data['STD20']
+
+    def plot_bollinger_bands(self):
+        if self.data is None:
+            print("Data not fetched. Please run fetch_data() first.")
+            return
+        plt.figure(figsize=(12, 6))
+        plt.plot(self.data['date'], self.data['close'], label='Close', linewidth=1.6)
+        plt.plot(self.data['date'], self.data['MA20'], label='MA20', linewidth=1.2)
+        plt.plot(self.data['date'], self.data['Upper'], label=f'Upper (k={self.k})', linewidth=1.0)
+        plt.plot(self.data['date'], self.data['Lower'], label=f'Lower (k={self.k})', linewidth=1.0)
+        plt.fill_between(self.data['date'], self.data['Lower'], self.data['Upper'], alpha=0.12)
+
+        plt.title(f'{self.stock_code} Bollinger Bands (MA20, k={self.k})')
+        plt.xlabel('Date')
+        plt.ylabel('Price')
+        plt.grid(True, linestyle='--', alpha=0.3)
+        plt.legend()
+        plt.tight_layout()
+
+        save_dir = "stock_data/plots"
+        os.makedirs(save_dir, exist_ok=True)
+        plt.savefig(os.path.join(save_dir, f"{self.stock_code}_Bollinger_Bands.png"), dpi=160)
+        plt.show()
+
+if __name__ == "__main__":
+    stock_code = input("Enter the stock code: ")
+    visualizer = BollingerBandsVisualizer(stock_code)
+    visualizer.fetch_data()
+    visualizer.calculate_bollinger_bands()
+    visualizer.plot_bollinger_bands()

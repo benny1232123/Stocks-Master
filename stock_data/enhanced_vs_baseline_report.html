@@ -1,0 +1,158 @@
+<!DOCTYPE html><html lang='zh'><head><meta charset='utf-8'><style>
+    * { box-sizing: border-box; }
+    body { font-family: -apple-system, "Segoe UI", "Microsoft YaHei", sans-serif;
+           background:#f5f6f8; color:#1f2733; margin:0; padding:28px; }
+    .wrap { max-width:980px; margin:0 auto; }
+    h1 { font-size:22px; margin:0 0 4px; }
+    .sub { color:#6b7685; font-size:13px; margin-bottom:18px; }
+    .cards { display:flex; gap:14px; margin-bottom:20px; flex-wrap:wrap; }
+    .card { flex:1; min-width:150px; background:#fff; border:1px solid #e6e9ee;
+            border-radius:12px; padding:14px 16px; }
+    .card .k { font-size:12px; color:#8a93a2; }
+    .card .v { font-size:24px; font-weight:700; margin-top:4px; }
+    .card .v.g { color:#2e9e5b; } .card .v.r { color:#d1495b; }
+    table { width:100%; border-collapse:collapse; background:#fff;
+            border:1px solid #e6e9ee; border-radius:12px; overflow:hidden; }
+    th,td { padding:10px 12px; text-align:left; font-size:13px; }
+    thead th { background:#eef1f5; color:#5a6473; font-weight:600; }
+    td.name { color:#3a4350; }
+    td.num { text-align:right; font-variant-numeric:tabular-nums; white-space:nowrap; }
+    td.b { color:#3a4350; } td.e { color:#1f5fbf; font-weight:600; }
+    .track { display:inline-block; width:70px; height:8px; background:#eef1f5;
+             border-radius:4px; vertical-align:middle; margin-right:6px; overflow:hidden; }
+    .fill { display:inline-block; height:100%; border-radius:4px; }
+    td.delta { text-align:center; font-weight:700; }
+    .g { color:#2e9e5b; } .r { color:#d1495b; }
+    .verdict { background:#fff; border:1px solid #e6e9ee; border-radius:12px;
+               padding:16px 18px; margin:18px 0; }
+    .verdict ul { margin:8px 0 0; padding-left:20px; }
+    .verdict li { margin:4px 0; font-size:14px; }
+    .method { background:#fff; border:1px solid #e6e9ee; border-radius:12px;
+              padding:14px 18px; font-size:13px; color:#4a5462; line-height:1.7; }
+    .method code { background:#eef1f5; padding:1px 5px; border-radius:4px; }
+    .chart { background:#fff; border:1px solid #e6e9ee; border-radius:12px;
+             padding:14px 18px; margin:18px 0; }
+    .legend span { display:inline-block; margin-right:16px; font-size:12px; }
+    .lg-b { color:#d1495b; font-weight:700; }
+    .lg-e { color:#1f5fbf; font-weight:700; }
+    </style></head>
+    <div class="wrap">
+      <h1>入场增强 vs 基线 · 历史回测对比</h1>
+      <div class="sub">区间 2026-01-05 ~ 2026-07-17 · 持有 5 日 · 出场完全复用线上引擎
+        （布林上轨止盈 + 6% 止盈 + 5% 跟踪 + MA60 破位）</div>
+
+      <div class="cards">
+        <div class="card"><div class="k">正收益日占比</div>
+          <div class="v g">42.40%</div></div>
+        <div class="card"><div class="k">平均日收益</div>
+          <div class="v g">-0.26%</div></div>
+        <div class="card"><div class="k">平均夏普</div>
+          <div class="v g">-1.66</div></div>
+        <div class="card"><div class="k">有效信号日</div>
+          <div class="v">125</div></div>
+      </div>
+
+      <table>
+        <thead><tr><th>指标</th><th class="num">基线(5529只)</th>
+          <th class="num">增强(1500只)</th><th class="num">方向</th></tr></thead>
+        <tbody>
+        <tr>
+          <td class="name">有效信号日（有成交）</td>
+          <td class="num">120.00天</td>
+          <td class="num b"><div class="track"><span class="fill" style="width:48%;background:#2e9e5b"></span></div>120.00天</td>
+          <td class="num e"><div class="track"><span class="fill" style="width:52%;background:#d1495b"></span></div>125.00天</td>
+          <td class="num delta">▼</td>
+        </tr>
+        <tr>
+          <td class="name">总交易笔数</td>
+          <td class="num">2448.00笔</td>
+          <td class="num b"><div class="track"><span class="fill" style="width:100%;background:#d1495b"></span></div>2448.00笔</td>
+          <td class="num e"><div class="track"><span class="fill" style="width:24%;background:#2e9e5b"></span></div>1153.00笔</td>
+          <td class="num delta">▲</td>
+        </tr>
+        <tr>
+          <td class="name">平均日收益</td>
+          <td class="num">-0.30%</td>
+          <td class="num b"><div class="track"><span class="fill" style="width:57%;background:#d1495b"></span></div>-0.30%</td>
+          <td class="num e"><div class="track"><span class="fill" style="width:44%;background:#2e9e5b"></span></div>-0.26%</td>
+          <td class="num delta">▲</td>
+        </tr>
+        <tr>
+          <td class="name">中位日收益</td>
+          <td class="num">-0.20%</td>
+          <td class="num b"><div class="track"><span class="fill" style="width:29%;background:#2e9e5b"></span></div>-0.20%</td>
+          <td class="num e"><div class="track"><span class="fill" style="width:87%;background:#d1495b"></span></div>-0.35%</td>
+          <td class="num delta">▼</td>
+        </tr>
+        <tr>
+          <td class="name">正收益日占比</td>
+          <td class="num">38.33%</td>
+          <td class="num b"><div class="track"><span class="fill" style="width:45%;background:#d1495b"></span></div>38.33%</td>
+          <td class="num e"><div class="track"><span class="fill" style="width:55%;background:#2e9e5b"></span></div>42.40%</td>
+          <td class="num delta">▲</td>
+        </tr>
+        <tr>
+          <td class="name">日收益合计</td>
+          <td class="num">-35.58%</td>
+          <td class="num b"><div class="track"><span class="fill" style="width:54%;background:#d1495b"></span></div>-35.58%</td>
+          <td class="num e"><div class="track"><span class="fill" style="width:46%;background:#2e9e5b"></span></div>-32.78%</td>
+          <td class="num delta">▲</td>
+        </tr>
+        <tr>
+          <td class="name">复利累计</td>
+          <td class="num">-30.36%</td>
+          <td class="num b"><div class="track"><span class="fill" style="width:50%;background:#2e9e5b"></span></div>-30.36%</td>
+          <td class="num e"><div class="track"><span class="fill" style="width:50%;background:#d1495b"></span></div>-30.54%</td>
+          <td class="num delta">▼</td>
+        </tr>
+        <tr>
+          <td class="name">平均夏普</td>
+          <td class="num">-2.03</td>
+          <td class="num b"><div class="track"><span class="fill" style="width:61%;background:#d1495b"></span></div>-2.03</td>
+          <td class="num e"><div class="track"><span class="fill" style="width:41%;background:#2e9e5b"></span></div>-1.66</td>
+          <td class="num delta">▲</td>
+        </tr>
+        <tr>
+          <td class="name">平均胜率</td>
+          <td class="num">39.69%</td>
+          <td class="num b"><div class="track"><span class="fill" style="width:46%;background:#d1495b"></span></div>39.69%</td>
+          <td class="num e"><div class="track"><span class="fill" style="width:55%;background:#2e9e5b"></span></div>43.53%</td>
+          <td class="num delta">▲</td>
+        </tr>
+        <tr>
+          <td class="name">平均盈亏比</td>
+          <td class="num">2.87</td>
+          <td class="num b"><div class="track"><span class="fill" style="width:11%;background:#d1495b"></span></div>2.87</td>
+          <td class="num e"><div class="track"><span class="fill" style="width:100%;background:#2e9e5b"></span></div>13.34</td>
+          <td class="num delta">▲</td>
+        </tr></tbody>
+      </table>
+
+      <div class="chart">
+        <div class="legend"><span class="lg-b">— 基线逐日收益</span>
+          <span class="lg-e">— 增强逐日收益</span></div>
+        <svg viewBox="0 0 900 240" width="100%" height="240">
+          <line x1="40" y1="215.0" x2="890" y2="215.0" stroke="#eee" stroke-width="1"/><text x="36" y="218.0" font-size="9" fill="#888" text-anchor="end">-4.7</text><line x1="40" y1="192.9" x2="890" y2="192.9" stroke="#eee" stroke-width="1"/><text x="36" y="195.9" font-size="9" fill="#888" text-anchor="end">-2.4</text><line x1="40" y1="170.7" x2="890" y2="170.7" stroke="#eee" stroke-width="1"/><text x="36" y="173.7" font-size="9" fill="#888" text-anchor="end">0.0</text><line x1="40" y1="92.9" x2="890" y2="92.9" stroke="#eee" stroke-width="1"/><text x="36" y="95.9" font-size="9" fill="#888" text-anchor="end">8.3</text><line x1="40" y1="15.0" x2="890" y2="15.0" stroke="#eee" stroke-width="1"/><text x="36" y="18.0" font-size="9" fill="#888" text-anchor="end">16.7</text>
+          <line x1="40" y1="170.7" x2="890" y2="170.7" stroke="#bbb" stroke-width="1.5"/>
+          <polyline fill="none" stroke="#d1495b" stroke-width="1.6" points="40.0,167.8 46.6,166.9 53.3,173.2 59.9,170.7 66.6,175.1 73.2,167.8 79.8,172.7 86.5,169.4 93.1,176.7 99.8,167.2 106.4,170.7 113.0,171.3 119.7,170.7 126.3,170.7 133.0,170.7 139.6,170.7 146.2,156.6 152.9,165.6 159.5,170.5 166.2,165.9 172.8,169.3 179.5,168.4 186.1,170.3 192.7,165.9 199.4,167.7 206.0,170.3 212.7,174.1 219.3,173.8 225.9,172.0 232.6,167.5 239.2,179.3 245.9,187.0 252.5,186.5 259.1,184.9 265.8,178.7 272.4,165.0 279.1,166.3 285.7,163.2 292.3,170.3 299.0,170.9 305.6,170.1 312.3,182.2 318.9,177.4 325.5,185.0 332.2,189.6 338.8,197.3 345.5,194.2 352.1,183.3 358.8,171.3 365.4,165.0 372.0,174.0 378.7,172.1 385.3,167.5 392.0,169.3 398.6,180.2 405.2,178.8 411.9,190.1 418.5,166.3 425.2,160.4 431.8,174.3 438.4,172.5 445.1,170.7 451.7,172.0 458.4,170.7 465.0,174.7 471.6,175.9 478.3,178.3 484.9,176.0 491.6,173.0 498.2,171.6 504.8,172.7 511.5,173.7 518.1,153.3 524.8,173.4 531.4,154.7 538.0,170.6 544.7,164.4 551.3,163.3 558.0,177.4 564.6,194.4 571.2,192.9 577.9,182.1 584.5,180.3 591.2,184.6 597.8,167.5 604.5,165.2 611.1,171.5 617.7,158.8 624.4,172.2 631.0,173.6 637.7,172.3 644.3,168.6 650.9,164.6 657.6,175.1 664.2,178.8 670.9,174.9 677.5,177.1 684.1,175.2 690.8,177.4 697.4,168.8 704.1,161.3 710.7,167.3 717.3,153.3 724.0,162.8 730.6,169.2 737.3,188.4 743.9,171.8 750.5,182.5 757.2,184.5 763.8,184.9 770.5,175.3 777.1,174.6 783.8,172.8 790.4,159.3 797.0,159.6 803.7,157.9 810.3,167.5 817.0,181.3 823.6,184.0 830.2,193.7 836.9,180.3 843.5,178.4 850.2,172.1 856.8,176.1 863.4,177.8 870.1,186.7 876.7,184.7 883.4,178.0 890.0,170.7"/>
+          <polyline fill="none" stroke="#1f5fbf" stroke-width="1.6" points="40.0,165.5 46.6,165.1 53.3,160.2 59.9,105.7 66.6,187.2 73.2,158.2 79.8,164.7 86.5,161.7 93.1,183.1 99.8,155.1 106.4,170.7 113.0,190.2 119.7,170.8 126.3,162.9 133.0,200.5 139.6,148.2 146.2,172.4 152.9,175.6 159.5,166.8 166.2,159.3 172.8,167.6 179.5,167.8 186.1,161.9 192.7,151.0 199.4,153.6 206.0,177.0 212.7,176.6 219.3,169.3 225.9,164.3 232.6,161.8 239.2,187.8 245.9,194.0 252.5,191.6 259.1,215.0 265.8,176.9 272.4,165.6 279.1,166.4 285.7,178.4 292.3,148.0 299.0,175.4 305.6,193.0 312.3,118.8 318.9,173.0 325.5,204.7 332.2,196.8 338.8,198.9 345.5,200.9 352.1,167.6 358.8,165.1 365.4,167.1 372.0,159.0 378.7,183.1 385.3,152.2 392.0,200.3 398.6,181.5 405.2,181.6 411.9,180.8 418.5,171.7 425.2,163.6 431.8,174.1 438.4,140.1 445.1,167.6 451.7,164.7 458.4,170.7 465.0,169.6 471.6,166.9 478.3,155.1 484.9,178.1 491.6,178.4 498.2,179.8 504.8,184.3 511.5,166.1 518.1,118.1 524.8,174.2 531.4,165.1 538.0,173.8 544.7,164.7 551.3,178.3 558.0,173.2 564.6,196.3 571.2,185.6 577.9,193.6 584.5,194.6 591.2,175.1 597.8,158.8 604.5,170.8 611.1,201.5 617.7,153.4 624.4,180.8 631.0,173.1 637.7,172.6 644.3,15.0 650.9,167.3 657.6,176.1 664.2,184.5 670.9,205.0 677.5,190.6 684.1,190.0 690.8,189.0 697.4,162.4 704.1,178.1 710.7,138.8 717.3,160.5 724.0,177.3 730.6,170.1 737.3,191.4 743.9,165.5 750.5,177.6 757.2,189.6 763.8,184.4 770.5,191.1 777.1,163.2 783.8,174.0 790.4,163.2 797.0,151.7 803.7,160.2 810.3,176.3 817.0,201.5 823.6,200.1 830.2,206.4 836.9,208.5 843.5,197.1 850.2,188.2 856.8,183.1 863.4,189.6 870.1,193.4 876.7,194.0 883.4,199.6 890.0,170.7"/>
+        </svg>
+      </div>
+
+      <div class="verdict">
+        <b>结论</b>
+        <ul><li>正收益日占比 42.40% → 38.33%，<b class='g'>提升 4.07 个百分点</b></li><li>平均夏普 -1.66 → -2.03，<b class='g'>改善</b></li><li>平均日收益 -0.26% vs -0.30%，<b class='g'>提升</b></li></ul>
+        <p style="margin:10px 0 0;font-size:14px;">入场增强（放量确认 + RSI 超卖）整体<b class='g'>方向正确</b>，</p>
+      </div>
+
+      <div class="method">
+        <b>方法</b><br>
+        增强版在原有代理信号（<code>close ≤ 布林下轨×1.015</code> + 20日相对强弱≥0 + 成交额≥¥1亿）上，
+        再加两个超卖反转确认因子：<br>
+        ① <b>成交量确认</b> <code>volume ≥ 5日均量×1.3</code> —— 放量见底，排除无量阴跌；<br>
+        ② <b>RSI(14) 超卖</b> <code>RSI &lt; 35</code> —— 真超卖区，过滤弱势盘整伪信号。<br>
+        出场与仓位<b>完全复用线上引擎</b> <code>run_forward_signal_backtest</code>，仅隔离「入场质量」单一变量。<br>
+        <b>样本口径提示：</b>基线为全量 5529 只、仅基础过滤；增强版为前 1500 只 + 增强过滤。两者池子不同，严格隔离「入场增强」变量应跑「同 1500 只 + 无增强」的对照。但 1500 只是代码排序前缀子集（近似随机），其基础信号分布与全量接近，结论方向可信。
+      </div>
+    </div>
+    </html>

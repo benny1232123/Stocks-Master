@@ -1,0 +1,182 @@
+<!doctype html><html lang="zh"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>历史长周期回测报告</title>
+<style>
+ body{font-family:-apple-system,'Segoe UI',sans-serif;background:#0f1115;color:#e6e6e6;margin:0;padding:28px;max-width:860px;margin:auto}
+ h1{font-size:20px;margin:0 0 4px} .sub{color:#888;font-size:13px;margin-bottom:20px}
+ .cards{display:flex;flex-wrap:wrap;gap:10px;margin-bottom:24px}
+ .card{background:#1a1d24;border:1px solid #2a2e38;border-radius:10px;padding:12px 16px;min-width:120px}
+ .card .k{font-size:12px;color:#888} .card .v{font-size:20px;font-weight:600;margin-top:2px}
+ .neg{color:#2fae5f} .pos{color:#e8453c}
+ table{width:100%;border-collapse:collapse;font-size:13px}
+ th{text-align:left;color:#888;font-weight:500;padding:6px 8px;border-bottom:1px solid #2a2e38}
+ tr td{border-bottom:1px solid #1a1d24}
+ .note{background:#1a1d24;border-left:3px solid #e8a33c;padding:10px 14px;border-radius:6px;margin-top:22px;font-size:13px;line-height:1.7;color:#cfcfcf}
+ .note b{color:#fff}
+</style></head><body>
+<h1>历史长周期回测报告</h1>
+<div class="sub">代理信号（布林下轨超卖 + 20日相对强弱 + ¥1亿流动性） × 线上出场/风控引擎 · 2026-01-05 ~ 2026-07-17 · 120 个有成交信号日</div>
+<div class="cards">
+  <div class="card"><div class="k">平均收益</div><div class="v neg">-0.30%</div></div>
+  <div class="card"><div class="k">中位收益</div><div class="v neg">-0.20%</div></div>
+  <div class="card"><div class="k">正收益日</div><div class="v neg">46/120 (38%)</div></div>
+  <div class="card"><div class="k">平均夏普</div><div class="v neg">-2.03</div></div>
+  <div class="card"><div class="k">平均最大回撤</div><div class="v neg">-0.76%</div></div>
+  <div class="card"><div class="k">总成交笔数</div><div class="v">2,448</div></div>
+</div>
+<h3 style="font-size:14px;color:#aaa">分月收益走势（红=涨 绿=跌，中国习惯）</h3>
+<table>
+  <tr><th>月份</th><th>天数</th><th>日均收益</th><th>夏普</th><th>胜率</th></tr>
+  <tr>
+      <td style="font-family:monospace;padding:2px 8px">2026010</td>
+      <td style="text-align:center;padding:2px 8px">5</td>
+      <td style="width:50%"><div style="display:flex;justify-content:flex-end"><div style="width:0.06072607260726079%;background:#2fae5f;height:16px;border-radius:3px"></div></div><span style="color:#2fae5f">-0.00%</span></td>
+      <td style="text-align:center;padding:2px 8px;color:#888">0.22</td>
+      <td style="text-align:center;padding:2px 8px;color:#888">65%</td>
+    </tr><tr>
+      <td style="font-family:monospace;padding:2px 8px">2026011</td>
+      <td style="text-align:center;padding:2px 8px">5</td>
+      <td style="width:50%"><div style="display:flex;justify-content:flex-end"><div style="width:0.12145214521452158%;background:#2fae5f;height:16px;border-radius:3px"></div></div><span style="color:#2fae5f">-0.00%</span></td>
+      <td style="text-align:center;padding:2px 8px;color:#888">0.41</td>
+      <td style="text-align:center;padding:2px 8px;color:#888">54%</td>
+    </tr><tr>
+      <td style="font-family:monospace;padding:2px 8px">2026012</td>
+      <td style="text-align:center;padding:2px 8px">4</td>
+      <td style="width:50%"><div style="display:flex"><div style="width:15.333333333333336%;background:#e8453c;height:16px;border-radius:3px"></div></div><span style="color:#e8453c">+0.51%</span></td>
+      <td style="text-align:center;padding:2px 8px;color:#888">1.48</td>
+      <td style="text-align:center;padding:2px 8px;color:#888">29%</td>
+    </tr><tr>
+      <td style="font-family:monospace;padding:2px 8px">2026013</td>
+      <td style="text-align:center;padding:2px 8px">1</td>
+      <td style="width:50%"><div style="display:flex"><div style="width:15.788778877887792%;background:#e8453c;height:16px;border-radius:3px"></div></div><span style="color:#e8453c">+0.52%</span></td>
+      <td style="text-align:center;padding:2px 8px;color:#888">2.55</td>
+      <td style="text-align:center;padding:2px 8px;color:#888">76%</td>
+    </tr><tr>
+      <td style="font-family:monospace;padding:2px 8px">2026020</td>
+      <td style="text-align:center;padding:2px 8px">6</td>
+      <td style="width:50%"><div style="display:flex"><div style="width:6.730473047304731%;background:#e8453c;height:16px;border-radius:3px"></div></div><span style="color:#e8453c">+0.22%</span></td>
+      <td style="text-align:center;padding:2px 8px;color:#888">2.82</td>
+      <td style="text-align:center;padding:2px 8px;color:#888">65%</td>
+    </tr><tr>
+      <td style="font-family:monospace;padding:2px 8px">2026021</td>
+      <td style="text-align:center;padding:2px 8px">4</td>
+      <td style="width:50%"><div style="display:flex;justify-content:flex-end"><div style="width:3.71947194719472%;background:#2fae5f;height:16px;border-radius:3px"></div></div><span style="color:#2fae5f">-0.12%</span></td>
+      <td style="text-align:center;padding:2px 8px;color:#888">-2.22</td>
+      <td style="text-align:center;padding:2px 8px;color:#888">55%</td>
+    </tr><tr>
+      <td style="font-family:monospace;padding:2px 8px">2026022</td>
+      <td style="text-align:center;padding:2px 8px">4</td>
+      <td style="width:50%"><div style="display:flex;justify-content:flex-end"><div style="width:44.55775577557756%;background:#2fae5f;height:16px;border-radius:3px"></div></div><span style="color:#2fae5f">-1.47%</span></td>
+      <td style="text-align:center;padding:2px 8px;color:#888">-5.91</td>
+      <td style="text-align:center;padding:2px 8px;color:#888">13%</td>
+    </tr><tr>
+      <td style="font-family:monospace;padding:2px 8px">2026030</td>
+      <td style="text-align:center;padding:2px 8px">6</td>
+      <td style="width:50%"><div style="display:flex"><div style="width:5.364136413641365%;background:#e8453c;height:16px;border-radius:3px"></div></div><span style="color:#e8453c">+0.18%</span></td>
+      <td style="text-align:center;padding:2px 8px;color:#888">1.88</td>
+      <td style="text-align:center;padding:2px 8px;color:#888">63%</td>
+    </tr><tr>
+      <td style="font-family:monospace;padding:2px 8px">2026031</td>
+      <td style="text-align:center;padding:2px 8px">8</td>
+      <td style="width:50%"><div style="display:flex;justify-content:flex-end"><div style="width:46.0%;background:#2fae5f;height:16px;border-radius:3px"></div></div><span style="color:#2fae5f">-1.51%</span></td>
+      <td style="text-align:center;padding:2px 8px;color:#888">-5.55</td>
+      <td style="text-align:center;padding:2px 8px;color:#888">19%</td>
+    </tr><tr>
+      <td style="font-family:monospace;padding:2px 8px">2026032</td>
+      <td style="text-align:center;padding:2px 8px">6</td>
+      <td style="width:50%"><div style="display:flex"><div style="width:2.7832783278327837%;background:#e8453c;height:16px;border-radius:3px"></div></div><span style="color:#e8453c">+0.09%</span></td>
+      <td style="text-align:center;padding:2px 8px;color:#888">0.58</td>
+      <td style="text-align:center;padding:2px 8px;color:#888">55%</td>
+    </tr><tr>
+      <td style="font-family:monospace;padding:2px 8px">2026033</td>
+      <td style="text-align:center;padding:2px 8px">2</td>
+      <td style="width:50%"><div style="display:flex;justify-content:flex-end"><div style="width:28.54125412541254%;background:#2fae5f;height:16px;border-radius:3px"></div></div><span style="color:#2fae5f">-0.94%</span></td>
+      <td style="text-align:center;padding:2px 8px;color:#888">-4.68</td>
+      <td style="text-align:center;padding:2px 8px;color:#888">12%</td>
+    </tr><tr>
+      <td style="font-family:monospace;padding:2px 8px">2026040</td>
+      <td style="text-align:center;padding:2px 8px">5</td>
+      <td style="width:50%"><div style="display:flex;justify-content:flex-end"><div style="width:6.497689768976897%;background:#2fae5f;height:16px;border-radius:3px"></div></div><span style="color:#2fae5f">-0.21%</span></td>
+      <td style="text-align:center;padding:2px 8px;color:#888">-0.88</td>
+      <td style="text-align:center;padding:2px 8px;color:#888">52%</td>
+    </tr><tr>
+      <td style="font-family:monospace;padding:2px 8px">2026041</td>
+      <td style="text-align:center;padding:2px 8px">5</td>
+      <td style="width:50%"><div style="display:flex;justify-content:flex-end"><div style="width:15.181518151815181%;background:#2fae5f;height:16px;border-radius:3px"></div></div><span style="color:#2fae5f">-0.50%</span></td>
+      <td style="text-align:center;padding:2px 8px;color:#888">-5.73</td>
+      <td style="text-align:center;padding:2px 8px;color:#888">36%</td>
+    </tr><tr>
+      <td style="font-family:monospace;padding:2px 8px">2026042</td>
+      <td style="text-align:center;padding:2px 8px">8</td>
+      <td style="width:50%"><div style="display:flex"><div style="width:9.2986798679868%;background:#e8453c;height:16px;border-radius:3px"></div></div><span style="color:#e8453c">+0.31%</span></td>
+      <td style="text-align:center;padding:2px 8px;color:#888">-0.89</td>
+      <td style="text-align:center;padding:2px 8px;color:#888">54%</td>
+    </tr><tr>
+      <td style="font-family:monospace;padding:2px 8px">2026043</td>
+      <td style="text-align:center;padding:2px 8px">1</td>
+      <td style="width:50%"><div style="display:flex"><div style="width:20.64686468646865%;background:#e8453c;height:16px;border-radius:3px"></div></div><span style="color:#e8453c">+0.68%</span></td>
+      <td style="text-align:center;padding:2px 8px;color:#888">7.09</td>
+      <td style="text-align:center;padding:2px 8px;color:#888">50%</td>
+    </tr><tr>
+      <td style="font-family:monospace;padding:2px 8px">2026050</td>
+      <td style="text-align:center;padding:2px 8px">3</td>
+      <td style="width:50%"><div style="display:flex;justify-content:flex-end"><div style="width:24.998899889988998%;background:#2fae5f;height:16px;border-radius:3px"></div></div><span style="color:#2fae5f">-0.82%</span></td>
+      <td style="text-align:center;padding:2px 8px;color:#888">-2.86</td>
+      <td style="text-align:center;padding:2px 8px;color:#888">33%</td>
+    </tr><tr>
+      <td style="font-family:monospace;padding:2px 8px">2026051</td>
+      <td style="text-align:center;padding:2px 8px">7</td>
+      <td style="width:50%"><div style="display:flex;justify-content:flex-end"><div style="width:22.815652993870817%;background:#2fae5f;height:16px;border-radius:3px"></div></div><span style="color:#2fae5f">-0.75%</span></td>
+      <td style="text-align:center;padding:2px 8px;color:#888">-3.77</td>
+      <td style="text-align:center;padding:2px 8px;color:#888">19%</td>
+    </tr><tr>
+      <td style="font-family:monospace;padding:2px 8px">2026052</td>
+      <td style="text-align:center;padding:2px 8px">8</td>
+      <td style="width:50%"><div style="display:flex"><div style="width:0.7211221122112219%;background:#e8453c;height:16px;border-radius:3px"></div></div><span style="color:#e8453c">+0.02%</span></td>
+      <td style="text-align:center;padding:2px 8px;color:#888">-0.78</td>
+      <td style="text-align:center;padding:2px 8px;color:#888">38%</td>
+    </tr><tr>
+      <td style="font-family:monospace;padding:2px 8px">2026060</td>
+      <td style="text-align:center;padding:2px 8px">7</td>
+      <td style="width:50%"><div style="display:flex;justify-content:flex-end"><div style="width:3.20980669495521%;background:#2fae5f;height:16px;border-radius:3px"></div></div><span style="color:#2fae5f">-0.11%</span></td>
+      <td style="text-align:center;padding:2px 8px;color:#888">-2.10</td>
+      <td style="text-align:center;padding:2px 8px;color:#888">30%</td>
+    </tr><tr>
+      <td style="font-family:monospace;padding:2px 8px">2026061</td>
+      <td style="text-align:center;padding:2px 8px">7</td>
+      <td style="width:50%"><div style="display:flex;justify-content:flex-end"><div style="width:8.067892503536067%;background:#2fae5f;height:16px;border-radius:3px"></div></div><span style="color:#2fae5f">-0.27%</span></td>
+      <td style="text-align:center;padding:2px 8px;color:#888">-2.39</td>
+      <td style="text-align:center;padding:2px 8px;color:#888">36%</td>
+    </tr><tr>
+      <td style="font-family:monospace;padding:2px 8px">2026062</td>
+      <td style="text-align:center;padding:2px 8px">6</td>
+      <td style="width:50%"><div style="display:flex;justify-content:flex-end"><div style="width:1.2145214521452157%;background:#2fae5f;height:16px;border-radius:3px"></div></div><span style="color:#2fae5f">-0.04%</span></td>
+      <td style="text-align:center;padding:2px 8px;color:#888">-0.88</td>
+      <td style="text-align:center;padding:2px 8px;color:#888">38%</td>
+    </tr><tr>
+      <td style="font-family:monospace;padding:2px 8px">2026063</td>
+      <td style="text-align:center;padding:2px 8px">1</td>
+      <td style="width:50%"><div style="display:flex"><div style="width:41.597359735973605%;background:#e8453c;height:16px;border-radius:3px"></div></div><span style="color:#e8453c">+1.37%</span></td>
+      <td style="text-align:center;padding:2px 8px;color:#888">6.22</td>
+      <td style="text-align:center;padding:2px 8px;color:#888">72%</td>
+    </tr><tr>
+      <td style="font-family:monospace;padding:2px 8px">2026070</td>
+      <td style="text-align:center;padding:2px 8px">7</td>
+      <td style="width:50%"><div style="display:flex;justify-content:flex-end"><div style="width:28.931636020744932%;background:#2fae5f;height:16px;border-radius:3px"></div></div><span style="color:#2fae5f">-0.95%</span></td>
+      <td style="text-align:center;padding:2px 8px;color:#888">-4.86</td>
+      <td style="text-align:center;padding:2px 8px;color:#888">21%</td>
+    </tr><tr>
+      <td style="font-family:monospace;padding:2px 8px">2026071</td>
+      <td style="text-align:center;padding:2px 8px">4</td>
+      <td style="width:50%"><div style="display:flex;justify-content:flex-end"><div style="width:34.537953795379536%;background:#2fae5f;height:16px;border-radius:3px"></div></div><span style="color:#2fae5f">-1.14%</span></td>
+      <td style="text-align:center;padding:2px 8px;color:#888">-15.37</td>
+      <td style="text-align:center;padding:2px 8px;color:#888">15%</td>
+    </tr>
+</table>
+<div class="note">
+<b>结论：</b>同一套出场/风控引擎放在 1~7 月各行情下，<b>整体为负期望</b>（平均 -0.30%、正收益日仅 38%、夏普 -2.03）。<br>
+<b>分月看：</b>1月、2月上旬、3月上旬、4月中下旬为正（夏普 1~7），但 <b>3月、5月、7月明显亏损</b>（7月下 -1.14%、夏普 -15.4）。<br>
+<b>注意：</b>此为<b>代理信号</b>回测（仅还原了布林超卖入场意图，非真实 5 策略融合），主要验证<b>出场/风控逻辑</b>的稳健性——结论说明<b>当前离场与仓位管理本身不创造正 alpha</b>，需要优化选股入场质量或调整止盈/止损参数。<br>
+<b>对照：</b>线上真实融合 24 天表现（-0.06%、胜率更高）略好，说明真实策略的选股层比单纯抄布林下轨有效，但仍未稳定盈利。
+</div>
+</body></html>

@@ -1,0 +1,59 @@
+name: 自适应权重月度重验
+
+# 每月 1 日运行 walk-forward 样本外重验；若验证「稳健更优」则自动开 PR 更新超参。
+# 有界 timeout-minutes，绝不超时；纯读历史 CSV，不联网不重跑回测。
+on:
+  schedule:
+    - cron: "0 9 1 * *"        # 每月 1 日 09:00 UTC
+  workflow_dispatch:
+    inputs:
+      sweep:
+        description: "强制运行完整参数扫描（默认按稳健性自动决定是否开 PR）"
+        required: false
+        default: "false"
+        type: choice
+        options: ["false", "true"]
+
+permissions:
+  contents: write
+  pull-requests: write
+
+jobs:
+  revalidate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30          # 有界，纯本地计算不会超时
+    env:
+      TDX_ENABLED: "0"
+    steps:
+      - name: Checkout（浅克隆，仅需最新数据文件）
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
+          ref: master
+
+      - name: 配置 Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: 安装依赖（仅 pandas，纯本地计算）
+        run: pip install --retries 3 pandas
+
+      - name: 运行 walk-forward 重验 + 导出推荐 JSON
+        id: wf
+        run: |
+          python scripts/walk_forward_validator.py --recommend --emit-json stock_data/walk_forward_recommendation.json
+          ROBUST=$(python -c "import json; r=json.load(open('stock_data/walk_forward_recommendation.json')); print('true' if r.get('robust') else 'false')")
+          echo "robust=$ROBUST" >> "$GITHUB_OUTPUT"
+          REC=$(python -c "import json; r=json.load(open('stock_data/walk_forward_recommendation.json')); print(r['recommended'], 'improve', r['improvement_pp'], 'pp')")
+          echo "推荐: $REC"
+
+      - name: 稳健则开 PR 更新超参
+        if: steps.wf.outputs.robust == 'true'
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          RECOMMEND_MONTH: ${{ github.run_id }}
+        run: |
+          python scripts/apply_walk_forward.py \
+            --recommend-json stock_data/walk_forward_recommendation.json \
+            --branch "chore/adaptive-weights-$(date +%Y%m)"

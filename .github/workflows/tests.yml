@@ -1,0 +1,39 @@
+name: 测试（pytest）
+
+# 闭环缺口：仓库已有 pytest 套件（tests/ 下 10 个文件，覆盖 fusion / 自适应权重 /
+# 回撤熔断 / walk-forward / 信号回测 / 风险中性化 / 衰减与因子IC监控等），
+# 但 CI 从未执行它——任何破坏代码逻辑的改动都会静默合入。
+# 本工作流在每次 push / PR 时跑全套测试，任一用例失败即标红，把回归拦在合入前。
+#
+# 依赖安装直接复用 daily-pick.yml 的已验证组合（海外 Runner 可装、可跑）；
+# 仅额外补 pytest。测试均为本地确定性用例（数据随仓库提交，不依赖实时网络）。
+
+on:
+  push:
+    branches: ["master"]
+  pull_request:
+  workflow_dispatch: {}
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - name: 检出
+        uses: actions/checkout@v4
+
+      - name: 配置 Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: 安装依赖
+        run: |
+          pip install --upgrade pip
+          pip install --retries 3 pytest akshare pandas requests baostock matplotlib cos-python-sdk-v5 supabase backtrader
+
+      - name: 运行测试
+        run: pytest -q

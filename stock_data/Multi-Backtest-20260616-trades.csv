@@ -1,0 +1,3 @@
+﻿code,buy_date,sell_date,buy_price,sell_price,qty,return_pct,exit_reason
+601699,2026-06-17,2026-06-26,17.294,14.686,100,-15.09,stop_hard
+600060,2026-06-17,2026-06-29,26.326,26.893,100,2.15,max_hold

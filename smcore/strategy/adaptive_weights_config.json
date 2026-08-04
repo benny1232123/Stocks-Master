@@ -1,0 +1,21 @@
+{
+  "FLOOR": 3.0,
+  "shrinkage": 0.4,
+  "temp": 0.5,
+  "pseudo": 15.0,
+  "cash_from_volatility": {
+    "k": 12.0,
+    "midpoint": 0.55
+  },
+  "cash_from_drawdown": {
+    "threshold": 8.0,
+    "cap": 50.0,
+    "deep": 20.0
+  },
+  "cash_from_regime": {
+    "down_mult": 2.0,
+    "down_floor": 20.0,
+    "down_cap": 70.0,
+    "up_mult": 0.33
+  }
+}
