@@ -19,6 +19,7 @@ import baostock as bs
 import pandas as pd
 
 from smcore.config.defaults import PROJECT_ROOT, STOCK_DATA_DIR
+from smcore.data.session import login
 
 
 ROOT_DIR = PROJECT_ROOT
@@ -809,15 +810,14 @@ def run_theme():
     _append_log(log_file, f"start: {__file__}")
     _append_log(log_file, f"args: {args}")
 
-    login_res = bs.login()
-    if login_res.error_code != "0":
-        print(f"baostock 登录失败: {login_res.error_msg}")
+    if not login():
+        print("baostock 登录失败")
         return 1
 
     try:
         result_df, hot_sectors = build_strategy_candidates(args, log_path=log_file)
     finally:
-        bs.logout()
+        pass  # 单例自动管理登出（进程退出时）
 
     today_text = datetime.datetime.now().strftime("%Y%m%d")
     if args.output.strip():

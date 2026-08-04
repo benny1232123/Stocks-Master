@@ -30,6 +30,8 @@ from typing import Optional
 import baostock as bs
 import pandas as pd
 
+from smcore.data.session import login
+
 try:
     import akshare as ak
 except Exception:  # pragma: no cover - akshare 为运行期依赖
@@ -427,10 +429,10 @@ def run_boll(
     start_date = (end_date - timedelta(days=days_back)).strftime("%Y-%m-%d")
     end_date_text = end_date.strftime("%Y-%m-%d")
 
+    # 统一走 baostock 单例登录（进程级只登录一次，退出时自动登出）
     bs_login_ok = False
     try:
-        lg = bs.login()
-        bs_login_ok = lg.error_code == "0"
+        bs_login_ok = login()
     except Exception:
         bs_login_ok = False
 
@@ -493,11 +495,7 @@ def run_boll(
             )
             plot_saved_count += 1
 
-    if bs_login_ok:
-        try:
-            bs.logout()
-        except Exception:
-            pass
+    # 单例自动管理登出（进程退出时 atexit 触发），此处无需手动 logout
 
     out_path = STOCK_DATA_DIR / f"Stock-Selection-Boll-{today}.csv"
     if boll_selected_codes:

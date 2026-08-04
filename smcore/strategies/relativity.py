@@ -21,6 +21,7 @@ import baostock as bs
 import pandas as pd
 
 from smcore.config.defaults import PROJECT_ROOT, STOCK_DATA_DIR
+from smcore.data.session import login
 from smcore.utils.checkpoint import load_checkpoint_df, save_checkpoint_df
 from smcore.utils.code import format_stock_code, normalize_code_series
 
@@ -1034,9 +1035,8 @@ def run_relativity() -> None:
                     code_name_map[k] = v
 
     selected_rows: list[dict] = []
-    lg = bs.login()
-    print("login respond error_code:" + lg.error_code)
-    print("login respond  error_msg:" + lg.error_msg)
+    ok = login()
+    print("baostock login ok:" + str(ok))
     try:
         if args.disable_rs:
             print("[相对强弱] 已关闭，仅输出股东过滤后的候选。")
@@ -1071,7 +1071,7 @@ def run_relativity() -> None:
                 bs_max_retries=int(args.bs_max_retries),
             )
     finally:
-        bs.logout()
+        pass  # 单例自动管理登出（进程退出时）
 
     out_path = STOCK_DATA_DIR / f"Stock-Selection-Relativity-{today_text}.csv"
     if selected_rows:

@@ -10,12 +10,11 @@ from pathlib import Path
 from typing import Optional
 
 from smcore.config.defaults import STOCK_DATA_DIR
+from smcore.data.session import login
 from smcore.utils.code import format_stock_code
 
 # ── 股票名称兜底映射（当所有策略 CSV 都缺 股票名称 时使用）─────────────
 _stock_name_cache: Optional[dict] = None
-# baostock 登录态复用
-_bs_name_logged_in = False
 
 # ── 名称归一化：把 pandas 写出的 "nan" / "None" / "--" 统一视为缺失 ──
 _INVALID_NAMES = {"nan", "none", "null", "--", "", "na", "nat"}
@@ -106,17 +105,13 @@ def lookup_stock_name(code: str) -> str:
                     return found
     except Exception:
         pass
-    # 3) baostock 兜底（仅一次登录，~0.3s/只）
-    global _bs_name_logged_in
+    # 3) baostock 兜底（统一走进程级单例登录，自动复用，退出时自动登出）
     try:
         import baostock as bs
 
         bs_code = f"sh.{c6}" if c6[0] == "6" else f"sz.{c6}"
-        if not _bs_name_logged_in:
-            lg = bs.login()
-            if getattr(lg, "error_code", "1") != "0":
-                return ""
-            _bs_name_logged_in = True
+        if not login():
+            return ""
         rs = bs.query_stock_basic(code=bs_code, code_name="")
         found = ""
         while rs.next():

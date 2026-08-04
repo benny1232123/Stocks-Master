@@ -41,7 +41,6 @@ from smcore.strategy import sectors as sector_mod
 # ── 子模块（重新导出以兼容历史调用点）─────────────────────────────────
 from .name_lookup import (
     _build_stock_name_cache_from_akshare,
-    _bs_name_logged_in,
     _get_stock_name_map,
     _normalize_name,
     _stock_name_cache,
@@ -96,7 +95,6 @@ __all__ = [
     "_build_stock_name_cache_from_akshare",
     "_normalize_name",
     "_stock_name_cache",
-    "_bs_name_logged_in",
     # regime_filter
     "TREND_GUARD_BELOW_MA20",
     "RS_LOOKBACK",

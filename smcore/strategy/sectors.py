@@ -25,6 +25,7 @@ from collections import defaultdict
 from typing import Optional
 
 from smcore.config.defaults import PROJECT_ROOT
+from smcore.data.session import login
 from smcore.utils.code import format_stock_code
 
 SECTOR_MAP_PATH = PROJECT_ROOT / "stock_data" / "sector_map.json"
@@ -39,9 +40,6 @@ SECTOR_MOMENTUM_BONUS = 6.0
 MIN_SECTOR_MOMENTUM_SAMPLES = 20
 # 是否允许融合时按需用 baostock 实时拉取候选股行业（默认开；设 0 则仅用缓存）
 SECTOR_MAP_ONDEMAND = os.environ.get("SECTOR_MAP_ONDEMAND", "1") != "0"
-
-# baostock 登录态（模块级复用，避免每只重复登录）
-_bs_logged_in = False
 
 
 _cache: Optional[dict] = None
@@ -72,8 +70,7 @@ def _build_and_cache() -> dict:
     try:
         import baostock as bs
 
-        lg = bs.login()
-        if lg.error_code != "0":
+        if not login():
             return {}
         try:
             rs = bs.query_stock_basic(code="", code_name="", type="1")
@@ -104,7 +101,7 @@ def _build_and_cache() -> dict:
                 except Exception:
                     out.setdefault(c6, "未知")
         finally:
-            bs.logout()
+            pass  # 单例自动管理登出（进程退出时）
         if out:
             try:
                 SECTOR_MAP_PATH.parent.mkdir(parents=True, exist_ok=True)
@@ -132,7 +129,6 @@ def _to_bs_code(code: str) -> str:
 
 def _bs_industry(code: str) -> Optional[str]:
     """用 baostock 查单只行业；失败/无数据返回 None（不抛）。"""
-    global _bs_logged_in
     try:
         import baostock as bs
     except Exception:
@@ -141,11 +137,8 @@ def _bs_industry(code: str) -> Optional[str]:
     if not bs_code:
         return None
     try:
-        if not _bs_logged_in:
-            lg = bs.login()
-            if getattr(lg, "error_code", "1") != "0":
-                return None
-            _bs_logged_in = True
+        if not login():
+            return None
         ir = bs.query_stock_industry(code=bs_code)
         if getattr(ir, "error_code", "1") != "0":
             return None
