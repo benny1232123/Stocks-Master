@@ -93,5 +93,15 @@
   "market_friction": {
     "model_limit_down": true,
     "limit_down_threshold": 0.095
+  },
+  "factor_scoring": {
+    "enabled": true,
+    "w_momentum_20": 1.0,
+    "w_momentum_60": 0.7,
+    "w_rel_strength": 0.6,
+    "w_volatility": -0.4,
+    "w_liquidity": 0.3,
+    "scale": 4.0,
+    "max_bonus": 15.0
   }
 }

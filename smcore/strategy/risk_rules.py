@@ -81,6 +81,16 @@ _BUILTIN_DEFAULTS = {
         "model_limit_down": True,
         "limit_down_threshold": 0.095,
     },
+    "factor_scoring": {
+        "enabled": False,
+        "w_momentum_20": 1.0,
+        "w_momentum_60": 0.7,
+        "w_rel_strength": 0.6,
+        "w_volatility": -0.4,
+        "w_liquidity": 0.3,
+        "scale": 4.0,
+        "max_bonus": 15.0,
+    },
 }
 
 
@@ -352,4 +362,25 @@ def compute_market_friction_params() -> dict:
     return {
         "model_limit_down": bool(cfg["model_limit_down"]),
         "limit_down_threshold": float(cfg["limit_down_threshold"]),
+    }
+
+
+def compute_factor_scoring_params() -> dict:
+    """多因子打分（第四档改进）配置：对候选票做个股层面的动量/相对强度/波动率/流动性二次打分。
+
+    因子分作为「综合评分」的可加增量（截面 z-score 归一化后按权重加权、clamp 到
+    [-max_bonus, max_bonus]），全部离线安全（读本地 k_data，沪深300 缺失时 RS 回退纯动量）。
+    各权重来自 CONFIG，可热更新；volatility 取负向（低波动加分）。
+    enabled=False 时不参与融合（向后兼容）。
+    """
+    cfg = CONFIG["factor_scoring"]
+    return {
+        "enabled": bool(cfg["enabled"]),
+        "w_momentum_20": float(cfg["w_momentum_20"]),
+        "w_momentum_60": float(cfg["w_momentum_60"]),
+        "w_rel_strength": float(cfg["w_rel_strength"]),
+        "w_volatility": float(cfg["w_volatility"]),
+        "w_liquidity": float(cfg["w_liquidity"]),
+        "scale": float(cfg["scale"]),
+        "max_bonus": float(cfg["max_bonus"]),
     }

@@ -32,7 +32,8 @@ import pandas as pd
 
 from smcore.strategy.market import compute_market_profile
 from smcore.strategy import sectors as sector_mod
-from smcore.strategy.risk_rules import compute_adaptive_risk_params
+from smcore.strategy.risk_rules import compute_adaptive_risk_params, compute_factor_scoring_params
+from .factor_scoring import compute_factor_scores
 
 # ── A 股交易约束 ─────────────────────────────────────────────────────
 LOT_SIZE = 100  # A 股最小交易单位（一手 = 100 股）
@@ -403,6 +404,17 @@ def fuse_signals(
                     ),
                     axis=1,
                 )
+        # ── 多因子二次打分（第四档改进）：个股层面动量/相对强度/波动率/流动性，
+        # 作为「综合评分」的可加增量。全部离线安全（本地 k_data，沪深300 缺失时 RS 回退纯动量）；
+        # enabled=False 时不参与（向后兼容）。等价于把原在融合阶段被丢弃的 Momentum 动量维度
+        # 重新纳入打分（mom20/mom60 即动量），并补充 RS/波动率/流动性因子。
+        fparams = compute_factor_scoring_params()
+        if fparams["enabled"] and not df.empty:
+            fscore = compute_factor_scores(df["股票代码"].tolist(), date_yyyymmdd, fparams)
+            df["因子分"] = df["股票代码"].map(fscore).fillna(0.0).round(1)
+            df["综合评分"] = df.apply(
+                lambda r: round(r["综合评分"] + fscore.get(r["股票代码"], 0.0), 1), axis=1
+            )
         df = df.sort_values("综合评分", ascending=False).reset_index(drop=True)
         # ── 自适应风险参数（随名单广度 + 行业数 + regime 实时计算，零硬编码）──
         _sectors = _count_sectors(df, sector_map) if (sector_cap and sector_map) else 1
