@@ -364,10 +364,12 @@ def fetch_market_breadth() -> dict[str, Any] | None:
 #   1) 实时拉取成功 → 存真实值 + 标注「实时」
 #   2) 实时拉取失败 → 复用上次真实值 + 标注「缓存(日期)」（不再显示写死假常量）
 #   3) 从未成功过 → 才用 SEED 种子常量（标注「静态预估」），正常不应出现
-MACRO_TTL_SECONDS = float(os.getenv("MACRO_TTL_SECONDS", "1800"))  # 30 分钟
+MACRO_TTL_SECONDS = float(os.getenv("MACRO_TTL_SECONDS", "86400"))  # 24 小时（日更）
 LAST_GOOD_PATH = CACHE_DIR / "macro_last_good.json"
-# 绝对最后的种子常量（仅当从未成功联网取数时使用）
+# 绝对最后的种子常量（仅当从未成功联网取数时使用）——保证每个指标永远有值显示
 _SEED_MACRO = {
+    "美元/人民币": 6.77, "欧元/人民币": 7.79, "日元/人民币": 0.043, "港币/人民币": 0.92,
+    "Shibor隔夜": 1.36, "Shibor_1周": 1.38, "Shibor_1月": 1.42,
     "LPR_1年": 3.35, "LPR_5年": 3.95,
     "10Y国债收益率": 2.18,
     "制造业PMI": 49.3, "CPI同比": 0.3, "PPI同比": -1.2,

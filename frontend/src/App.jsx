@@ -899,7 +899,7 @@ function App() {
     return () => clearTimeout(timer)
   }, [error])
 
-  // 看板数据加载（宏观/组合/日报等）——可手动触发，并每 10 分钟自动轮询保持动态
+  // 看板数据加载（宏观/组合/日报等）——页面加载时拉一次，手动刷新按钮按需触发
   const dashboardCtrl = useRef(null)
   const loadDashboard = useCallback(async () => {
     if (dashboardCtrl.current) dashboardCtrl.current.abort()
@@ -928,15 +928,10 @@ function App() {
     finally { setRefreshing(false) }
   }, [analysisCode])
 
-  const loadDashboardRef = useRef(loadDashboard)
-  useEffect(() => { loadDashboardRef.current = loadDashboard }, [loadDashboard])
-
-  // 首次加载 + 每 10 分钟自动刷新（宏观数据每日/日内更新，轮询保证看板持续动态）
+  // 首次加载（宏观数据日更，无需轮询；用户可手动点击刷新）
   useEffect(() => {
-    loadDashboardRef.current()
-    const timer = setInterval(() => loadDashboardRef.current(), 10 * 60 * 1000)
-    return () => clearInterval(timer)
-  }, [])
+    loadDashboard()
+  }, [loadDashboard])
 
   // 每 30 秒更新一次「X 分钟前」相对时间显示
   useEffect(() => {
@@ -1209,7 +1204,7 @@ function App() {
             <div className="page-header macro-header">
               <div>
                 <h2>宏观经济看板</h2>
-                <p>汇率 · 利率 · 债券收益率 · 景气指数 · 物价 —— 实时追踪影响 A 股的核心宏观变量。</p>
+                <p>汇率 · 利率 · 债券收益率 · 景气指数 · 物价 —— 每日更新，追踪影响 A 股的核心宏观变量。</p>
               </div>
               <button className="macro-refresh-btn" onClick={() => loadDashboard()} disabled={refreshing}>
                 {refreshing ? '刷新中…' : '↻ 刷新数据'}
