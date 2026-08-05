@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import {
   LayoutDashboard,
-  Filter,
+  Globe2,
   LineChart,
   Briefcase,
   FlaskConical,
@@ -23,7 +23,7 @@ import { cn } from './lib/utils'
 
 const TABS = [
   { id: 'overview', label: '概览', icon: LayoutDashboard },
-  { id: 'selection', label: '选股', icon: Filter },
+  { id: 'selection', label: '宏观经济', icon: Globe2 },
   { id: 'analysis', label: '分析', icon: LineChart },
   { id: 'daily', label: '日报', icon: FileText },
   { id: 'portfolio', label: '持仓', icon: Briefcase },
@@ -297,6 +297,82 @@ function SectionCard({ title, subtitle, children, className = '' }) {
       </div>
       {children}
     </section>
+  )
+}
+
+function MacroCard({ label, value, hint, format = 'number', threshold }) {
+  const display = value == null ? '--'
+    : format === 'price' ? value.toFixed(4)
+    : format === 'percent' ? Number(value).toFixed(2) + '%'
+    : Number(value).toFixed(2)
+
+  let colorClass = 'text-muted'
+  if (value != null) {
+    if (threshold != null) {
+      colorClass = Number(value) >= threshold ? 'text-up' : 'text-down'
+    } else if (format === 'number') {
+      colorClass = ''
+    }
+  }
+
+  return (
+    <div className="stat-card macro-card">
+      <div className="macro-card-label">{label}</div>
+      <div className={cn('macro-card-value', colorClass)}>{display}</div>
+      {hint ? <div className="macro-card-hint">{hint}</div> : null}
+    </div>
+  )
+}
+
+function _renderMacroInsight(macro) {
+  const insights = []
+  // 汇率判断
+  if (macro['美元/人民币'] != null) {
+    const usdcny = Number(macro['美元/人民币'])
+    if (usdcny > 7.3) insights.push({ level: 'warn', text: `美元/人民币 ${usdcny.toFixed(4)} 偏强，人民币承压，外资流出风险升高` })
+    else if (usdcny < 7.0) insights.push({ level: 'good', text: `美元/人民币 ${usdcny.toFixed(4)} 偏弱，人民币相对强势` })
+    else insights.push({ level: 'neutral', text: `美元/人民币 ${usdcny.toFixed(4)} 处于中性区间` })
+  }
+  // PMI 判断
+  if (macro['制造业PMI'] != null) {
+    const pmi = Number(macro['制造业PMI'])
+    if (pmi >= 51) insights.push({ level: 'good', text: `制造业 PMI ${pmi.toFixed(1)} 扩张偏强，企业景气向好` })
+    else if (pmi >= 50) insights.push({ level: 'neutral', text: `制造业 PMI ${pmi.toFixed(1)} 荣枯线附近，扩张乏力` })
+    else insights.push({ level: 'warn', text: `制造业 PMI ${pmi.toFixed(1)} 收缩区间，经济下行压力` })
+  }
+  // 利率判断
+  if (macro['Shibor隔夜'] != null) {
+    const shibor = Number(macro['Shibor隔夜'])
+    if (shibor > 2.0) insights.push({ level: 'warn', text: `SHIBOR 隔夜 ${shibor.toFixed(2)}% 偏高，资金面偏紧` })
+    else if (shibor < 1.5) insights.push({ level: 'good', text: `SHIBOR 隔夜 ${shibor.toFixed(2)}% 偏低，流动性充裕` })
+    else insights.push({ level: 'neutral', text: `SHIBOR 隔夜 ${shibor.toFixed(2)}% 中性水平` })
+  }
+  // CPI/PPI
+  if (macro['CPI同比'] != null || macro['PPI同比'] != null) {
+    const cpi = macro['CPI同比'] != null ? Number(macro['CPI同比']) : null
+    const ppi = macro['PPI同比'] != null ? Number(macro['PPI同比']) : null
+    if (cpi != null && cpi < 0 && ppi != null && ppi < 0) {
+      insights.push({ level: 'warn', text: `CPI ${cpi.toFixed(2)}% / PPI ${ppi.toFixed(2)}% 双通缩风险` })
+    } else if (cpi != null && cpi > 3) {
+      insights.push({ level: 'warn', text: `CPI ${cpi.toFixed(2)}% 通胀偏高，政策收紧预期` })
+    } else if (cpi != null && ppi != null) {
+      insights.push({ level: 'neutral', text: `CPI ${cpi >= 0 ? '+' : ''}${cpi.toFixed(2)}% / PPI ${ppi >= 0 ? '+' : ''}${ppi.toFixed(2)}% 物价平稳` })
+    }
+  }
+
+  if (insights.length === 0) {
+    return <div className="empty-state">暂无足够数据生成解读（等待后端抓取宏观指标）</div>
+  }
+
+  return (
+    <div className="insight-list">
+      {insights.map((item, i) => (
+        <div key={i} className={cn('insight-item', item.level === 'warn' && 'insight-warn', item.level === 'good' && 'insight-good')}>
+          <span className={`insight-dot insight-dot-${item.level}`} />
+          <span>{item.text}</span>
+        </div>
+      ))}
+    </div>
   )
 }
 
@@ -1098,139 +1174,108 @@ function App() {
         {activeView === 'selection' ? (
           <>
             <div className="page-header">
-              <h2>策略融合选股</h2>
-              <p>设置价格区间，一键运行多策略筛选 → 融合排名 → 自动回测。</p>
+              <h2>宏观经济看板</h2>
+              <p>汇率 · 利率 · 债券收益率 · 景气指数 · 物价 —— 实时追踪影响 A 股的核心宏观变量。</p>
             </div>
-            <div className="grid grid-cols-1 lg:grid-cols-3 gap-4">
-              <SectionCard title="选股参数" className="lg:col-span-2">
-                <div className="selection-form">
-                  <Field label="最低价" hint="过滤太低价标的">
-                    <input value={selectionParams.priceMin} type="number" min="1" step="1"
-                      onChange={(e) => setSelectionParams((p) => ({ ...p, priceMin: Number(e.target.value) }))} />
-                  </Field>
-                  <Field label="最高价" hint="控制候选池价格上限">
-                    <input value={selectionParams.priceMax} type="number" min="1" step="1"
-                      onChange={(e) => setSelectionParams((p) => ({ ...p, priceMax: Number(e.target.value) }))} />
-                  </Field>
 
-                  <div className="button-row">
-                    <Button disabled={isRunning} onClick={async () => {
-                      setScanPhase('candidates'); setScanLogs([]); setSelectionScan(null); setFusionResult(null); setBacktestRun(null); setCandidateCodes([]); setScanProgress({ current: 0, total: 0 })
-                      // Step 1: 获取候选池（仅用于展示数量与价格区间参考）
-                      const c = await fetch(`/api/selection/candidates?price_min=${selectionParams.priceMin}&price_max=${selectionParams.priceMax}`)
-                      if (!c.ok) { setScanPhase(null); setError('获取候选池失败'); return }
-                      const codes = (await c.json()).codes ?? []
-                      setCandidateCodes(codes)
-                      setScanLogs([`候选池 ${codes.length} 只，开始运行完整布林多因子扫描...`])
-                      // Step 2: 运行完整布林多因子选股（内部自带价格/基本面/技术过滤）
-                      setScanPhase('boll')
-                      const s = await fetch('/api/selection/boll-scan', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({}) })
-                      if (!s.ok) { setScanPhase(null); setError('扫描启动失败'); return }
-                      setBollTaskId((await s.json()).task_id)
-                      // 布林完成后自动跑融合排序，融合完成后自动跑回测
-                    }}>
-                      {isRunning ? (
-                        scanPhase === 'candidates' ? '获取候选...' :
-                        scanPhase === 'boll' ? '多策略扫描中...' :
-                        scanPhase === 'fusion' ? '融合排名中...' :
-                        scanPhase === 'backtest' ? '回测运行中...' :
-                        '运行中...'
-                      ) : '开始选股'}
-                    </Button>
-                    {isRunning ? (
-                      <Button variant="destructive" onClick={() => {
-                        if (scanPhase === 'boll') cancelTask(bollTaskId)
-                        else if (scanPhase === 'fusion') cancelTask(fusionTaskId)
-                        else if (scanPhase === 'backtest') cancelTask(btTaskId)
-                      }}>停止</Button>
-                    ) : null}
-                  </div>
-                </div>
+            {/* 核心指标卡片区 */}
+            <section className="grid grid-cols-2 lg:grid-cols-4 gap-3 mb-4">
+              <MacroCard label="美元/人民币" value={macroSnapshot['美元/人民币']} hint="汇率↑利空出口/外资流出" format="price" />
+              <MacroCard label="Shibor隔夜" value={macroSnapshot['Shibor隔夜']} hint="% · 银行间利率↑资金面偏紧" format="percent" />
+              <MacroCard label="10Y国债收益率" value={macroSnapshot['10Y国债收益率']} hint="% · 长端利率↑压制估值" format="percent" />
+              <MacroCard label="制造业PMI" value={macroSnapshot['制造业PMI']} hint={macroSnapshot['_pmi_date'] ? `最新: ${macroSnapshot['_pmi_date']}` : '50=荣枯线'} format="number" threshold={50} />
+            </section>
 
-                {scanPhase && scanProgress.total > 0 ? (
-                  <div className="progress-bar-wrap">
-                    <div className="progress-bar-track">
-                      <div className="progress-bar-fill" style={{ width: `${(scanProgress.current / scanProgress.total) * 100}%` }} />
+            {/* 汇率 + 利率 双栏 */}
+            <div className="grid grid-cols-1 lg:grid-cols-2 gap-4 mb-4">
+              <SectionCard title="汇率（中行折算价）" subtitle="人民币兑主要外币">
+                <div className="index-list">
+                  {[
+                    { name: '美元/人民币', val: macroSnapshot['美元/人民币'], fmt: 'price' },
+                    { name: '欧元/人民币', val: macroSnapshot['欧元/人民币'], fmt: 'price' },
+                    { name: '日元/人民币', val: macroSnapshot['日元/人民币'], fmt: 'price' },
+                    { name: '港币/人民币', val: macroSnapshot['港币/人民币'], fmt: 'price' },
+                  ].map((item) => (
+                    <div key={item.name} className="index-row">
+                      <span>{item.name}</span>
+                      <strong>{item.val != null ? (item.fmt === 'price' ? item.val.toFixed(4) : Number(item.val).toFixed(2)) : '--'}</strong>
+                      <em className="text-muted">中行折算价</em>
                     </div>
-                    <span className="progress-bar-text">{scanProgress.current} / {scanProgress.total}</span>
-                  </div>
-                ) : null}
+                  ))}
+                </div>
+              </SectionCard>
 
-                <div className="log-panel">
-                  <div className="section-head log-head">
-                    <h3>运行日志</h3>
-                    <span className={cn(
-                      'log-status',
-                      scanPhase === 'boll' && 'running',
-                      scanPhase === 'fusion' && 'running',
-                      scanPhase === 'backtest' && 'running',
-                    )}>
-                      {scanPhase === 'boll' ? '多策略扫描中' :
-                       scanPhase === 'fusion' ? '策略融合中' :
-                       scanPhase === 'backtest' ? '回测中' :
-                       scanPhase === 'candidates' ? '获取候选...' :
-                       '等待执行'}
+              <SectionCard title="利率体系" subtitle="SHIBOR + LPR">
+                <div className="index-list">
+                  {[
+                    { name: 'SHIBOR 隔夜', val: macroSnapshot['Shibor隔夜'], unit: '%' },
+                    { name: 'SHIBOR 1周', val: macroSnapshot['Shibor_1周'], unit: '%' },
+                    { name: 'SHIBOR 2月', val: macroSnapshot['Shibor_2月'], unit: '%' },
+                    { name: 'LPR 1年期', val: macroSnapshot['LPR_1年'], unit: '%' },
+                    { name: 'LPR 5年期', val: macroSnapshot['LPR_5年'], unit: '%' },
+                  ].map((item) => (
+                    <div key={item.name} className="index-row">
+                      <span>{item.name}</span>
+                      <strong>{item.val != null ? Number(item.val).toFixed(2) + item.unit : '--'}</strong>
+                      <em className="text-muted">{item.unit}</em>
+                    </div>
+                  ))}
+                </div>
+              </SectionCard>
+            </div>
+
+            {/* 景气 + 物价 双栏 */}
+            <div className="grid grid-cols-1 lg:grid-cols-2 gap-4 mb-4">
+              <SectionCard title="景气与物价" subtitle="PMI / CPI / PPI">
+                <div className="macro-grid-3">
+                  <div className="macro-mini-card">
+                    <span className="macro-mini-label">制造业 PMI</span>
+                    <span className={`macro-mini-value ${Number(macroSnapshot['制造业PMI'] || 0) >= 50 ? 'text-up' : 'text-down'}`}>
+                      {macroSnapshot['制造业PMI'] != null ? Number(macroSnapshot['制造业PMI']).toFixed(1) : '--'}
                     </span>
+                    <span className="macro-mini-hint">50 = 荣枯线</span>
                   </div>
-                  <div className="log-body" ref={logContainerRef}>
-                    {scanLogs.length > 0 ? scanLogs.map((line, idx) => (
-                      <div key={idx} className="log-line">
-                        <span className="log-idx">{idx + 1}</span>
-                        <span className="log-text">{line}</span>
-                      </div>
-                    )) : <div className="empty-state">点击按钮后实时显示运行进度</div>}
+                  <div className="macro-mini-card">
+                    <span className="macro-mini-label">CPI 同比</span>
+                    <span className={`macro-mini-value ${Number(macroSnapshot['CPI同比'] || 0) >= 0 ? 'text-up' : 'text-down'}`}>
+                      {macroSnapshot['CPI同比'] != null ? (Number(macroSnapshot['CPI同比']) >= 0 ? '+' : '') + Number(macroSnapshot['CPI同比']).toFixed(2) + '%' : '--'}
+                    </span>
+                    <span className="macro-mini-hint">居民消费价格</span>
+                  </div>
+                  <div className="macro-mini-card">
+                    <span className="macro-mini-label">PPI 同比</span>
+                    <span className={`macro-mini-value ${Number(macroSnapshot['PPI同比'] || 0) >= 0 ? 'text-up' : 'text-down'}`}>
+                      {macroSnapshot['PPI同比'] != null ? (Number(macroSnapshot['PPI同比']) >= 0 ? '+' : '') + Number(macroSnapshot['PPI同比']).toFixed(2) + '%' : '--'}
+                    </span>
+                    <span className="macro-mini-hint">工业出厂价格</span>
                   </div>
                 </div>
-
-                {selectionRows.length > 0 ? (
-                  <div className="table-shell">
-                    <div className="section-head"><h3>策略扫描结果</h3><span>命中 {selectionRows.length} 只</span></div>
-                    {selectionRows.slice(0, 8).map((row) => (
-                      <div key={row.代码} className="table-row">
-                        <span>{row.代码}</span>
-                        <strong>{Number(row.最新价 ?? 0).toFixed(2)}</strong>
-                        <em>{row.信号}</em>
-                      </div>
-                    ))}
-                  </div>
-                ) : null}
-
-                {fusionRows.length > 0 ? (
-                  <div className="table-shell spaced">
-                    <div className="section-head"><h3>策略融合结果</h3><span>{fusionResult?.saved_path ?? '未保存'}</span></div>
-                    {fusionRows.slice(0, 8).map((row) => (
-                      <div key={row.股票代码} className="table-row">
-                        <span>{row.股票代码}</span>
-                        <strong>{row.股票名称}</strong>
-                        <em>{row.综合评分}</em>
-                      </div>
-                    ))}
-                  </div>
-                ) : null}
               </SectionCard>
 
-              <SectionCard title="候选池">
-                <div className="candidate-pool">
-                  <div className="candidate-count">
-                    <span className="candidate-count-num">{candidateCodes.length}</span>
-                    <span className="candidate-count-label">只股票</span>
-                  </div>
-                  {candidateCodes.length > 0 ? (
-                    <div className="candidate-tags">
-                      {candidateCodes.slice(0, 20).map((code) => (
-                        <span key={code} className="candidate-tag">{code}</span>
-                      ))}
-                      {candidateCodes.length > 20 && (
-                        <span className="candidate-tag candidate-tag-more">+{candidateCodes.length - 20}</span>
-                      )}
-                    </div>
-                  ) : (
-                    <div className="empty-state">暂无候选</div>
-                  )}
-                  <div className="candidate-footer">展示前 20 个</div>
+              <SectionCard title="宏观解读" subtitle="基于当前数据的定性判断">
+                <div className="macro-insight-panel">
+                  {_renderMacroInsight(macroSnapshot)}
                 </div>
               </SectionCard>
             </div>
+
+            {/* 数据时间戳 */}
+            <SectionCard title="数据状态" subtitle={`生成时间: ${dashboard?.generated_at ? new Date(dashboard.generated_at).toLocaleString('zh-CN') : '--'}`}>
+              <div className="grid grid-cols-2 lg:grid-cols-4 gap-3">
+                {[
+                  { name: '汇率指标', count: ['美元/人民币','欧元/人民币','日元/人民币','港币/人民币'].filter(k => macroSnapshot[k] != null).length, total: 4 },
+                  { name: '利率指标', count: ['Shibor隔夜','Shibor_1周','Shibor_2月','LPR_1年','LPR_5年'].filter(k => macroSnapshot[k] != null).length, total: 5 },
+                  { name: '景气指标', count: ['制造业PMI','CPI同比','PPI同比'].filter(k => macroSnapshot[k] != null).length, total: 3 },
+                  { name: '债券指标', count: ['10Y国债收益率'].filter(k => macroSnapshot[k] != null).length, total: 1 },
+                ].map((g) => (
+                  <div key={g.name} className="macro-stat-row">
+                    <span>{g.name}</span>
+                    <strong>{g.count}/{g.total}</strong>
+                    <em className={g.count >= g.total * 0.6 ? 'text-up' : 'text-muted'}>{g.count >= g.total * 0.6 ? '正常' : '部分缺失'}</em>
+                  </div>
+                ))}
+              </div>
+            </SectionCard>
           </>
         ) : null}
 

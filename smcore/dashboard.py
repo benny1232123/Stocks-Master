@@ -359,11 +359,19 @@ def fetch_market_breadth() -> dict[str, Any] | None:
 
 
 def fetch_macro_snapshot() -> dict[str, Any] | None:
-    """Fetch a small macro snapshot for the dashboard."""
+    """Fetch a comprehensive macro snapshot for the dashboard.
+
+    指标体系（全部 fail-soft，单源失败不影响其他）：
+      - 汇率：美元/欧元/日元/港币 vs 人民币（中行折算价）
+      - 利率：SHIBOR O/N + 1W + 2M；LPR 1Y + 5Y
+      - 债券：10Y 国债收益率
+      -景气：制造业 PMI（最近月）
+      - 物价：CPI 同比、PPI 同比（最近月）
+    """
     import akshare as ak
 
     result: dict[str, Any] = {}
-
+    # ── 汇率（中行折算价）────────────────────────────
     try:
         usdcny = _call_with_retry(lambda: ak.currency_boc_sina(symbol="美元"), DASHBOARD_API_TIMEOUT)
         if usdcny is not None and not usdcny.empty:
@@ -373,12 +381,171 @@ def fetch_macro_snapshot() -> dict[str, Any] | None:
     except Exception:
         pass
 
-    # ── SHIBOR 隔夜（多源回退 + 昨日缓存兜底）─────────────────────────
-    # ak.rate_interbank 经常返回空/超时，这里依次尝试多个数据源，
-    # 全部失败时读取昨日缓存，避免前端显示 "--"。
-    result["Shibor隔夜"] = _fetch_shibor_overnight()
+    for sym, label in [("欧元", "欧元/人民币"), ("日元", "日元/人民币"), ("港币", "港币/人民币")]:
+        try:
+            df = _call_with_retry(lambda s=sym: ak.currency_boc_sina(symbol=s), DASHBOARD_API_TIMEOUT)
+            if df is not None and not df.empty and "中行折算价" in df.iloc[-1]:
+                val = float(df.iloc[-1].get("中行折算价", 0)) / 100
+                if val > 0:
+                    result[label] = val
+        except Exception:
+            pass
+
+    # ── SHIBOR 利率 ──────────────────────────────────
+    shibor = _fetch_shibor_multi()
+    if shibor:
+        result.update(shibor)
+
+    # ── LPR（贷款市场报价利率）────────────────────────
+    for yr, label in [(1, "LPR_1年"), (5, "LPR_5年")]:
+        try:
+            df = _call_with_retry(
+                lambda y=yr: ak.lpr_market_report(period=y),
+                DASHBOARD_API_TIMEOUT,
+            )
+            if df is not None and not df.empty:
+                # 取最新一期
+                last = df.iloc[-1]
+                # 列名可能是 "贷款利率" 或类似
+                for col in ["贷款利率", "利率", "LPR"]:
+                    if col in last and pd.notna(last[col]):
+                        val = float(last[col])
+                        if val > 0:
+                            result[label] = val
+                        break
+        except Exception:
+            pass
+
+    # ── 10Y 国债收益率 ───────────────────────────────
+    try:
+        df = _call_with_retry(
+            lambda: ak.bond_zh_us_rate(search="中国10年国债收益率"),
+            DASHBOARD_API_TIMEOUT,
+        )
+        if df is not None and not df.empty:
+            last = df.iloc[-1]
+            # 尝试常见列名
+            for col in ["yield", "Yield", "收益率", "close", "收盘价"]:
+                if col in last and pd.notna(last[col]):
+                    result["10Y国债收益率"] = float(last[col])
+                    break
+    except Exception:
+        pass
+
+    # ── PMI（制造业采购经理指数）──────────────────────
+    try:
+        df = _call_with_retry(
+            lambda: ak.macro_china_pmi_yearly(),
+            DASHBOARD_API_TIMEOUT,
+        )
+        if df is not None and not df.empty:
+            last = df.iloc[-1]
+            for col in ["制造业PMI", "PMI", "值", "数值"]:
+                if col in last and pd.notna(last[col]):
+                    result["制造业PMI"] = float(last[col])
+                    # 同时记录月份
+                    if "月份" in last or "月" in last or "时间" in last:
+                        for dc in ["月份", "月", "时间", "date", "Date"]:
+                            if dc in last:
+                                result["_pmi_date"] = str(last[dc])
+                                break
+                    break
+    except Exception:
+        pass
+
+    # ── CPI / PPI（同比）──────────────────────────────
+    try:
+        cpi = _call_with_retry(
+            lambda: ak.macro_china_cpi_yearly(),
+            DASHBOARD_API_TIMEOUT,
+        )
+        if cpi is not None and not cpi.empty:
+            last = cpi.iloc[-1]
+            for col in ["全国CPI_当月同比", "CPI", "居民消费价格指数_当月同比"]:
+                if col in last and pd.notna(last[col]):
+                    result["CPI同比"] = float(last[col])
+                    break
+    except Exception:
+        pass
+
+    try:
+        ppi = _call_with_retry(
+            lambda: ak.macro_china_ppi_yearly(),
+            DASHBOARD_API_TIMEOUT,
+        )
+        if ppi is not None and not ppi.empty:
+            last = ppi.iloc[-1]
+            for col in ["全国PPI_当月同比", "PPI", "工业生产者出厂价格指数_当月同比"]:
+                if col in last and pd.notna(last[col]):
+                    result["PPI同比"] = float(last[col])
+                    break
+    except Exception:
+        pass
 
     return result or None
+
+
+def _fetch_shibor_multi() -> dict[str, float] | None:
+    """获取多条 SHIBOR 期限利率，返回 {SHIBOR_O/N: x.x, SHIBOR_1W: x.x, ...}。
+
+    数据源优先级：
+      1) macro_china_shibor_all（全期限，最快）
+      2) 各期限单独 rate_interbank（备源）
+      3) 昨日缓存兜底（保证不返回空）
+    """
+    import akshare as ak
+    out: dict[str, float] = {}
+
+    # --- 主源：macro_china_shibor_all ---
+    try:
+        df = _call_with_retry(
+            lambda: ak.macro_china_shibor_all(),
+            DASHBOARD_API_TIMEOUT,
+        )
+        if df is not None and not df.empty:
+            mapping = {
+                "O/N定价": "Shibor隔夜",
+                "O/N-定价": "Shibor隔夜",
+                "1W定价": "Shibor_1周",
+                "1W-定价": "Shibor_1周",
+                "2M定价": "Shibor_2月",
+                "2M-定价": "Shibor_2月",
+            }
+            for src_col, out_key in mapping.items():
+                if src_col in df.columns:
+                    val = float(df.iloc[-1][src_col]) if pd.notna(df.iloc[-1][src_col]) else None
+                    if val and val > 0:
+                        out[out_key] = val
+            if len(out) >= 2:
+                return out
+    except Exception as exc:
+        print(f"[dashboard] SHIBOR multi 源1失败: {exc}")
+
+    # --- 备源：逐期限 rate_interbank ---
+    for period, key in [("隔夜", "Shibor隔夜"), ("1周", "Shibor_1周"), ("2月", "Shibor_2月")]:
+        if key in out:
+            continue
+        try:
+            df = _call_with_retry(
+                lambda p=period: ak.rate_interbank(
+                    market="上海银行间同业拆放利率", symbol="Shibor", indicator=p,
+                ),
+                DASHBOARD_API_TIMEOUT,
+            )
+            if df is not None and not df.empty and "利率" in df.columns:
+                val = float(df.iloc[-1]["利率"])
+                if val > 0:
+                    out[key] = val
+        except Exception:
+            pass
+
+    # --- 兜底：昨日缓存 ---
+    if len(out) == 0:
+        single = _fetch_shibor_overnight()
+        if single is not None:
+            out["Shibor隔夜"] = single
+
+    return out if out else None
 
 
 def _fetch_shibor_overnight() -> float | None:
