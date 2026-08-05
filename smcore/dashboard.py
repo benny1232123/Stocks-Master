@@ -464,46 +464,94 @@ def _live_bond_10y():
 
 def _live_pmi():
     import akshare as ak
-    df = ak.macro_china_pmi_yearly()
-    if df is None or df.empty:
-        return None
-    last = df.iloc[-1]
-    for col in ("制造业PMI", "PMI", "值", "数值", "制造业-指数"):
-        if col in last and pd.notna(last[col]):
-            v = float(last[col])
-            if 30 < v < 70:
-                dt = last.get("月份") or last.get("date") or last.get("时间")
-                return (v, str(dt) if dt is not None else None)
+    # 主源：年度（jin10）
+    try:
+        df = ak.macro_china_pmi_yearly()
+        if df is not None and not df.empty:
+            last = df.iloc[-1]
+            for col in ("制造业PMI", "PMI", "值", "数值", "制造业-指数"):
+                if col in last and pd.notna(last[col]):
+                    v = float(last[col])
+                    if 30 < v < 70:
+                        dt = last.get("月份") or last.get("date") or last.get("时间")
+                        return (v, str(dt) if dt is not None else None)
+    except Exception:
+        pass
+    # 备源：月度
+    try:
+        df = ak.macro_china_pmi()
+        if df is not None and not df.empty:
+            last = df.iloc[-1]
+            for col in ("制造业PMI", "PMI", "值", "数值", "制造业-指数"):
+                if col in last and pd.notna(last[col]):
+                    v = float(last[col])
+                    if 30 < v < 70:
+                        dt = last.get("月份") or last.get("date") or last.get("时间")
+                        return (v, str(dt) if dt is not None else None)
+    except Exception:
+        pass
     return None
 
 
 def _live_cpi():
     import akshare as ak
-    df = ak.macro_china_cpi_yearly()
-    if df is None or df.empty:
-        return None
-    last = df.iloc[-1]
-    for col in ("全国CPI_当月同比", "CPI", "CPI年率", "居民消费价格指数_当月同比", "同比增长"):
-        if col in last and pd.notna(last[col]):
-            v = float(last[col])
-            if -10 < v < 20:
-                dt = last.get("月份") or last.get("date")
-                return (v, str(dt) if dt is not None else None)
+    # 主源：年度
+    try:
+        df = ak.macro_china_cpi_yearly()
+        if df is not None and not df.empty:
+            last = df.iloc[-1]
+            for col in ("全国CPI_当月同比", "CPI", "CPI年率", "居民消费价格指数_当月同比", "同比增长"):
+                if col in last and pd.notna(last[col]):
+                    v = float(last[col])
+                    if -10 < v < 20:
+                        dt = last.get("月份") or last.get("date")
+                        return (v, str(dt) if dt is not None else None)
+    except Exception:
+        pass
+    # 备源：月度
+    try:
+        df = ak.macro_china_cpi_monthly()
+        if df is not None and not df.empty:
+            last = df.iloc[-1]
+            for col in ("全国CPI_当月同比", "CPI", "CPI年率", "居民消费价格指数_当月同比", "同比增长"):
+                if col in last and pd.notna(last[col]):
+                    v = float(last[col])
+                    if -10 < v < 20:
+                        dt = last.get("月份") or last.get("date")
+                        return (v, str(dt) if dt is not None else None)
+    except Exception:
+        pass
     return None
 
 
 def _live_ppi():
     import akshare as ak
-    df = ak.macro_china_ppi_yearly()
-    if df is None or df.empty:
-        return None
-    last = df.iloc[-1]
-    for col in ("全国PPI_当月同比", "PPI", "PPI年率", "工业生产者出厂价格指数_当月同比", "同比增长"):
-        if col in last and pd.notna(last[col]):
-            v = float(last[col])
-            if -20 < v < 20:
-                dt = last.get("月份") or last.get("date")
-                return (v, str(dt) if dt is not None else None)
+    # 主源：年度
+    try:
+        df = ak.macro_china_ppi_yearly()
+        if df is not None and not df.empty:
+            last = df.iloc[-1]
+            for col in ("全国PPI_当月同比", "PPI", "PPI年率", "工业生产者出厂价格指数_当月同比", "同比增长"):
+                if col in last and pd.notna(last[col]):
+                    v = float(last[col])
+                    if -20 < v < 20:
+                        dt = last.get("月份") or last.get("date")
+                        return (v, str(dt) if dt is not None else None)
+    except Exception:
+        pass
+    # 备源：月度
+    try:
+        df = ak.macro_china_ppi_monthly()
+        if df is not None and not df.empty:
+            last = df.iloc[-1]
+            for col in ("全国PPI_当月同比", "PPI", "PPI年率", "工业生产者出厂价格指数_当月同比", "同比增长"):
+                if col in last and pd.notna(last[col]):
+                    v = float(last[col])
+                    if -20 < v < 20:
+                        dt = last.get("月份") or last.get("date")
+                        return (v, str(dt) if dt is not None else None)
+    except Exception:
+        pass
     return None
 
 

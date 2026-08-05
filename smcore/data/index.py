@@ -5,7 +5,6 @@
 from __future__ import annotations
 
 import pandas as pd
-import akshare as ak
 
 from smcore.cache import cache_table_name, read_cache_df, write_cache_df
 from smcore.utils.code import to_ak_index_symbol
@@ -49,6 +48,7 @@ def fetch_index_close_series(index_code, start_date_text, end_date_text) -> pd.D
     if not cached_df.empty:
         out = _normalize_index_df(cached_df)
     else:
+        import akshare as ak  # 懒加载：CI runner 可能未安装
         try:
             raw = ak.stock_zh_index_daily(symbol=symbol)
             out = _normalize_index_df(raw)
