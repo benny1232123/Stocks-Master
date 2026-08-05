@@ -69,6 +69,11 @@ NO_BACKFILL = os.environ.get("WALK_FORWARD_NO_BACKFILL", "0") == "1"
 _SHRINKAGES = [0.0, 0.2, 0.4, 0.6]
 _FLOORS = [0.0, 1.0, 2.0, 3.0]
 
+# 出场参数搜索网格（P3 扩展：让出场引擎超参也接受样本外扫描，降低对单一配置的过拟合）
+_STOP_LOSS_GRID = [0.06, 0.08, 0.10, 0.12]
+_TRAILING_GRID = [0.04, 0.05, 0.07]
+_HOLD_GRID = [7, 10, 14]
+
 
 def _all_daily_action_lists() -> list[Path]:
     """返回所有 Daily-Action-List 文件路径（按文件名排序）。"""
@@ -113,6 +118,39 @@ def _forward_return_from_kdata(code: str, signal_date: str, hold_days: int = WF_
     sell_idx = min(hold_days, len(df) - 1)
     sell_open = float(df.iloc[sell_idx]["open"])
     return (sell_open - buy_open) / buy_open * 100.0
+
+
+def _forward_return_exit_aware(code: str, signal_date: str, hold_days: int = WF_HOLD_DAYS,
+                               *, stop_loss_pct: float, trailing_stop_pct: float,
+                               strategy: str = "") -> float | None:
+    """出场感知前向收益（P3）：信号日后首交易日开盘买入，经 simulate_position 出场引擎
+    （次日开盘买 / T+1 防当天卖 / 硬止损 / 止盈 / 移动止盈 / MA60 破位 / 持有期满）持有到 end_date。
+
+    与 naive 回补（次开盘买→持有N日开盘卖）相比，这里真实应用止损/止盈，使回补路径与
+    生产 Multi-Backtest 的出场感知口径一致（审计指出的「两套 tracker 持有假设不一致」修复点）。
+    """
+    from datetime import timedelta
+
+    from smcore.strategy.position_monitor import simulate_position
+
+    df = _load_cached_kdata(code)
+    if df.empty:
+        return None
+    sig = pd.to_datetime(signal_date)
+    future = df[df["date"] > sig]
+    if future.empty:
+        return None
+    buy_date = future.iloc[0]["date"].date()
+    end_date = (buy_date + timedelta(days=hold_days)).date()
+    res = simulate_position(
+        code, buy_date, end_date,
+        stop_loss_pct=stop_loss_pct,
+        trailing_stop_pct=trailing_stop_pct,
+        hold_days=hold_days,
+        strategy=strategy,
+    )
+    rp = res.get("return_pct")
+    return rp if (rp is not None and isinstance(rp, (int, float))) else None
 
 
 def _read_dal_sources(dal_path: Path) -> dict[str, set[str]]:
@@ -160,8 +198,12 @@ def _multi_backtest_records(sd: str) -> list[dict]:
     return rows
 
 
-def _backfill_records(sd: str) -> list[dict]:
-    """对缺失 Multi-Backtest trades 的信号日，用本地 k_data 做因果回补。"""
+def _backfill_records(sd: str, exit_kwargs=None) -> list[dict]:
+    """对缺失 Multi-Backtest trades 的信号日，用本地 k_data 做因果回补。
+
+    exit_kwargs=None → naive 回补（次开盘买→持有N日开盘卖，保持向后兼容）；
+    exit_kwargs 给定 → 出场感知回补（simulate_position，扫描出场参数用）。
+    """
     if NO_BACKFILL:
         return []
     dal_path = STOCK_DATA_DIR / f"Daily-Action-List-{sd}.csv"
@@ -172,7 +214,15 @@ def _backfill_records(sd: str) -> list[dict]:
         return []
     rows = []
     for code, strats in code2strat.items():
-        rp = _forward_return_from_kdata(code, sd, WF_HOLD_DAYS)
+        if exit_kwargs:
+            rp = _forward_return_exit_aware(
+                code, sd, WF_HOLD_DAYS,
+                stop_loss_pct=exit_kwargs.get("stop_loss_pct", 0.08),
+                trailing_stop_pct=exit_kwargs.get("trailing_stop_pct", 0.05),
+                strategy="/".join(sorted(strats)),
+            )
+        else:
+            rp = _forward_return_from_kdata(code, sd, WF_HOLD_DAYS)
         if rp is None:
             continue
         rows.append({
@@ -184,15 +234,15 @@ def _backfill_records(sd: str) -> list[dict]:
     return rows
 
 
-def _day_records(sd: str) -> list[dict]:
+def _day_records(sd: str, exit_kwargs=None) -> list[dict]:
     """返回信号日 sd 的所有 (code, sources, return_pct) 记录。
 
-    优先用生产 Multi-Backtest；缺失/空则用本地 k_data 回补。
+    优先用生产 Multi-Backtest；缺失/空则用本地 k_data 回补（exit_kwargs 透传）。
     """
     recs = _multi_backtest_records(sd)
     if recs:
         return recs
-    return _backfill_records(sd)
+    return _backfill_records(sd, exit_kwargs=exit_kwargs)
 
 
 def _all_signal_days() -> list[str]:
@@ -235,7 +285,7 @@ def causal_edge(cutoff: str, window: int = EDGE_WINDOW) -> dict:
     return edge
 
 
-def _load_day_picks(sd: str) -> list[dict]:
+def _load_day_picks(sd: str, exit_kwargs=None) -> list[dict]:
     """返回 Ti 当天 (code, sources, return_pct, prod_weight) 列表。"""
     dal = STOCK_DATA_DIR / f"Daily-Action-List-{sd}.csv"
     if not dal.exists():
@@ -247,7 +297,7 @@ def _load_day_picks(sd: str) -> list[dict]:
     if d.empty or "股票代码" not in d.columns:
         return []
     # 构造 return 映射
-    records = _day_records(sd)
+    records = _day_records(sd, exit_kwargs=exit_kwargs)
     ret_map = {r["code"]: r["return_pct"] for r in records}
     dal_map: dict[str, dict] = {}
     for _, r in d.iterrows():
@@ -281,10 +331,10 @@ def _weights_for_day(sd: str, shrinkage=None, floor=None, zero_negative_edge=Tru
                             zero_negative_edge=zero_negative_edge), False
 
 
-def _day_returns(shrinkage, floor, zero_negative_edge, sd) -> tuple[float, float] | None:
+def _day_returns(shrinkage, floor, zero_negative_edge, sd, exit_kwargs=None) -> tuple[float, float] | None:
     """返回 (adaptive_ret, equal_ret)；无数据返回 None。"""
     weights, _ = _weights_for_day(sd, shrinkage, floor, zero_negative_edge)
-    picks = _load_day_picks(sd)
+    picks = _load_day_picks(sd, exit_kwargs=exit_kwargs)
     if not picks:
         return None
     wvals = []
@@ -300,13 +350,14 @@ def _day_returns(shrinkage, floor, zero_negative_edge, sd) -> tuple[float, float
     return adaptive_ret, equal_ret
 
 
-def _portfolio_returns(shrinkage=None, floor=None, zero_negative_edge=True, days=None) -> list[dict]:
-    """返回每个有效信号日的 (adaptive_ret, equal_ret)。"""
+def _portfolio_returns(shrinkage=None, floor=None, zero_negative_edge=True, days=None,
+                       exit_kwargs=None) -> list[dict]:
+    """返回每个有效信号日的 (adaptive_ret, equal_ret)。exit_kwargs 透传至回补路径。"""
     if days is None:
         days = _all_signal_days()
     rows = []
     for sd in days:
-        r = _day_returns(shrinkage, floor, zero_negative_edge, sd)
+        r = _day_returns(shrinkage, floor, zero_negative_edge, sd, exit_kwargs=exit_kwargs)
         if r is None:
             continue
         ad, eq = r
@@ -417,11 +468,12 @@ def _grid() -> list[tuple[float, float]]:
     return [(s, f) for s in _SHRINKAGES for f in _FLOORS]
 
 
-def _sweep_table(days=None) -> list[dict]:
-    """网格扫描：每个 (shrinkage, FLOOR) 组合的样本外累计收益。"""
+def _sweep_table(days=None, exit_kwargs=None) -> list[dict]:
+    """网格扫描：每个 (shrinkage, FLOOR) 组合的样本外累计收益。exit_kwargs 透传。"""
     out = []
     for shr, fl in _grid():
-        rows = _portfolio_returns(shr, floor=fl, zero_negative_edge=(fl > 0), days=days)
+        rows = _portfolio_returns(shr, floor=fl, zero_negative_edge=(fl > 0), days=days,
+                                  exit_kwargs=exit_kwargs)
         ad = _cum(rows, "adaptive_ret")
         eq = _cum(rows, "equal_ret")
         out.append({"shrinkage": shr, "floor": fl, "floor_on": fl > 0,
@@ -433,6 +485,37 @@ def _sweep_table(days=None) -> list[dict]:
 def sweep() -> list[dict]:
     """参数敏感性扫描：放松平滑(shrinkage)与地板(floor)后，自适应组合的样本外表现。"""
     return _sweep_table()
+
+
+def sweep_exits(days=None) -> list[dict]:
+    """出场参数敏感性扫描（P3，离线、出场感知）。
+
+    固定当前权重配置（adaptive_weights CONFIG），扫描 (止损% × trailing% × 持有期) 网格下
+    的样本外累计收益，找出最优出场组合。回补路径改用 simulate_position（出场感知），使扫描
+    结果真实反映止损/止盈/移动止盈/持有期满对样本外收益的边际影响。
+
+    注：RS_TOL（relativity 筛选阈值）与流动性门槛需重跑策略*筛选*（relativity 依赖联网取数），
+    不在离线扫描范围内，列为后续项；本函数只覆盖「持仓期出场参数」这一可离线维度。
+    """
+    if days is None:
+        days = _all_signal_days()
+    from smcore.strategy.adaptive_weights import CONFIG
+
+    shr, fl = CONFIG["shrinkage"], CONFIG["FLOOR"]
+    out = []
+    for sl in _STOP_LOSS_GRID:
+        for tr in _TRAILING_GRID:
+            for hd in _HOLD_GRID:
+                ek = {"stop_loss_pct": sl, "trailing_stop_pct": tr, "hold_days": hd}
+                rows = _portfolio_returns(shr, floor=fl, zero_negative_edge=(fl > 0),
+                                          days=days, exit_kwargs=ek)
+                ad = _cum(rows, "adaptive_ret")
+                eq = _cum(rows, "equal_ret")
+                out.append({"stop_loss_pct": sl, "trailing_stop_pct": tr, "hold_days": hd,
+                            "adaptive": round(ad, 2), "equal": round(eq, 2),
+                            "diff": round(ad - eq, 2)})
+    out.sort(key=lambda x: x["adaptive"], reverse=True)
+    return out
 
 
 def recommend() -> dict:
@@ -513,6 +596,7 @@ def main() -> int:
     import argparse
     ap = argparse.ArgumentParser()
     ap.add_argument("--sweep", action="store_true", help="额外输出参数敏感性扫描表")
+    ap.add_argument("--sweep-exits", action="store_true", help="额外输出出场参数敏感性扫描表（止损%/trailing%/持有期，出场感知）")
     ap.add_argument("--recommend", action="store_true", help="输出月度重验推荐配置 JSON（含稳健性判定）")
     ap.add_argument("--emit-json", default=None, help="把 recommend/sweep 结果写到该 JSON 路径")
     args = ap.parse_args()
@@ -527,6 +611,15 @@ def main() -> int:
         print(f"{'shrinkage':>10}{'FLOOR':>8}{'自适应':>10}{'等权':>10}{'差值':>10}")
         for s in sweep():
             print(f"{s['shrinkage']:>10}{s['floor']:>8}{s['adaptive']:>+10.2f}{s['equal']:>+10.2f}{s['diff']:>+10.2f}")
+
+    if args.sweep_exits:
+        print("=" * 64)
+        print("出场参数敏感性扫描（固定当前权重，网格：止损% × trailing% × 持有期，出场感知回补）")
+        print("=" * 64)
+        print(f"{'止损%':>8}{'trailing%':>10}{'持有期':>8}{'自适应':>10}{'等权':>10}{'差值':>10}")
+        for s in sweep_exits():
+            print(f"{s['stop_loss_pct']*100:>7.0f}%{s['trailing_stop_pct']*100:>9.0f}%"
+                  f"{s['hold_days']:>8}{s['adaptive']:>+10.2f}{s['equal']:>+10.2f}{s['diff']:>+10.2f}")
 
     rec = None
     if args.recommend:
@@ -549,7 +642,16 @@ def main() -> int:
         print(f"写明细失败：{e}")
 
     if args.emit_json:
-        target = rec if args.recommend else {"sweep": sweep()}
+        if args.recommend:
+            target = rec
+        else:
+            target = {}
+            if args.sweep:
+                target["sweep"] = sweep()
+            if args.sweep_exits:
+                target["sweep_exits"] = sweep_exits()
+            if not target:
+                target = {"sweep": sweep()}
         try:
             with open(args.emit_json, "w", encoding="utf-8") as f:
                 json.dump(target, f, ensure_ascii=False, indent=2, default=str)

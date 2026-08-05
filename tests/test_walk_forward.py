@@ -58,3 +58,15 @@ def test_causal_edge_excludes_future():
     # edge 来自更早的信号日，total_n 为有限非负数
     total_n = sum(e["n"] for e in edge.values())
     assert total_n >= 0
+
+
+def test_sweep_exits_grid_shape():
+    """出场参数扫描应产出完整 (止损% × trailing% × 持有期) 网格，且按自适应收益降序。"""
+    # 用少量信号日即可验证网格结构（组合数与天数无关），避免拖慢测试
+    days = wf._all_signal_days()[:3]
+    grid = wf.sweep_exits(days=days)
+    assert len(grid) == 36  # 4 止损 × 3 trailing × 3 持有期
+    for g in grid:
+        assert {"stop_loss_pct", "trailing_stop_pct", "hold_days",
+                "adaptive", "equal", "diff"} <= set(g)
+    assert all(grid[i]["adaptive"] >= grid[i + 1]["adaptive"] for i in range(len(grid) - 1))
