@@ -85,6 +85,9 @@ frontend/public/data/api/
 
 # Session residue (do NOT commit)
 *.bundle
+
+# 宏观看板「最近真实值」运行时缓存（本地生成，跨请求复用，非源码）
+stock_data/daily_cache/macro_last_good.json
 .tmp_*.sh
 *.patch
 

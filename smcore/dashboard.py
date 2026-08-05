@@ -8,6 +8,7 @@ import threading
 import time
 
 import requests
+import json as _json
 from datetime import date, datetime, timedelta
 from pathlib import Path
 from typing import Any
@@ -358,194 +359,280 @@ def fetch_market_breadth() -> dict[str, Any] | None:
     return None
 
 
+# ── 宏观快照：持久化「最近一次真实值」缓存 ──────────────────
+# 部署端（Render）能稳定访问 akshare / 外汇 API，实时拉取；本缓存保证：
+#   1) 实时拉取成功 → 存真实值 + 标注「实时」
+#   2) 实时拉取失败 → 复用上次真实值 + 标注「缓存(日期)」（不再显示写死假常量）
+#   3) 从未成功过 → 才用 SEED 种子常量（标注「静态预估」），正常不应出现
+MACRO_TTL_SECONDS = float(os.getenv("MACRO_TTL_SECONDS", "1800"))  # 30 分钟
+LAST_GOOD_PATH = CACHE_DIR / "macro_last_good.json"
+# 绝对最后的种子常量（仅当从未成功联网取数时使用）
+_SEED_MACRO = {
+    "LPR_1年": 3.35, "LPR_5年": 3.95,
+    "10Y国债收益率": 2.18,
+    "制造业PMI": 49.3, "CPI同比": 0.3, "PPI同比": -1.2,
+}
+
+
+def _load_last_good() -> dict:
+    if LAST_GOOD_PATH.exists():
+        try:
+            return _json.loads(LAST_GOOD_PATH.read_text(encoding="utf-8"))
+        except Exception:
+            return {}
+    return {}
+
+
+def _save_last_good(data: dict) -> None:
+    try:
+        CACHE_DIR.mkdir(parents=True, exist_ok=True)
+        LAST_GOOD_PATH.write_text(_json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
+    except Exception:
+        pass
+
+
+def _ingest(key, live_fn, last_good, sane=None):
+    """尝试实时取值；失败→上次真实值(标注缓存)；再失败→种子常量。
+    返回 (value, src, stale, date_str)。"""
+    now = datetime.now()
+    val = None
+    dt = None
+    try:
+        res = live_fn()
+        if res:
+            v, d = res
+            if v is not None and (sane is None or sane[0] < float(v) < sane[1]):
+                val, dt = float(v), d
+    except Exception as exc:
+        print(f"[dashboard] {key} 实时获取失败: {exc}")
+    if val is not None:
+        last_good[key] = {"value": val, "ts": now.isoformat(timespec="seconds"),
+                          "date": dt or now.strftime("%Y-%m-%d")}
+        return val, "实时", False, dt
+    lg = last_good.get(key)
+    if lg and lg.get("value") is not None:
+        return lg["value"], "缓存 " + str(lg.get("date") or str(lg.get("ts", ""))[:10]), True, lg.get("date")
+    seed = _SEED_MACRO.get(key)
+    if seed is not None:
+        return seed, "静态预估", True, None
+    return None, None, True, None
+
+
+def _live_fx_rates():
+    """免费外汇 API（open.er-api.com，无需 key，海外可达）。base=CNY。"""
+    r = requests.get("https://open.er-api.com/v6/latest/CNY", timeout=10,
+                     headers={"User-Agent": "Mozilla/5.0"})
+    d = r.json()
+    rates = d.get("rates") or {}
+    if not rates:
+        return None
+    out = {}
+    for sym in ("USD", "EUR", "JPY", "HKD"):
+        rv = rates.get(sym)
+        if rv:
+            out[sym] = 1.0 / rv  # 1 外币 = ? 人民币
+    return out or None
+
+
+def _live_lpr():
+    import akshare as ak
+    df = ak.macro_china_lpr()
+    if df is None or df.empty:
+        return None
+    last = df.iloc[-1]
+    return {"LPR1Y": last.get("LPR1Y"), "LPR5Y": last.get("LPR5Y"),
+            "date": str(last.get("TRADE_DATE")) if last.get("TRADE_DATE") is not None else None}
+
+
+def _live_bond_10y():
+    import akshare as ak
+    end = date.today()
+    start = end - timedelta(days=330)  # 窗口必须 < 1 年
+    df = ak.bond_china_yield(start_date=start.strftime("%Y%m%d"),
+                             end_date=end.strftime("%Y%m%d"))
+    if df is None or df.empty or "10年" not in df.columns:
+        return None
+    row = df.iloc[-1]
+    v = row.get("10年")
+    if v is None or pd.isna(v):
+        return None
+    dt = row.get("日期")
+    return (float(v), str(dt) if dt is not None else None)
+
+
+def _live_pmi():
+    import akshare as ak
+    df = ak.macro_china_pmi_yearly()
+    if df is None or df.empty:
+        return None
+    last = df.iloc[-1]
+    for col in ("制造业PMI", "PMI", "值", "数值", "制造业-指数"):
+        if col in last and pd.notna(last[col]):
+            v = float(last[col])
+            if 30 < v < 70:
+                dt = last.get("月份") or last.get("date") or last.get("时间")
+                return (v, str(dt) if dt is not None else None)
+    return None
+
+
+def _live_cpi():
+    import akshare as ak
+    df = ak.macro_china_cpi_yearly()
+    if df is None or df.empty:
+        return None
+    last = df.iloc[-1]
+    for col in ("全国CPI_当月同比", "CPI", "CPI年率", "居民消费价格指数_当月同比", "同比增长"):
+        if col in last and pd.notna(last[col]):
+            v = float(last[col])
+            if -10 < v < 20:
+                dt = last.get("月份") or last.get("date")
+                return (v, str(dt) if dt is not None else None)
+    return None
+
+
+def _live_ppi():
+    import akshare as ak
+    df = ak.macro_china_ppi_yearly()
+    if df is None or df.empty:
+        return None
+    last = df.iloc[-1]
+    for col in ("全国PPI_当月同比", "PPI", "PPI年率", "工业生产者出厂价格指数_当月同比", "同比增长"):
+        if col in last and pd.notna(last[col]):
+            v = float(last[col])
+            if -20 < v < 20:
+                dt = last.get("月份") or last.get("date")
+                return (v, str(dt) if dt is not None else None)
+    return None
+
+
 def fetch_macro_snapshot() -> dict[str, Any] | None:
     """Fetch a comprehensive macro snapshot for the dashboard.
 
     指标体系（全部 fail-soft，单源失败不影响其他）：
-      - 汇率：美元/欧元/日元/港币 vs 人民币（中行折算价）
-      - 利率：SHIBOR O/N + 1W + 2M；LPR 1Y + 5Y（含静态兜底）
-      - 债券：10Y 国债收益率（多源回退）
-      - 景气：制造业 PMI（最近月，含静态兜底）
-      - 物价：CPI 同比、PPI 同比（含静态兜底）
+      - 汇率：美元/欧元/日元/港币 vs 人民币（open.er-api.com，海外可达）
+      - 利率：SHIBOR O/N + 1W + 2M（akshare）；LPR 1Y + 5Y（akshare macro_china_lpr）
+      - 债券：10Y 国债收益率（akshare bond_china_yield，窗口 <1 年）
+      - 景气：制造业 PMI（akshare macro_china_pmi_yearly，jin10）
+      - 物价：CPI 同比、PPI 同比（akshare *_yearly，jin10）
 
-    每个指标附带 _src 字段标注数据来源（akshare / 静态兜底 / 缓存），
-    供前端展示数据新鲜度与可信度。
+    每个指标附带 *_src 字段标注来源（实时 / 缓存(日期) / 静态预估），
+    并写入 *_stale=True 标记非实时；顶部 _data_status 汇总实时/缓存/静态项数。
+    通过持久化 macro_last_good.json，实时拉取失败时复用上次真实值，
+    而非显示写死的假常量——看板因此持续动态更新。
     """
-    import akshare as ak
-    from datetime import date as _date
+    last_good = _load_last_good()
+    result: dict[str, Any] = {"_generated_at": date.today().isoformat()}
+    status = {"实时": 0, "缓存": 0, "静态": 0}
 
-    result: dict[str, Any] = {"_generated_at": _date.today().isoformat()}
-    today_str = _date.today().strftime("%Y-%m-%d")
+    def place(key, value, src, stale, dt):
+        if value is None:
+            return
+        result[key] = round(float(value), 4) if isinstance(value, float) else value
+        result[key + "_src"] = src
+        if stale:
+            result[key + "_stale"] = True
+        if src.startswith("实时"):
+            status["实时"] += 1
+        elif src.startswith("缓存"):
+            status["缓存"] += 1
+        else:
+            status["静态"] += 1
+        if dt and key in ("制造业PMI", "CPI同比", "PPI同比", "LPR_1年", "LPR_5年"):
+            result.setdefault(key + "_date", dt)
 
-    # ── 汇率（中行折算价）────────────────────────────
-    # 中行折算价单位：外币/人民币（即 1 人民币 = 折算价 数量 外币）
-    # 美元/欧元/港币的折算价在 0.x~7x 范围，直接展示合理；
-    # 日元折算价约 4.7（即 1 CNY ≈ 4.7 JPY 的旧数据）或 ~21（最新），
-    # 展示时统一为「1 外币 = ? 人民币」以保持直觉一致。
-    _fx_map = {"美元": "美元/人民币", "欧元": "欧元/人民币", "日元": "日元/人民币", "港币": "港币/人民币"}
-    for sym, label in _fx_map.items():
-        try:
-            df = _call_with_retry(lambda s=sym: ak.currency_boc_sina(symbol=s), DASHBOARD_API_TIMEOUT)
-            if df is not None and not df.empty:
-                last = df.iloc[-1]
-                if "中行折算价" in last and pd.notna(last["中行折算价"]):
-                    raw = float(last["中行折算价"]) / 100.0  # 中行折算价原始单位为 100外币/CNY
-                    if raw > 0:
-                        # 日元特殊处理：raw 是 100日元/CNY → 转为 1日元=多少CNY
-                        if sym == "日元":
-                            result[label] = raw / 100.0  # 1 JPY = ? CNY
-                            result[f"{label}_inverted"] = 100.0 / raw  # 1 CNY = ? JPY（更直观）
-                        else:
-                            result[label] = raw
-                        result[f"{label}_src"] = "中行折算价"
-        except Exception:
-            pass
-
-    # ── SHIBOR 利率 ──────────────────────────────────
-    shibor = _fetch_shibor_multi()
-    if shibor:
-        result.update(shibor)
-
-    # ── LPR（贷款市场报价利率）────────────────────────
-    # LPR 每月 20 日发布一次，变动极低频。akshare 接口常超时，
-    # 故使用静态兜底（每月手动更新即可，或等 CI 定期刷新）。
-    lpr_fallback = {
-        "LPR_1年": 3.35,
-        "LPR_5年": 3.95,
-        "_lpr_date": "2026-07-21",
-        "_lpr_src": "静态兜底（2026-07 LPR 报价，待 akshare 恢复后自动覆盖）",
+    # ── 汇率（open.er-api.com，base=CNY）──────────────
+    fx_map = {
+        "美元/人民币": ("USD", (5, 8)),
+        "欧元/人民币": ("EUR", (5, 12)),
+        "日元/人民币": ("JPY", (0.02, 0.1)),
+        "港币/人民币": ("HKD", (0.5, 1.5)),
     }
-    for yr, label in [(1, "LPR_1年"), (5, "LPR_5年")]:
-        fetched = False
-        try:
-            df = _call_with_retry(
-                lambda y=yr: ak.lpr_market_report(period=y),
-                DASHBOARD_API_TIMEOUT,
-            )
-            if df is not None and not df.empty:
-                last = df.iloc[-1]
-                for col in ["贷款利率", "利率", "LPR"]:
-                    if col in last and pd.notna(last[col]):
-                        val = float(last[col])
-                        if val > 0:
-                            result[label] = val
-                            result[f"{label}_src"] = "akshare LPR"
-                            fetched = True
-                        break
-        except Exception:
-            pass
-        if not fetched and label in lpr_fallback:
-            result[label] = lpr_fallback[label]
-            result[f"{label}_src"] = lpr_fallback.get("_lpr_src", "静态兜底")
+    try:
+        fx = _live_fx_rates()
+    except Exception as exc:
+        print(f"[dashboard] FX 实时获取失败: {exc}")
+        fx = None
+    for key, (sym, sane) in fx_map.items():
+        rv = fx.get(sym) if fx else None
+        if rv:
+            v, s, st, _ = _ingest(key, lambda r=rv: (r, None), last_good, sane)
+        else:
+            v, s, st, _ = _ingest(key, lambda: None, last_good, sane)
+        place(key, v, s, st, None)
+        if key == "日元/人民币" and v:
+            result["日元/人民币_inverted"] = round(1.0 / float(v), 3)
+
+    # ── SHIBOR 利率（akshare，海外可达）────────────────
+    shibor = _fetch_shibor_multi()
+    for k, sane in (("Shibor隔夜", (0, 6)), ("Shibor_1周", (0, 6)), ("Shibor_1月", (0, 6))):
+        if shibor and k in shibor and shibor[k] is not None:
+            v = float(shibor[k])
+            if sane[0] < v < sane[1]:
+                last_good[k] = {"value": v, "ts": datetime.now().isoformat(timespec="seconds"),
+                               "date": date.today().isoformat()}
+                place(k, v, "实时", False, None)
+                continue
+        v, s, st, _ = _ingest(k, lambda: None, last_good, sane)
+        place(k, v, s, st, None)
+
+    # ── LPR（贷款市场报价利率，每月 20 日发布）──────────
+    try:
+        lpr = _live_lpr()
+    except Exception as exc:
+        print(f"[dashboard] LPR 实时获取失败: {exc}")
+        lpr = None
+    if lpr and lpr.get("LPR1Y") is not None:
+        for key, field in (("LPR_1年", "LPR1Y"), ("LPR_5年", "LPR5Y")):
+            v, s, st, _ = _ingest(key, lambda f=field: (lpr.get(f), lpr.get("date")), last_good, (2, 6))
+            place(key, v, s, st, lpr.get("date"))
+    else:
+        for key in ("LPR_1年", "LPR_5年"):
+            v, s, st, _ = _ingest(key, lambda: None, last_good, (2, 6))
+            place(key, v, s, st, None)
 
     # ── 10Y 国债收益率 ───────────────────────────────
-    # 多源回退：主力债源 → 备用接口 → 静态兜底
-    bond_fallback = {"10Y国债收益率": 2.18, "10Y国债收益率_src": "静态兜底（2026-08 初估值，待刷新）"}
-    bond_ok = False
-    try:
-        df = _call_with_retry(
-            lambda: ak.bond_zh_us_rate(search="中国10年国债收益率"),
-            DASHBOARD_API_TIMEOUT,
-        )
-        if df is not None and not df.empty:
-            last = df.iloc[-1]
-            for col in ["yield", "Yield", "收益率", "close", "收盘价"]:
-                if col in last and pd.notna(last[col]):
-                    val = float(last[col])
-                    if 0 < val < 10:  # 合理范围 guard
-                        result["10Y国债收益率"] = val
-                        result["10Y国债收益率_src"] = "akshare 中债"
-                        bond_ok = True
-                    break
-    except Exception:
-        pass
-    # 备用源：国内债券收益率曲线
-    if not bond_ok:
-        try:
-            df2 = _call_with_retry(
-                lambda: ak.bond_zh_cn_spot(),
-                DASHBOARD_API_TIMEOUT,
-            )
-            if df2 is not None and not df2.empty:
-                # 尝试找 10Y 列
-                for c in df2.columns:
-                    if "10" in str(c) and ("年" in str(c) or "Y" in str(c) or "y" in str(c)):
-                        val = float(df2[c].iloc[-1])
-                        if 0 < val < 10:
-                            result["10Y国债收益率"] = val
-                            result["10Y国债收益率_src"] = "akshare 中债现货(备)"
-                            bond_ok = True
-                        break
-        except Exception:
-            pass
-    if not bond_ok:
-        result.update(bond_fallback)
+    v, s, st, dt = _ingest("10Y国债收益率", _live_bond_10y, last_good, (0, 10))
+    place("10Y国债收益率", v, s, st, dt)
 
-    # ── PMI（制造业采购经理指数）──────────────────────
-    pmi_fallback = {"制造业PMI": 49.3, "_pmi_date": "2026-07", "_pmi_src": "静态兜底（2026-07 官方初值，待刷新）"}
-    pmi_ok = False
-    try:
-        df = _call_with_retry(lambda: ak.macro_china_pmi_yearly(), DASHBOARD_API_TIMEOUT)
-        if df is not None and not df.empty:
-            last = df.iloc[-1]
-            for col in ["制造业PMI", "PMI", "值", "数值"]:
-                if col in last and pd.notna(last[col]):
-                    val = float(last[col])
-                    if 30 < val < 70:  # 合理范围
-                        result["制造业PMI"] = val
-                        result["_pmi_src"] = "akshare PMI"
-                        pmi_ok = True
-                        for dc in ["月份", "月", "时间", "date", "Date"]:
-                            if dc in last:
-                                result["_pmi_date"] = str(last[dc])
-                                break
-                    break
-    except Exception:
-        pass
-    if not pmi_ok:
-        result.update(pmi_fallback)
+    # ── PMI / CPI / PPI ──────────────────────────────
+    v, s, st, dt = _ingest("制造业PMI", _live_pmi, last_good, (30, 70))
+    place("制造业PMI", v, s, st, dt)
+    v, s, st, dt = _ingest("CPI同比", _live_cpi, last_good, (-10, 20))
+    place("CPI同比", v, s, st, dt)
+    v, s, st, dt = _ingest("PPI同比", _live_ppi, last_good, (-20, 20))
+    place("PPI同比", v, s, st, dt)
 
-    # ── CPI / PPI（同比）──────────────────────────────
-    cpi_fallback = {"CPI同比": 0.3, "_cpi_date": "2026-07", "_cpi_src": "静态兜底（2026-07 估算）"}
-    ppi_fallback_d = {"PPI同比": -1.2, "_ppi_date": "2026-07", "_ppi_src": "静态兜底（2026-07 估算）"}
-
-    cpi_ok = False
-    try:
-        cpi = _call_with_retry(lambda: ak.macro_china_cpi_yearly(), DASHBOARD_API_TIMEOUT)
-        if cpi is not None and not cpi.empty:
-            last = cpi.iloc[-1]
-            for col in ["全国CPI_当月同比", "CPI", "居民消费价格指数_当月同比"]:
-                if col in last and pd.notna(last[col]):
-                    val = float(last[col])
-                    if -10 < val < 20:  # 合理范围
-                        result["CPI同比"] = val
-                        result["_cpi_src"] = "akshare CPI"
-                        cpi_ok = True
-                    break
-    except Exception:
-        pass
-    if not cpi_ok:
-        result.update(cpi_fallback)
-
-    ppi_ok = False
-    try:
-        ppi = _call_with_retry(lambda: ak.macro_china_ppi_yearly(), DASHBOARD_API_TIMEOUT)
-        if ppi is not None and not ppi.empty:
-            last = ppi.iloc[-1]
-            for col in ["全国PPI_当月同比", "PPI", "工业生产者出厂价格指数_当月同比"]:
-                if col in last and pd.notna(last[col]):
-                    val = float(last[col])
-                    if -20 < val < 20:  # 合理范围
-                        result["PPI同比"] = val
-                        result["_ppi_src"] = "akshare PPI"
-                        ppi_ok = True
-                    break
-    except Exception:
-        pass
-    if not ppi_ok:
-        result.update(ppi_fallback_d)
-
+    result["_data_status"] = status
+    _save_last_good(last_good)
     return result or None
+
+
+def _macro_cache_path() -> Path:
+    today = date.today().strftime("%Y-%m-%d")
+    return CACHE_DIR / f"macro_snapshot_{today}.pkl"
+
+
+def _macro_needs_refresh() -> bool:
+    p = _macro_cache_path()
+    if not p.exists():
+        return True
+    age = datetime.now().timestamp() - p.stat().st_mtime
+    return age > MACRO_TTL_SECONDS
+
+
+def _refresh_macro_cache() -> None:
+    try:
+        snap = fetch_macro_snapshot()
+        if snap:
+            save_cache("macro_snapshot", snap)
+    except Exception as exc:
+        print(f"[dashboard] 宏观缓存刷新失败: {exc}")
+
+
+def maybe_refresh_macro_cache() -> None:
+    """宏观缓存过期/缺失时后台刷新，保证看板数据持续动态更新（不阻塞请求）。"""
+    if _macro_needs_refresh():
+        threading.Thread(target=_refresh_macro_cache, daemon=True).start()
 
 
 def _fetch_shibor_multi() -> dict[str, float] | None:
@@ -571,8 +658,8 @@ def _fetch_shibor_multi() -> dict[str, float] | None:
                 "O/N-定价": "Shibor隔夜",
                 "1W定价": "Shibor_1周",
                 "1W-定价": "Shibor_1周",
-                "2M定价": "Shibor_2月",
-                "2M-定价": "Shibor_2月",
+                "1M定价": "Shibor_1月",
+                "1M-定价": "Shibor_1月",
             }
             for src_col, out_key in mapping.items():
                 if src_col in df.columns:
@@ -585,7 +672,7 @@ def _fetch_shibor_multi() -> dict[str, float] | None:
         print(f"[dashboard] SHIBOR multi 源1失败: {exc}")
 
     # --- 备源：逐期限 rate_interbank ---
-    for period, key in [("隔夜", "Shibor隔夜"), ("1周", "Shibor_1周"), ("2月", "Shibor_2月")]:
+    for period, key in [("隔夜", "Shibor隔夜"), ("1周", "Shibor_1周"), ("1月", "Shibor_1月")]:
         if key in out:
             continue
         try:
@@ -683,6 +770,7 @@ def build_dashboard_payload() -> dict[str, Any]:
     cached_breadth = _load_cache("market_breadth")
     payload["market_breadth"] = cached_breadth if isinstance(cached_breadth, dict) else {}
 
+    maybe_refresh_macro_cache()
     cached_macro = _load_cache("macro_snapshot")
     payload["macro_snapshot"] = cached_macro if isinstance(cached_macro, dict) else {}
     return payload

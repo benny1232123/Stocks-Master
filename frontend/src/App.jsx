@@ -325,7 +325,9 @@ function MacroCard({ label, value, hint, format = 'number', threshold, annotatio
     <div className="stat-card macro-card">
       <div className="macro-card-header">
         <span className="macro-card-label">{label}</span>
-        {src && src !== '中行折算价' && <span className="macro-src-tag">{src}</span>}
+        {src && src !== '中行折算价' && (
+          <span className={cn('macro-src-tag', (src.startsWith('缓存') || src.startsWith('静态')) ? 'stale' : '')}>{src}</span>
+        )}
       </div>
       <div className={cn('macro-card-value', colorClass)}>{display}</div>
       {hint && <div className="macro-card-hint">{hint}</div>}
@@ -568,6 +570,8 @@ function FilterSeg({ value, onChange }) {
 function App() {
   const [activeView, setActiveView] = useState('overview')
   const [dashboard, setDashboard] = useState(null)
+  const [refreshing, setRefreshing] = useState(false)
+  const [nowTick, setNowTick] = useState(Date.now())
   const [artifacts, setArtifacts] = useState(null)
   const [portfolio, setPortfolio] = useState(null)
   const [selHold, setSelHold] = useState(-1)
@@ -895,30 +899,49 @@ function App() {
     return () => clearTimeout(timer)
   }, [error])
 
-  useEffect(() => {
+  // 看板数据加载（宏观/组合/日报等）——可手动触发，并每 10 分钟自动轮询保持动态
+  const dashboardCtrl = useRef(null)
+  const loadDashboard = useCallback(async () => {
+    if (dashboardCtrl.current) dashboardCtrl.current.abort()
     const controller = new AbortController()
-    async function loadDashboard() {
-      try {
-        setError('')
-        const [d, a, p, b] = await Promise.all([
-          fetch('/api/dashboard', { signal: controller.signal }),
-          fetch('/api/artifacts/daily-action-list', { signal: controller.signal }),
-          fetch('/api/portfolio', { signal: controller.signal }),
-          fetch('/api/backtests/latest', { signal: controller.signal }),
-        ])
-        if (!d.ok || !a.ok || !p.ok || !b.ok) throw new Error('api error')
-        setDashboard(await d.json())
-        setArtifacts(await a.json())
-        setPortfolio(await p.json())
-        setBacktest(await b.json())
-        const c = await fetch('/api/selection/candidates?price_min=5&price_max=30', { signal: controller.signal })
-        if (c.ok) setCandidateCodes((await c.json()).codes ?? [])
-        const an = await fetch(`/api/analysis/${analysisCode}`, { signal: controller.signal })
-        if (an.ok) setAnalysis(await an.json())
-      } catch (err) { if (err.name !== 'AbortError') setError('后端未启动或接口不可用') }
-    }
-    loadDashboard()
-    return () => controller.abort()
+    dashboardCtrl.current = controller
+    const signal = controller.signal
+    try {
+      setError('')
+      setRefreshing(true)
+      const [d, a, p, b] = await Promise.all([
+        fetch('/api/dashboard', { signal }),
+        fetch('/api/artifacts/daily-action-list', { signal }),
+        fetch('/api/portfolio', { signal }),
+        fetch('/api/backtests/latest', { signal }),
+      ])
+      if (!d.ok || !a.ok || !p.ok || !b.ok) throw new Error('api error')
+      setDashboard(await d.json())
+      setArtifacts(await a.json())
+      setPortfolio(await p.json())
+      setBacktest(await b.json())
+      const c = await fetch('/api/selection/candidates?price_min=5&price_max=30', { signal })
+      if (c.ok) setCandidateCodes((await c.json()).codes ?? [])
+      const an = await fetch(`/api/analysis/${analysisCode}`, { signal })
+      if (an.ok) setAnalysis(await an.json())
+    } catch (err) { if (err.name !== 'AbortError') setError('后端未启动或接口不可用') }
+    finally { setRefreshing(false) }
+  }, [analysisCode])
+
+  const loadDashboardRef = useRef(loadDashboard)
+  useEffect(() => { loadDashboardRef.current = loadDashboard }, [loadDashboard])
+
+  // 首次加载 + 每 10 分钟自动刷新（宏观数据每日/日内更新，轮询保证看板持续动态）
+  useEffect(() => {
+    loadDashboardRef.current()
+    const timer = setInterval(() => loadDashboardRef.current(), 10 * 60 * 1000)
+    return () => clearInterval(timer)
+  }, [])
+
+  // 每 30 秒更新一次「X 分钟前」相对时间显示
+  useEffect(() => {
+    const t = setInterval(() => setNowTick(Date.now()), 30 * 1000)
+    return () => clearInterval(t)
   }, [])
 
   // 加载完整日报数据（全部行，供「日报」标签全量查看）
@@ -1183,13 +1206,25 @@ function App() {
 
         {activeView === 'selection' ? (
           <>
-            <div className="page-header">
-              <h2>宏观经济看板</h2>
-              <p>汇率 · 利率 · 债券收益率 · 景气指数 · 物价 —— 实时追踪影响 A 股的核心宏观变量。</p>
-              <div className="macro-update-time">
-                数据更新: {dashboard?.generated_at ? new Date(dashboard.generated_at).toLocaleString('zh-CN') : '加载中...'}
-                {macroSnapshot._generated_at && <span className="macro-src-tag">快照 {macroSnapshot._generated_at}</span>}
+            <div className="page-header macro-header">
+              <div>
+                <h2>宏观经济看板</h2>
+                <p>汇率 · 利率 · 债券收益率 · 景气指数 · 物价 —— 实时追踪影响 A 股的核心宏观变量。</p>
               </div>
+              <button className="macro-refresh-btn" onClick={() => loadDashboard()} disabled={refreshing}>
+                {refreshing ? '刷新中…' : '↻ 刷新数据'}
+              </button>
+            </div>
+            <div className="macro-update-time">
+              数据更新: {dashboard?.generated_at ? new Date(dashboard.generated_at).toLocaleString('zh-CN') : '加载中...'}
+              {dashboard?.generated_at && (() => {
+                const mins = Math.max(0, Math.floor((nowTick - new Date(dashboard.generated_at).getTime()) / 60000))
+                return <span className="macro-src-tag">· 更新于 {mins < 1 ? '刚刚' : `${mins} 分钟前`}</span>
+              })()}
+              {macroSnapshot._generated_at && <span className="macro-src-tag">快照 {macroSnapshot._generated_at}</span>}
+              {macroSnapshot._data_status && (
+                <span className="macro-src-tag">实时 {macroSnapshot._data_status['实时']} · 缓存 {macroSnapshot._data_status['缓存']} · 静态 {macroSnapshot._data_status['静态']}</span>
+              )}
             </div>
 
             {/* 核心指标卡片区 — 每张卡都有「是什么 + 为什么重要」 */}
@@ -1293,7 +1328,7 @@ function App() {
                   {[
                     { name: 'SHIBOR 隔夜', val: macroSnapshot['Shibor隔夜'], unit: '%', note: '银行间隔夜借钱成本', src: macroSnapshot['Shibor隔夜_src'] },
                     { name: 'SHIBOR 1 周', val: macroSnapshot['Shibor_1周'], unit: '%', note: '短期流动性风向标', src: macroSnapshot['Shibor_1周_src'] },
-                    { name: 'SHIBOR 2 月', val: macroSnapshot['Shibor_2月'], unit: '%', note: '中长期资金价格', src: macroSnapshot['Shibor_2月_src'] },
+                    { name: 'SHIBOR 1 月', val: macroSnapshot['Shibor_1月'], unit: '%', note: '短期资金价格', src: macroSnapshot['Shibor_1月_src'] },
                     { name: 'LPR 1 年期', val: macroSnapshot['LPR_1年'], unit: '%', note: '企业贷款定价基准', src: macroSnapshot['LPR_1年_src'] },
                     { name: 'LPR 5 年期', val: macroSnapshot['LPR_5年'], unit: '%', note: '房贷利率锚定标的', src: macroSnapshot['LPR_5年_src'] },
                   ].map((item) => (
@@ -1348,18 +1383,31 @@ function App() {
             {/* 数据状态面板 */}
             <SectionCard title="数据状态" subtitle={`生成时间: ${dashboard?.generated_at ? new Date(dashboard.generated_at).toLocaleString('zh-CN') : '--'} · 快照 ${macroSnapshot._generated_at || '--'}`}>
               <div className="grid grid-cols-2 lg:grid-cols-4 gap-3">
-                {[
-                  { name: '汇率指标', count: ['美元/人民币','欧元/人民币','日元/人民币','港币/人民币'].filter(k => macroSnapshot[k] != null).length, total: 4 },
-                  { name: '利率指标', count: ['Shibor隔夜','Shibor_1周','Shibor_2月','LPR_1年','LPR_5年'].filter(k => macroSnapshot[k] != null).length, total: 5 },
-                  { name: '景气指标', count: ['制造业PMI','CPI同比','PPI同比'].filter(k => macroSnapshot[k] != null).length, total: 3 },
-                  { name: '债券指标', count: ['10Y国债收益率'].filter(k => macroSnapshot[k] != null).length, total: 1 },
-                ].map((g) => (
-                  <div key={g.name} className="macro-stat-row">
-                    <span>{g.name}</span>
-                    <strong>{g.count}/{g.total}</strong>
-                    <em className={g.count >= g.total * 0.6 ? 'text-up' : 'text-muted'}>{g.count >= g.total * 0.6 ? '✅ 正常' : '⚠️ 部分缺失(静态兜底)'}</em>
-                  </div>
-                ))}
+                {(() => {
+                  const catKeys = {
+                    '汇率指标': ['美元/人民币','欧元/人民币','日元/人民币','港币/人民币'],
+                    '利率指标': ['Shibor隔夜','Shibor_1周','Shibor_1月','LPR_1年','LPR_5年'],
+                    '景气指标': ['制造业PMI','CPI同比','PPI同比'],
+                    '债券指标': ['10Y国债收益率'],
+                  }
+                  return Object.entries(catKeys).map(([name, keys]) => {
+                    let live = 0, cached = 0
+                    keys.forEach((k) => {
+                      if (macroSnapshot[k] == null) return
+                      if (macroSnapshot[k + '_stale']) cached++; else live++
+                    })
+                    const total = keys.length
+                    const cls = live >= total ? 'text-up' : cached > 0 ? 'text-warn' : 'text-muted'
+                    const label = live >= total ? '✅ 全实时' : cached > 0 ? `⚠️ ${cached} 项缓存/静态` : '⚠️ 缺失'
+                    return (
+                      <div key={name} className="macro-stat-row">
+                        <span>{name}</span>
+                        <strong>{live}/{total} 实时</strong>
+                        <em className={cls}>{label}</em>
+                      </div>
+                    )
+                  })
+                })()}
               </div>
             </SectionCard>
           </>
