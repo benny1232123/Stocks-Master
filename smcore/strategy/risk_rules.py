@@ -88,6 +88,10 @@ _BUILTIN_DEFAULTS = {
         "w_rel_strength": 0.6,
         "w_volatility": -0.4,
         "w_liquidity": 0.3,
+        "use_fundamentals": False,
+        "w_quality": 0.0,
+        "w_value": 0.0,
+        "w_fund_flow": 0.0,
         "scale": 4.0,
         "max_bonus": 15.0,
     },
@@ -128,11 +132,16 @@ RISK_CONFIG = CONFIG  # 别名，便于 defaults.py 反导入
 
 
 def save_risk_config(cfg: dict) -> str:
-    """把完整配置写回 risk_config.json（供月度重验 CI 调用）。
+    """把完整配置写回 risk_config.json（供月度重验 CI / 因子调优调用）。
 
-    只写已知键；未知键被忽略，子字典做合并而非整体替换。写完后同步刷新模块级缓存。
+    以「当前已加载的配置(CONFIG)」为基底合并，仅更新传入的键；未知键忽略，子字典做
+    合并而非整体替换。写完后同步刷新模块级缓存。
+
+    ⚠️ 必须以 live CONFIG 为基底，不能用 _BUILTIN_DEFAULTS：后者是代码内回退默认值，
+    可能与文件里已调优的值不一致（如 sector_momentum_bonus.dispersion_k 默认 1.2 vs
+    文件 120），以它为基底会把已调优值静默回退成默认值。
     """
-    target = _deep_copy(_BUILTIN_DEFAULTS)
+    target = _deep_copy(CONFIG)
     for k, v in cfg.items():
         if k not in target:
             continue
@@ -381,6 +390,10 @@ def compute_factor_scoring_params() -> dict:
         "w_rel_strength": float(cfg["w_rel_strength"]),
         "w_volatility": float(cfg["w_volatility"]),
         "w_liquidity": float(cfg["w_liquidity"]),
+        "use_fundamentals": bool(cfg.get("use_fundamentals", False)),
+        "w_quality": float(cfg.get("w_quality", 0.0)),
+        "w_value": float(cfg.get("w_value", 0.0)),
+        "w_fund_flow": float(cfg.get("w_fund_flow", 0.0)),
         "scale": float(cfg["scale"]),
         "max_bonus": float(cfg["max_bonus"]),
     }

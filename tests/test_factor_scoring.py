@@ -94,9 +94,12 @@ def test_factor_scores_missing_safe(patched, monkeypatch):
 def test_factor_scoring_params_from_config():
     p = rr.compute_factor_scoring_params()
     assert "enabled" in p
-    assert p["w_momentum_20"] == 1.0
+    # 权重来自 risk_config.json（walk-forward 调优后的 rs_heavy 预设）
+    assert p["w_momentum_20"] == 0.8
+    assert p["w_rel_strength"] == 1.2
     assert p["w_volatility"] == -0.4  # 低波动加分（负向权重）
     assert p["max_bonus"] == 15.0
+    assert "use_fundamentals" in p
 
 
 def test_volatility_weight_sign(patched):

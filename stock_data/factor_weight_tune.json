@@ -1,0 +1,34 @@
+{
+  "current": {
+    "preset": "base",
+    "scale": 8.0,
+    "weights": {
+      "w_momentum_20": 0.8,
+      "w_momentum_60": 0.7,
+      "w_rel_strength": 1.2,
+      "w_volatility": -0.4,
+      "w_liquidity": 0.3,
+      "w_quality": 0.0,
+      "w_value": 0.0,
+      "w_fund_flow": 0.0
+    },
+    "avg_port": 0.8891
+  },
+  "recommended": {
+    "preset": "rs_heavy",
+    "scale": 8.0,
+    "weights": {
+      "w_momentum_20": 0.8,
+      "w_momentum_60": 0.7,
+      "w_rel_strength": 1.2,
+      "w_volatility": -0.4,
+      "w_liquidity": 0.3,
+      "w_quality": 0.0,
+      "w_value": 0.0,
+      "w_fund_flow": 0.0
+    },
+    "avg_port": 0.8891
+  },
+  "improvement_pp": 0.0,
+  "robust": false
+}

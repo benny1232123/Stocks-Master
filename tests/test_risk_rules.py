@@ -138,3 +138,35 @@ def test_vol_tighten_bounds():
     assert rr._vol_tighten(None, 0.5) == 1.0
     assert rr._vol_tighten(0.99, 0.5) < 1.0
     assert rr._vol_tighten(0.01, 0.5) > 1.0
+
+
+def test_save_risk_config_preserves_tuned_values():
+    """回归：save_risk_config 必须以 live CONFIG 为基底合并，不能把已调优值回退成默认值。
+
+    历史上 save_risk_config 以 _BUILTIN_DEFAULTS 为基底，曾把文件里已调优的
+    vol_target.enabled=false 与 sector_momentum_bonus.dispersion_k=120 静默回退成
+    默认值(true / 1.2)，误伤其他配置。本测试锁定该行为不再复发。
+    """
+    import copy
+    import json
+    from pathlib import Path
+
+    path = Path(rr.__file__).resolve().parent / "risk_config.json"
+    original = path.read_text(encoding="utf-8")
+    try:
+        # 确保 live CONFIG 持有非默认调优值（与文件一致）
+        assert rr.CONFIG["vol_target"]["enabled"] is False  # 默认是 True
+        assert rr.CONFIG["sector_momentum_bonus"]["dispersion_k"] == 120.0  # 默认是 1.2
+        # 仅更新 factor_scoring 的一个键后整盘写回
+        new_full = copy.deepcopy(rr.CONFIG)
+        new_full["factor_scoring"]["scale"] = 8.0
+        rr.save_risk_config(new_full)
+        reloaded = json.loads(path.read_text(encoding="utf-8"))
+        # 无关键必须保留已调优值，不被回退成默认值
+        assert reloaded["vol_target"]["enabled"] is False
+        assert reloaded["sector_momentum_bonus"]["dispersion_k"] == 120.0
+        assert reloaded["factor_scoring"]["scale"] == 8.0
+    finally:
+        path.write_text(original, encoding="utf-8")
+        # 刷新模块缓存
+        rr.CONFIG.update(json.loads(original))

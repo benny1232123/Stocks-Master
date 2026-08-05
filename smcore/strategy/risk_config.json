@@ -46,8 +46,8 @@
     "ceil": 12.0
   },
   "drawdown": {
-    "dd_full": 0.20,
-    "dd_cash_ceiling": 0.50
+    "dd_full": 0.2,
+    "dd_cash_ceiling": 0.5
   },
   "exit": {
     "stop_loss_pct": {
@@ -65,7 +65,7 @@
     "trailing_stop_pct": {
       "base": 0.05,
       "min": 0.025,
-      "max": 0.10,
+      "max": 0.1,
       "vol_sensitivity": 0.5
     },
     "trend_exit_ma": {
@@ -85,7 +85,7 @@
   },
   "vol_target": {
     "enabled": false,
-    "target_annual_vol": 0.30,
+    "target_annual_vol": 0.3,
     "window": 20,
     "min_scale": 0.3,
     "max_scale": 2.0
@@ -96,12 +96,16 @@
   },
   "factor_scoring": {
     "enabled": true,
-    "w_momentum_20": 1.0,
+    "w_momentum_20": 0.8,
     "w_momentum_60": 0.7,
-    "w_rel_strength": 0.6,
+    "w_rel_strength": 1.2,
     "w_volatility": -0.4,
     "w_liquidity": 0.3,
-    "scale": 4.0,
+    "use_fundamentals": false,
+    "w_quality": 0.0,
+    "w_value": 0.0,
+    "w_fund_flow": 0.0,
+    "scale": 8.0,
     "max_bonus": 15.0
   }
 }
