@@ -300,26 +300,36 @@ function SectionCard({ title, subtitle, children, className = '' }) {
   )
 }
 
-function MacroCard({ label, value, hint, format = 'number', threshold }) {
+function MacroCard({ label, value, hint, format = 'number', threshold, annotation, src }) {
   const display = value == null ? '--'
-    : format === 'price' ? value.toFixed(4)
+    : format === 'price' ? Number(value).toFixed(4)
     : format === 'percent' ? Number(value).toFixed(2) + '%'
+    : format === 'pmi' ? Number(value).toFixed(1)
     : Number(value).toFixed(2)
 
   let colorClass = 'text-muted'
   if (value != null) {
     if (threshold != null) {
+      // PMI: >=50 绿(扩张), <50 红(收缩)
       colorClass = Number(value) >= threshold ? 'text-up' : 'text-down'
-    } else if (format === 'number') {
+    } else if (format === 'percent') {
+      // 利率/收益率：中性显示（不高不低），不染色
+      colorClass = ''
+    } else if (format === 'price') {
+      // 汇率：不染色
       colorClass = ''
     }
   }
 
   return (
     <div className="stat-card macro-card">
-      <div className="macro-card-label">{label}</div>
+      <div className="macro-card-header">
+        <span className="macro-card-label">{label}</span>
+        {src && src !== '中行折算价' && <span className="macro-src-tag">{src}</span>}
+      </div>
       <div className={cn('macro-card-value', colorClass)}>{display}</div>
-      {hint ? <div className="macro-card-hint">{hint}</div> : null}
+      {hint && <div className="macro-card-hint">{hint}</div>}
+      {annotation && <div className="macro-card-annotation">{annotation}</div>}
     </div>
   )
 }
@@ -1176,91 +1186,167 @@ function App() {
             <div className="page-header">
               <h2>宏观经济看板</h2>
               <p>汇率 · 利率 · 债券收益率 · 景气指数 · 物价 —— 实时追踪影响 A 股的核心宏观变量。</p>
+              <div className="macro-update-time">
+                数据更新: {dashboard?.generated_at ? new Date(dashboard.generated_at).toLocaleString('zh-CN') : '加载中...'}
+                {macroSnapshot._generated_at && <span className="macro-src-tag">快照 {macroSnapshot._generated_at}</span>}
+              </div>
             </div>
 
-            {/* 核心指标卡片区 */}
+            {/* 核心指标卡片区 — 每张卡都有「是什么 + 为什么重要」 */}
             <section className="grid grid-cols-2 lg:grid-cols-4 gap-3 mb-4">
-              <MacroCard label="美元/人民币" value={macroSnapshot['美元/人民币']} hint="汇率↑利空出口/外资流出" format="price" />
-              <MacroCard label="Shibor隔夜" value={macroSnapshot['Shibor隔夜']} hint="% · 银行间利率↑资金面偏紧" format="percent" />
-              <MacroCard label="10Y国债收益率" value={macroSnapshot['10Y国债收益率']} hint="% · 长端利率↑压制估值" format="percent" />
-              <MacroCard label="制造业PMI" value={macroSnapshot['制造业PMI']} hint={macroSnapshot['_pmi_date'] ? `最新: ${macroSnapshot['_pmi_date']}` : '50=荣枯线'} format="number" threshold={50} />
+              <MacroCard
+                label="美元/人民币"
+                value={macroSnapshot['美元/人民币']}
+                format="price"
+                hint="1 美元 = ? 人民币"
+                annotation={macroSnapshot['美元/人民币'] != null
+                  ? (Number(macroSnapshot['美元/人民币']) > 7.25 ? '⚠️ 偏强，出口承压/外资流出风险'
+                    : Number(macroSnapshot['美元/人民币']) < 7.0 ? '✅ 偏弱，人民币相对强势'
+                    : '中性区间')
+                  : null}
+                src={macroSnapshot['美元/人民币_src']}
+              />
+              <MacroCard
+                label="Shibor 隔夜"
+                value={macroSnapshot['Shibor隔夜']}
+                format="percent"
+                hint="银行间隔夜拆借利率"
+                annotation={macroSnapshot['Shibor隔夜'] != null
+                  ? (Number(macroSnapshot['Shibor隔夜']) > 2.0 ? '🔴 资金面偏紧'
+                    : Number(macroSnapshot['Shibor隔夜']) < 1.3 ? '🟢 流动性充裕'
+                    : '🟡 中性水平')
+                  : null}
+                src={macroSnapshot['Shibor隔夜_src']}
+              />
+              <MacroCard
+                label="10Y 国债收益率"
+                value={macroSnapshot['10Y国债收益率']}
+                format="percent"
+                hint="长期无风险利率基准"
+                annotation={macroSnapshot['10Y国债收益率'] != null
+                  ? '↑ 则成长股估值承压，↓ 则利好风险资产'
+                  : null}
+                src={macroSnapshot['10Y国债收益率_src']}
+              />
+              <MacroCard
+                label="制造业 PMI"
+                value={macroSnapshot['制造业PMI']}
+                format="pmi"
+                threshold={50}
+                hint={macroSnapshot['_pmi_date'] ? `${macroSnapshot['_pmi_date']} 发布` : '50 = 荣枯线'}
+                annotation={macroSnapshot['制造业PMI'] != null
+                  ? (Number(macroSnapshot['制造业PMI']) >= 51 ? '🟢 扩张偏强，企业景气向好'
+                    : Number(macroSnapshot['制造业PMI']) >= 50 ? '🟡 荣枯线附近，扩张乏力'
+                    : '🔴 收缩区间，经济下行压力')
+                  : null}
+                src={macroSnapshot['_pmi_src']}
+              />
             </section>
 
             {/* 汇率 + 利率 双栏 */}
             <div className="grid grid-cols-1 lg:grid-cols-2 gap-4 mb-4">
-              <SectionCard title="汇率（中行折算价）" subtitle="人民币兑主要外币">
+              <SectionCard title="汇率（中行折算价）" subtitle="人民币兑主要外币 · 中行每日公布">
                 <div className="index-list">
                   {[
-                    { name: '美元/人民币', val: macroSnapshot['美元/人民币'], fmt: 'price' },
-                    { name: '欧元/人民币', val: macroSnapshot['欧元/人民币'], fmt: 'price' },
-                    { name: '日元/人民币', val: macroSnapshot['日元/人民币'], fmt: 'price' },
-                    { name: '港币/人民币', val: macroSnapshot['港币/人民币'], fmt: 'price' },
+                    {
+                      name: '美元/人民币',
+                      val: macroSnapshot['美元/人民币'],
+                      fmt: 'price',
+                      note: '1 USD = ? CNY · 核心汇率指标',
+                      src: macroSnapshot['美元/人民币_src'],
+                    },
+                    {
+                      name: '欧元/人民币',
+                      val: macroSnapshot['欧元/人民币'],
+                      fmt: 'price',
+                      note: '1 EUR = ? CNY',
+                      src: macroSnapshot['欧元/人民币_src'],
+                    },
+                    {
+                      name: '日元/人民币',
+                      val: macroSnapshot['日元/人民币_inverted'] ?? (macroSnapshot['日元/人民币'] ? (1 / Number(macroSnapshot['日元/人民币'])).toFixed(4) : null),
+                      fmt: 'price',
+                      note: macroSnapshot['日元/人民币'] != null
+                        ? `1 CNY ≈ ${Number(macroSnapshot['日元/人民币_inverted'] ?? (100 / Number(macroSnapshot['日元/人民币']))).toFixed(2)} JPY`
+                        : '1 CNY = ? JPY（直观展示）',
+                      src: macroSnapshot['日元/人民币_src'],
+                    },
+                    {
+                      name: '港币/人民币',
+                      val: macroSnapshot['港币/人民币'],
+                      fmt: 'price',
+                      note: '1 HKD = ? CNY · 联系汇率制',
+                      src: macroSnapshot['港币/人民币_src'],
+                    },
                   ].map((item) => (
                     <div key={item.name} className="index-row">
                       <span>{item.name}</span>
-                      <strong>{item.val != null ? (item.fmt === 'price' ? item.val.toFixed(4) : Number(item.val).toFixed(2)) : '--'}</strong>
-                      <em className="text-muted">中行折算价</em>
+                      <strong>{item.val != null ? (item.fmt === 'price' ? Number(item.val).toFixed(4) : Number(item.val).toFixed(2)) : '--'}</strong>
+                      <em className="text-muted">{item.note}</em>
                     </div>
                   ))}
                 </div>
               </SectionCard>
 
-              <SectionCard title="利率体系" subtitle="SHIBOR + LPR">
+              <SectionCard title="利率体系" subtitle="SHIBOR（市场）+ LPR（报价）">
                 <div className="index-list">
                   {[
-                    { name: 'SHIBOR 隔夜', val: macroSnapshot['Shibor隔夜'], unit: '%' },
-                    { name: 'SHIBOR 1周', val: macroSnapshot['Shibor_1周'], unit: '%' },
-                    { name: 'SHIBOR 2月', val: macroSnapshot['Shibor_2月'], unit: '%' },
-                    { name: 'LPR 1年期', val: macroSnapshot['LPR_1年'], unit: '%' },
-                    { name: 'LPR 5年期', val: macroSnapshot['LPR_5年'], unit: '%' },
+                    { name: 'SHIBOR 隔夜', val: macroSnapshot['Shibor隔夜'], unit: '%', note: '银行间隔夜借钱成本', src: macroSnapshot['Shibor隔夜_src'] },
+                    { name: 'SHIBOR 1 周', val: macroSnapshot['Shibor_1周'], unit: '%', note: '短期流动性风向标', src: macroSnapshot['Shibor_1周_src'] },
+                    { name: 'SHIBOR 2 月', val: macroSnapshot['Shibor_2月'], unit: '%', note: '中长期资金价格', src: macroSnapshot['Shibor_2月_src'] },
+                    { name: 'LPR 1 年期', val: macroSnapshot['LPR_1年'], unit: '%', note: '企业贷款定价基准', src: macroSnapshot['LPR_1年_src'] },
+                    { name: 'LPR 5 年期', val: macroSnapshot['LPR_5年'], unit: '%', note: '房贷利率锚定标的', src: macroSnapshot['LPR_5年_src'] },
                   ].map((item) => (
                     <div key={item.name} className="index-row">
                       <span>{item.name}</span>
                       <strong>{item.val != null ? Number(item.val).toFixed(2) + item.unit : '--'}</strong>
-                      <em className="text-muted">{item.unit}</em>
+                      <em className="text-muted">{item.note}{item.src && item.src !== 'SHIBOR' ? ` (${item.src})` : ''}</em>
                     </div>
                   ))}
                 </div>
               </SectionCard>
             </div>
 
-            {/* 景气 + 物价 双栏 */}
-            <div className="grid grid-cols-1 lg:grid-cols-2 gap-4 mb-4">
-              <SectionCard title="景气与物价" subtitle="PMI / CPI / PPI">
+            {/* 景气 + 物价 + 解读 三栏 */}
+            <div className="grid grid-cols-1 lg:grid-cols-3 gap-4 mb-4">
+              <SectionCard title="景气与物价" subtitle="PMI / CPI / PPI · 月度数据">
                 <div className="macro-grid-3">
                   <div className="macro-mini-card">
                     <span className="macro-mini-label">制造业 PMI</span>
                     <span className={`macro-mini-value ${Number(macroSnapshot['制造业PMI'] || 0) >= 50 ? 'text-up' : 'text-down'}`}>
                       {macroSnapshot['制造业PMI'] != null ? Number(macroSnapshot['制造业PMI']).toFixed(1) : '--'}
                     </span>
-                    <span className="macro-mini-hint">50 = 荣枯线</span>
+                    <span className="macro-mini-hint">{macroSnapshot['_pmi_date'] || '50=荣枯线'} · {macroSnapshot['_pmi_src'] || '--'}</span>
                   </div>
                   <div className="macro-mini-card">
                     <span className="macro-mini-label">CPI 同比</span>
                     <span className={`macro-mini-value ${Number(macroSnapshot['CPI同比'] || 0) >= 0 ? 'text-up' : 'text-down'}`}>
                       {macroSnapshot['CPI同比'] != null ? (Number(macroSnapshot['CPI同比']) >= 0 ? '+' : '') + Number(macroSnapshot['CPI同比']).toFixed(2) + '%' : '--'}
                     </span>
-                    <span className="macro-mini-hint">居民消费价格</span>
+                    <span className="macro-mini-hint">居民消费价格 · {macroSnapshot['_cpi_date'] || '--'}</span>
                   </div>
                   <div className="macro-mini-card">
                     <span className="macro-mini-label">PPI 同比</span>
                     <span className={`macro-mini-value ${Number(macroSnapshot['PPI同比'] || 0) >= 0 ? 'text-up' : 'text-down'}`}>
                       {macroSnapshot['PPI同比'] != null ? (Number(macroSnapshot['PPI同比']) >= 0 ? '+' : '') + Number(macroSnapshot['PPI同比']).toFixed(2) + '%' : '--'}
                     </span>
-                    <span className="macro-mini-hint">工业出厂价格</span>
+                    <span className="macro-mini-hint">工业出厂价格 · {macroSnapshot['_ppi_date'] || '--'}</span>
                   </div>
+                </div>
+                <div className="macro-mini-explain">
+                  <strong>解读</strong> PMI≥50 制造业扩张；CPI&gt;3% 通胀警戒；PPI&lt;0 工业通缩压力。
                 </div>
               </SectionCard>
 
-              <SectionCard title="宏观解读" subtitle="基于当前数据的定性判断">
+              <SectionCard title="宏观解读" subtitle="基于当前数据的定性判断" className="lg:col-span-2">
                 <div className="macro-insight-panel">
                   {_renderMacroInsight(macroSnapshot)}
                 </div>
               </SectionCard>
             </div>
 
-            {/* 数据时间戳 */}
-            <SectionCard title="数据状态" subtitle={`生成时间: ${dashboard?.generated_at ? new Date(dashboard.generated_at).toLocaleString('zh-CN') : '--'}`}>
+            {/* 数据状态面板 */}
+            <SectionCard title="数据状态" subtitle={`生成时间: ${dashboard?.generated_at ? new Date(dashboard.generated_at).toLocaleString('zh-CN') : '--'} · 快照 ${macroSnapshot._generated_at || '--'}`}>
               <div className="grid grid-cols-2 lg:grid-cols-4 gap-3">
                 {[
                   { name: '汇率指标', count: ['美元/人民币','欧元/人民币','日元/人民币','港币/人民币'].filter(k => macroSnapshot[k] != null).length, total: 4 },
@@ -1271,7 +1357,7 @@ function App() {
                   <div key={g.name} className="macro-stat-row">
                     <span>{g.name}</span>
                     <strong>{g.count}/{g.total}</strong>
-                    <em className={g.count >= g.total * 0.6 ? 'text-up' : 'text-muted'}>{g.count >= g.total * 0.6 ? '正常' : '部分缺失'}</em>
+                    <em className={g.count >= g.total * 0.6 ? 'text-up' : 'text-muted'}>{g.count >= g.total * 0.6 ? '✅ 正常' : '⚠️ 部分缺失(静态兜底)'}</em>
                   </div>
                 ))}
               </div>

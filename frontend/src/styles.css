@@ -1958,3 +1958,48 @@
   color: hsl(var(--foreground));
 }
 .macro-stat-row em { font-style: normal; font-size: 0.76rem; font-weight: 500; }
+
+/* 宏观卡片增强：头部(标签+来源) + 注释 + 更新时间 */
+.macro-card-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+.macro-src-tag {
+  display: inline-block;
+  font-size: 0.65rem;
+  padding: 1px 6px;
+  border-radius: 4px;
+  background: hsl(var(--surface-1));
+  color: hsl(var(--muted-foreground));
+  border: 1px solid hsl(var(--border));
+  white-space: nowrap;
+  font-weight: 500;
+}
+.macro-card-annotation {
+  font-size: 0.75rem;
+  color: hsl(var(--muted-foreground));
+  margin-top: 2px;
+  padding: 3px 8px;
+  border-radius: 4px;
+  background: hsl(var(--surface-0));
+  line-height: 1.4;
+}
+.macro-update-time {
+  display: inline-flex;
+  align-items: center;
+  gap: 10px;
+  margin-top: 8px;
+  font-size: 0.78rem;
+  color: hsl(var(--muted));
+}
+.macro-mini-explain {
+  margin-top: 12px;
+  padding: 10px 14px;
+  border-radius: 8px;
+  background: hsl(220, 20%, 96%);
+  font-size: 0.78rem;
+  color: hsl(var(--muted-foreground));
+  line-height: 1.55;
+}
