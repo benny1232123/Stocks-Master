@@ -38,6 +38,25 @@ from smcore.config.defaults import (
 from smcore.strategy.market import compute_market_profile
 from smcore.strategy import sectors as sector_mod
 
+# ── A 股交易约束 ─────────────────────────────────────────────────────
+LOT_SIZE = 100  # A 股最小交易单位（一手 = 100 股）
+
+
+def _lot_round(amount: float, price: float) -> float:
+    """将建议金额向上取整到 A 股手数倍数（price * LOT_SIZE）。
+
+    例：price=10.86, raw_amount=267 → lot_cost=1086 → 返回 1086
+    若 price 无效或 ≤0，返回原值不截断。
+    """
+    if not (price > 0):
+        return float(amount)
+    lot_cost = round(price * LOT_SIZE, 2)
+    if lot_cost <= 0:
+        return float(amount)
+    import math
+    return math.ceil(float(amount) / lot_cost) * lot_cost
+
+
 # ── 子模块（重新导出以兼容历史调用点）─────────────────────────────────
 from .name_lookup import (
     _build_stock_name_cache_from_akshare,
@@ -327,7 +346,7 @@ def fuse_signals(
             "权重": round(best_raw, 1),
             "建议买入价": buy_price,
             "建议仓位%": round(position_pct * 100, 1),
-            "建议金额": round(position_amount, 0),
+            "建议金额": round(_lot_round(position_amount, buy_price or 0), 0),
         }
 
         if levels:

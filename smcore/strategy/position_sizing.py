@@ -20,6 +20,20 @@ from smcore.utils.code import format_stock_code
 
 from .regime_filter import _get_hs300_close
 
+# ── A 股交易约束 ─────────────────────────────────────────────────────
+LOT_SIZE = 100  # A 股最小交易单位（一手 = 100 股）
+
+
+def _lot_round(amount: float, price: float) -> float:
+    """将建议金额向上取整到 A 股手数倍数（price * LOT_SIZE）。"""
+    if not (price > 0):
+        return float(amount)
+    lot_cost = round(price * LOT_SIZE, 2)
+    if lot_cost <= 0:
+        return float(amount)
+    import math
+    return math.ceil(float(amount) / lot_cost) * lot_cost
+
 
 def _apply_strategy_cap(df: pd.DataFrame, max_per: int) -> pd.DataFrame:
     """最终名单按策略分散：每个策略最多保留 max_per 只（取已排序的前 max_per）。
@@ -146,7 +160,9 @@ def _apply_position_sizing(
         if best / 100.0 > max_single_weight_frac + 1e-9:
             n_hit += 1
         new_pct.append(round(p * 100, 1))
-        new_amt.append(round(total_capital * p, 0))
+        bp = r.get("建议买入价")
+        raw_amt = total_capital * p
+        new_amt.append(round(_lot_round(raw_amt, bp if bp else 0), 0))
     df = df.copy()
     df["建议仓位%"] = new_pct
     df["建议金额"] = new_amt
