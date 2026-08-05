@@ -140,3 +140,33 @@ def test_open_from_dal_deducts_cash(monkeypatch):
     mv = sum(pf._market_value(h) for h in pf.positions.values())
     assert abs((pf.cash + mv) - start_cash) < 1e-4
 
+
+def test_rebalance_sector_close_skips_unknown(monkeypatch):
+    """行业权重上限：超限行业清掉权重最高者；未映射('未知')不参与上限（避免误砍）。
+
+    设计：10 只各 100k=1.0M，单名权重恰 10% → 不触发 single_trim；β=1.0 → 不触发 beta_close，
+    从而隔离出纯粹的板块分支。银行 300k=30%>20% → 清 1 只到 200k；科技 200k 恰在 20% 不触发；
+    未知(F~J 共500k)完全不被板块逻辑触碰。"""
+    def resolver(c):
+        if c in ("A", "B", "C"):
+            return "银行"
+        if c in ("D", "E"):
+            return "科技"
+        return "未知"
+
+    pf = _pf(max_sector_weight=0.20, portfolio_beta_ceiling=1.4, beta_min_keep=1,
+             sector_resolver=resolver)
+    pf.cash = 0.0
+    codes_all = [chr(ord("A") + i) for i in range(10)]
+    pf.positions = {c: {"cost": 100_000.0} for c in codes_all}
+    monkeypatch.setattr("smcore.strategy.position_sizing._estimate_betas",
+                        lambda codes, as_of: {c: 1.0 for c in codes})
+    actions = pf._rebalance(__import__("datetime").date(2026, 1, 5))
+    assert actions["beta_close"] == 0
+    assert actions["single_trim"] == 0
+    assert actions["sector_close"] == 1      # 银行 300k→200k
+    for c in ("F", "G", "H", "I", "J"):
+        assert c in pf.positions             # 未知行业未被板块逻辑误砍
+    assert len(pf.positions) == 9            # 仅清掉 1 只银行
+
+

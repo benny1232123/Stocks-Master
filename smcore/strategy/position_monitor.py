@@ -569,6 +569,10 @@ class PaperPortfolio:
             sec_codes: dict[str, list[str]] = {}
             for c, h in self.positions.items():
                 sec = self.sector_resolver(c) or "__unknown__"
+                # 未映射行业（"未知"/兜底）不参与板块上限，避免全部塌缩进同一桶被误砍，
+                # 与融合层 apply_sector_cap 的处理一致。
+                if sec in ("未知", "__unknown__"):
+                    continue
                 mv = self._market_value(h)
                 sec_w[sec] = sec_w.get(sec, 0.0) + mv
                 sec_codes.setdefault(sec, []).append(c)

@@ -25,6 +25,7 @@ from smcore.strategy.position_monitor import (  # noqa: E402
     PaperPortfolio,
     run_paper_with_exits,
 )
+from smcore.strategy.sectors import industry_of  # 离线行业映射（读 sector_map.json 缓存，零网络）
 
 
 def _fmt(res: dict) -> str:
@@ -55,7 +56,7 @@ def _fmt(res: dict) -> str:
 
 
 def run_daily_drive(initial_capital: float = 1_000_000.0, max_single_weight: float = 0.10,
-                     cash_frac: float = 0.0, sector_resolver=None, state_path=STATE_PATH,
+                     cash_frac: float = 0.0, sector_resolver=industry_of, state_path=STATE_PATH,
                      limit_days: int | None = None, **exit_kwargs) -> dict:
     """真实每日链路（离线重放版）：按信号日逐日驱动 PaperPortfolio.process_day。
 
