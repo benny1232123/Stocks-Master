@@ -50,8 +50,15 @@ UP_TOL_GRID = [-0.010, -0.007, -0.005, -0.003, -0.001, 0.0, 0.005]
 STALE_GRID = [3, 5, 7, 10, 14]
 
 
-def _load_close_map() -> dict[str, "object"]:
-    """预载 k_data 缓存：code6 -> 以 date 为索引的 close Series（含 open 用于前向买入价）。"""
+def _load_close_map(only_a_shares: bool = False) -> dict[str, "object"]:
+    """预载 k_data 缓存：code6 -> 以 date 为索引的 close Series（含 open 用于前向买入价）。
+
+    only_a_shares：仅保留 A 股（沪市 60*/科创板 688 / 深市 000/001/002/003/300/301 等，
+    首字符 6/0/3），剔除指数(000001/999/399/880 前缀)、ETF(5/1 前缀)、北交(8/4)。
+    这是 relativity 在 shareholder/资金流预筛选**之内**实际评估的宇宙超集（价格 5~30 另在
+    扫描中过滤），比全量 k_data 更贴近生产、且不会像「历史 CSV 并集」那样因已是 up_tol
+    后过滤而掩盖 up_tol 信号。
+    """
     import pandas as pd
 
     out: dict[str, pd.DataFrame] = {}
@@ -59,6 +66,13 @@ def _load_close_map() -> dict[str, "object"]:
         code = format_stock_code(p.name.split("_")[0])
         if not code or not code.isdigit():
             continue
+        if only_a_shares:
+            if code[0] not in ("6", "0", "3"):
+                continue
+            if code[:3] in ("999", "399", "880"):
+                continue
+            # 注意：指数代理 INDEX_PROXY(000001) 首字符为 "0" 且前缀不在排除集，
+            # 会被保留进 close_map 用作基准（不在此剔除）；仅在评估循环里跳过它作候选股。
         try:
             df = pd.read_csv(p, usecols=["date", "open", "close"])
         except Exception:
@@ -89,11 +103,12 @@ def _forward_return(df: "object", sd: date, fwd: int) -> tuple[float | None, flo
     return stock_ret, None  # 指数收益在调用处用 index df 单独算
 
 
-def run_sweep(limit_days: int | None = None, emit_json: str | None = None) -> dict:
+def run_sweep(limit_days: int | None = None, emit_json: str | None = None,
+               only_a_shares: bool = False) -> dict:
     import numpy as np
     import pandas as pd
 
-    close_map = _load_close_map()
+    close_map = _load_close_map(only_a_shares=only_a_shares)
     idx_df = close_map.get(INDEX_PROXY)
     if idx_df is None:
         return {"error": f"指数代理 {INDEX_PROXY} 的 k_data 缓存缺失（需 stock_data/k_data/000001_qfq_full.csv）"}
@@ -139,6 +154,8 @@ def run_sweep(limit_days: int | None = None, emit_json: str | None = None) -> di
         i_fwd = _index_fwd(i_win, sd, FORWARD_DAYS)
 
         for code, s_df in close_map.items():
+            if only_a_shares and code == INDEX_PROXY:
+                continue  # 基准指数本身不作候选股评估
             s_win = s_df.loc[start:end]
             if len(s_win) < MIN_OVERLAP_DAYS:
                 continue
@@ -269,9 +286,13 @@ def _fmt(res: dict) -> str:
 def main() -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("--limit-days", type=int, default=None, help="仅扫描前 N 个信号日（调试用）")
+    ap.add_argument("--only-a-shares", action="store_true",
+                    help="仅用 A 股超集作候选宇宙（首字符 6/0/3，剔除指数/ETF/北交），"
+                         "更贴近生产且不会像历史 CSV 并集那样因已是 up_tol 后过滤而掩盖信号")
     ap.add_argument("--emit-json", default=None)
     args = ap.parse_args()
-    res = run_sweep(limit_days=args.limit_days, emit_json=args.emit_json)
+    res = run_sweep(limit_days=args.limit_days, only_a_shares=args.only_a_shares,
+                    emit_json=args.emit_json)
     print(_fmt(res))
     return 0
 
