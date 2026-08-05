@@ -339,8 +339,12 @@ def run_forward_signal_backtest(
     # 预拉每只标的 K 线（信号区间 + 持有期 + 缓冲），供盯市与买卖价查询
     price_cache: dict[str, pd.DataFrame] = {}
     all_dates: set[date] = set()
+    # 预拉 K 线时向前多留 vol_target 所需的 20 日波动窗口：否则 _ann_vol 数据不足→scale=1.0
+    # 中性，vol_target 会静默失效。向前多取不影响买入后行情，各组口径一致。
+    _vt_window = int(_vt_cfg.get("window", 20))
+    _hist_start = min_sig - timedelta(days=_vt_window + 40)
     for code in norm["code"].astype(str).str.strip().unique():
-        df = fetch_daily_k(code, min_sig, end_pad)
+        df = fetch_daily_k(code, _hist_start, end_pad)
         if df is not None and not df.empty:
             df = df.copy()
             df["_dt"] = pd.to_datetime(df["date"])

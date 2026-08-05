@@ -84,7 +84,7 @@
     }
   },
   "vol_target": {
-    "enabled": true,
+    "enabled": false,
     "target_annual_vol": 0.30,
     "window": 20,
     "min_scale": 0.3,
