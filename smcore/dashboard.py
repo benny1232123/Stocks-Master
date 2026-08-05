@@ -560,7 +560,7 @@ def fetch_macro_snapshot() -> dict[str, Any] | None:
 
     指标体系（全部 fail-soft，单源失败不影响其他）：
       - 汇率：美元/欧元/日元/港币 vs 人民币（open.er-api.com，海外可达）
-      - 利率：SHIBOR O/N + 1W + 2M（akshare）；LPR 1Y + 5Y（akshare macro_china_lpr）
+      - 利率：SHIBOR O/N + 1W + 1M（akshare）；LPR 1Y + 5Y（akshare macro_china_lpr）
       - 债券：10Y 国债收益率（akshare bond_china_yield，窗口 <1 年）
       - 景气：制造业 PMI（akshare macro_china_pmi_yearly，jin10）
       - 物价：CPI 同比、PPI 同比（akshare *_yearly，jin10）
@@ -570,6 +570,28 @@ def fetch_macro_snapshot() -> dict[str, Any] | None:
     通过持久化 macro_last_good.json，实时拉取失败时复用上次真实值，
     而非显示写死的假常量——看板因此持续动态更新。
     """
+    try:
+        return _fetch_macro_snapshot_inner()
+    except Exception as exc:
+        print(f"[dashboard] fetch_macro_snapshot 异常，回退纯种子: {exc}")
+        # 最终安全网：确保永远不返回 None 或含空 key 的 dict
+        return _seed_only_snapshot()
+
+
+def _seed_only_snapshot() -> dict[str, Any]:
+    """所有实时源都失败时的纯种子兜底。"""
+    result: dict[str, Any] = {"_generated_at": date.today().isoformat(), "_data_status": {"实时": 0, "缓存": 0, "静态": 14}}
+    for k, v in _SEED_MACRO.items():
+        result[k] = v
+        result[k + "_src"] = "静态预估"
+        result[k + "_stale"] = True
+    # 汇率 inverted
+    if "日元/人民币" in result and result["日元/人民币"] is not None:
+        result["日元/人民币_inverted"] = round(1.0 / float(result["日元/人民币"]), 3)
+    return result
+
+
+def _fetch_macro_snapshot_inner() -> dict[str, Any]:
     last_good = _load_last_good()
     result: dict[str, Any] = {"_generated_at": date.today().isoformat()}
     status = {"实时": 0, "缓存": 0, "静态": 0}
@@ -613,7 +635,11 @@ def fetch_macro_snapshot() -> dict[str, Any] | None:
             result["日元/人民币_inverted"] = round(1.0 / float(v), 3)
 
     # ── SHIBOR 利率（akshare，海外可达）────────────────
-    shibor = _fetch_shibor_multi()
+    try:
+        shibor = _fetch_shibor_multi()
+    except Exception as exc:
+        print(f"[dashboard] SHIBOR 获取异常: {exc}")
+        shibor = None
     for k, sane in (("Shibor隔夜", (0, 6)), ("Shibor_1周", (0, 6)), ("Shibor_1月", (0, 6))):
         if shibor and k in shibor and shibor[k] is not None:
             v = float(shibor[k])
@@ -811,11 +837,25 @@ def build_dashboard_payload() -> dict[str, Any]:
     """Build a JSON-friendly dashboard payload for the frontend."""
     payload: dict[str, Any] = {"generated_at": datetime.now().isoformat(timespec="seconds")}
 
+    # ── 指数快照：缓存优先，缺失时实时回退 ────────────────
     cached_index = _load_cache("index_snapshot")
     if isinstance(cached_index, pd.DataFrame) and not cached_index.empty:
         payload["index_snapshot"] = cached_index.to_dict(orient="records")
     else:
-        payload["index_snapshot"] = []
+        # 缓存未命中（Render 上 prewarm 可能因 TDX/新浪失败而跳过）→ 同步重拉
+        print("[dashboard] 指数快照缓存为空，尝试实时获取...")
+        try:
+            fresh_index = fetch_index_snapshot()
+            if not fresh_index.empty:
+                payload["index_snapshot"] = fresh_index.to_dict(orient="records")
+                save_cache("index_snapshot", fresh_index)
+                print("[dashboard] 指数快照实时获取成功")
+            else:
+                payload["index_snapshot"] = []
+                print("[dashboard] 指数快照实时获取也失败（TDX+新浪均不可达）")
+        except Exception as exc:
+            payload["index_snapshot"] = []
+            print(f"[dashboard] 指数快照实时获取异常: {exc}")
 
     cached_breadth = _load_cache("market_breadth")
     payload["market_breadth"] = cached_breadth if isinstance(cached_breadth, dict) else {}
@@ -832,15 +872,23 @@ def build_dashboard_payload() -> dict[str, Any]:
     ]
     if any(cached_macro.get(k) is None for k in _CORE_MACRO_KEYS):
         print("[dashboard] 宏观缓存存在空指标，强制同步重拉...")
-        fresh = fetch_macro_snapshot()
-        if fresh and isinstance(fresh, dict):
-            # 确认新数据补全了之前的空项
-            if all(fresh.get(k) is not None for k in _CORE_MACRO_KEYS):
-                save_cache("macro_snapshot", fresh)
-                cached_macro = fresh
-                print("[dashboard] 宏观缓存已更新")
+        try:
+            fresh = fetch_macro_snapshot()
+            if fresh and isinstance(fresh, dict):
+                # 确认新数据补全了之前的空项（种子兜底保证一定有值）
+                if all(fresh.get(k) is not None for k in _CORE_MACRO_KEYS):
+                    save_cache("macro_snapshot", fresh)
+                    cached_macro = fresh
+                    print("[dashboard] 宏观缓存已更新")
+                else:
+                    print(f"[dashboard] 重拉后仍有空项: {[k for k in _CORE_MACRO_KEYS if fresh.get(k) is None]}")
+                    # 即使没全补全也比旧缓存好（至少部分有值）
+                    cached_macro = fresh
             else:
-                print(f"[dashboard] 重拉后仍有空项: {[k for k in _CORE_MACRO_KEYS if fresh.get(k) is None]}")
+                print("[dashboard] fetch_macro_snapshot 返回空")
+        except Exception as exc:
+            # Render 上 akshare 可能装了但网络全挂 → 不让整个 dashboard 炸掉
+            print(f"[dashboard] 宏观强制重拉异常（保留旧缓存）: {exc}")
     payload["macro_snapshot"] = cached_macro
     return payload
 
