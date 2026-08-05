@@ -8,6 +8,7 @@ from __future__ import annotations
 from datetime import date, timedelta
 from typing import Any, Optional
 
+import math
 import numpy as np
 import pandas as pd
 
@@ -204,6 +205,9 @@ def run_forward_signal_backtest(
     trend_exit_ma: Optional[int] = None,
     size_by: Optional[str] = None,
     capital_scale: float = 1.0,
+    vol_target: Optional[bool] = None,
+    partial_take_profit: Optional[bool] = None,
+    model_limit_down: Optional[bool] = None,
 ) -> "BacktestResult":
     """前向信号回测：锁定历史某天的信号清单，从信号日起往后持有，回测真实表现。
 
@@ -240,6 +244,34 @@ def run_forward_signal_backtest(
             trailing_stop_pct = 0.05
         if trend_exit_ma is None:
             trend_exit_ma = 60
+
+    # 波动率目标仓位 / 分批止盈 / 跌停卖不出：None → 读 RISK_CONFIG（可热更新），
+    # 回退内置默认；任一显式传入则以传入为准（便于脚本/测试按场景覆盖）。
+    try:
+        from smcore.strategy.risk_rules import (
+            compute_vol_target_params,
+            compute_partial_exit_params,
+            compute_market_friction_params,
+            vol_target_scale,
+        )
+
+        _vt_cfg = compute_vol_target_params()
+        _pt_cfg = compute_partial_exit_params()
+        _mf_cfg = compute_market_friction_params()
+        vt_enabled = _vt_cfg["enabled"] if vol_target is None else vol_target
+        pt_enabled = _pt_cfg["enabled"] if partial_take_profit is None else partial_take_profit
+        ld_enabled = _mf_cfg["model_limit_down"] if model_limit_down is None else model_limit_down
+        _ld_thr = _mf_cfg["limit_down_threshold"]
+    except Exception:
+        _vt_cfg = {"target_annual_vol": 0.30, "window": 20, "min_scale": 0.3, "max_scale": 2.0}
+        _pt_cfg = {"trigger_pct": 0.04, "tranche_pct": 0.33, "trailing_tighten": 0.5, "max_tranches": 2}
+        vt_enabled = bool(vol_target) if vol_target is not None else True
+        pt_enabled = bool(partial_take_profit) if partial_take_profit is not None else True
+        ld_enabled = bool(model_limit_down) if model_limit_down is not None else True
+        _ld_thr = 0.095
+
+        def vol_target_scale(v, p=None):
+            return 1.0
 
     from collections import defaultdict
 
@@ -344,6 +376,45 @@ def run_forward_signal_backtest(
             return None
         return float(sub.iloc[-n:].mean())
 
+    def _ann_vol(code: str, d: date, window: int) -> Optional[float]:
+        """个股近 window 日年化波动率（截至 d，含 d）。数据不足返回 None。"""
+        p = price_cache.get(code)
+        if p is None or p.empty:
+            return None
+        sub = p.loc[p.index.date <= d, "close"]
+        if len(sub) < window + 1:
+            return None
+        rets = sub.iloc[-(window + 1):].pct_change().dropna()
+        if len(rets) < window:
+            return None
+        return float(rets.std() * math.sqrt(252))
+
+    def _at_limit_down(code: str, d: date) -> bool:
+        """近似判断当日是否封跌停（A股卖单无法成交）。
+
+        主板±10%、科创/创业±20%；无板块信息时用保守近似：日收益 ≤ -threshold
+        且收盘等于当日最低（钉在跌停板）。满足则视为封跌停、当日卖不出，顺延次日。
+        """
+        p = price_cache.get(code)
+        if p is None or p.empty:
+            return False
+        rows = p.loc[p.index.date <= d]
+        if len(rows) < 2:
+            return False
+        cur = rows.iloc[-1]
+        prev = rows.iloc[-2]
+        try:
+            c0 = float(cur["close"])
+            c1 = float(prev["close"])
+            lo = float(cur["low"])
+        except (TypeError, ValueError):
+            return False
+        if c1 <= 0 or c0 is None or c1 is None or lo is None:
+            return False
+        ret = c0 / c1 - 1
+        pinned = abs(lo - c0) <= max(0.01, abs(c0) * 0.002)
+        return ret <= -_ld_thr and pinned
+
     # 买入调度：每个信号日 → 其「之后第一个交易日」作为买入处理日（即信号日次日开盘买入）。
     # 信号日本身可能不是交易日（周末/休市），不能直接用信号日作为交易日历中的 key。
     buy_schedule: dict[date, list[tuple[date, str, str]]] = defaultdict(list)
@@ -376,15 +447,27 @@ def run_forward_signal_backtest(
             candidates = [(sd, c, w, sp, st) for (sd, c, w, sp, st) in buy_schedule[d] if c not in holdings]
             avail = max_positions - len(holdings)
             buyable = candidates[:avail]
-            total_w = sum(w for (_, _, w, _, _) in buyable) or 1.0
-            for sd, c, w, row_stop, _st in buyable:
+            # 波动率目标仓位：仓位 ∝ 目标波动 / 个股波动20日。高波动票少买、低波动票多买，
+            # 用 (scaled_w / sum_scaled) 重新分配同一笔可用资金 → 总暴露不变、内部向低波动倾斜，
+            # 在不放大回撤的前提下提升收益/回撤比。scale 缺失→1.0 中性。
+            _scaled = []
+            _total_scaled = 0.0
+            for (sd, c, w, row_stop, _st) in buyable:
+                sc = 1.0
+                if vt_enabled:
+                    sc = vol_target_scale(_ann_vol(c, d, _vt_cfg["window"]), _vt_cfg)
+                _sw = w * sc
+                _scaled.append((sd, c, w, row_stop, _st, _sw))
+                _total_scaled += _sw
+            _total_scaled = _total_scaled or 1.0
+            for sd, c, w, row_stop, _st, scaled_w in _scaled:
                 buy_price = _px(c, d, "open")
                 if buy_price is None:
                     continue
                 buy_price *= (1 + slippage)
-                # 按置信度权重分配资金（size_by=None 时全为1→等权）；
+                # 按（波动率缩放后的）置信度权重分配资金；
                 # capital_scale<1 时留现金（高波动降仓），真正减少组合暴露而非等比缩放
-                per = cash * (w / total_w) * max(0.0, min(1.0, capital_scale))
+                per = cash * (scaled_w / _total_scaled) * max(0.0, min(1.0, capital_scale))
                 qty = int(per / buy_price / 100) * 100
                 if qty < 100:
                     continue
@@ -409,7 +492,8 @@ def run_forward_signal_backtest(
                 }
                 avail -= 1
 
-        # 2) 退出检查（基于当日收盘价）：止盈 / 止损 / 移动止盈 / 持有期满
+        # 2) 退出检查（基于当日收盘价）：分批止盈 / 止盈 / 止损 / 移动止盈 / 持有期满
+        partial_sells: list[tuple[str, int, str]] = []
         for c, h in holdings.items():
             close = _px(c, d, "close")
             if close is None:
@@ -429,9 +513,33 @@ def run_forward_signal_backtest(
                     if s.strip()
                 ]
                 _is_mr = any(s in ("boll", "relativity") for s in _strats)
+                # 分批止盈：盈利达阈值先卖一部，余仓收紧跟踪止损（最高 max_tranches 批）。
+                # 末批（已达批数上限）整仓清掉；非末批仅减仓、余仓继续持有让利润奔跑。
+                if (
+                    pt_enabled
+                    and h.get("tranches_done", 0) < _pt_cfg["max_tranches"]
+                    and close is not None
+                ):
+                    _ret = close / h["buy_price"] - 1
+                    if _ret >= _pt_cfg["trigger_pct"]:
+                        _remain = h["qty"]
+                        if h.get("tranches_done", 0) + 1 >= _pt_cfg["max_tranches"]:
+                            exit_reason = "take_partial_final"
+                        else:
+                            _sq = int(_remain * _pt_cfg["tranche_pct"] / 100.0) * 100
+                            _sq = max(100, min(_sq, _remain))
+                            if _sq >= _remain:
+                                exit_reason = "take_partial_final"
+                            else:
+                                h["qty"] -= _sq
+                                h["tranches_done"] = h.get("tranches_done", 0) + 1
+                                h["trailing_eff"] = (h.get("trailing_eff") or trailing_stop_pct) * _pt_cfg[
+                                    "trailing_tighten"
+                                ]
+                                partial_sells.append((c, _sq, "take_partial"))
                 # 硬止损（缺口感知）：盘中最低价触及 -row_stop 即以 min(开盘价,止损价)
                 # 离场，封顶亏损≈row_stop，挡住跳空低开直接击穿收盘止损的巨亏（如单日 -23%）。
-                if row_stop is not None:
+                if exit_reason is None and row_stop is not None:
                     low = _px(c, d, "low")
                     if low is not None:
                         hard_stop = h["buy_price"] * (1 - abs(row_stop))
@@ -458,8 +566,10 @@ def run_forward_signal_backtest(
                     # 止损：固定/自适应比例（Boll 下轨≈入场价、过紧易频繁假止损，不单独用作止损）
                     elif row_stop is not None and ret <= -abs(row_stop):
                         exit_reason = "stop_pct"
-                    # 移动止盈：从峰值回撤锁定利润
-                    elif trailing_stop_pct is not None and h["peak"] > 0 and (close / h["peak"] - 1) <= -abs(trailing_stop_pct):
+                    # 移动止盈：用余仓收紧后的 trailing_eff（若有），从峰值回撤锁定利润
+                    elif (h.get("trailing_eff") or trailing_stop_pct) is not None and h["peak"] > 0 and (
+                        close / h["peak"] - 1
+                    ) <= -abs(h.get("trailing_eff") or trailing_stop_pct):
                         exit_reason = "trailing"
                     # 最后防线：仅当 Boll 下轨明显低于入场价（>3%）时才用作硬止损
                     elif use_signal_bands and h.get("stop") is not None and h["stop"] < h["buy_price"] * 0.97 and close <= h["stop"]:
@@ -469,8 +579,38 @@ def run_forward_signal_backtest(
             if exit_reason is not None:
                 h["exit_reason"] = exit_reason
 
+        # 2.5) 分批止盈的非末批：按当日收盘（含滑点）卖出部分仓位，余仓继续持有
+        for (c, _sq, reason) in partial_sells:
+            h = holdings.get(c)
+            if h is None:
+                continue
+            sell_price = _px(c, d, "close")
+            if sell_price is None:
+                continue
+            sell_price *= (1 - slippage)
+            proceeds = sell_price * _sq
+            cash += proceeds - _sell_cost(proceeds)
+            trades.append(
+                {
+                    "code": c,
+                    "buy_date": h["buy_date"].strftime("%Y-%m-%d"),
+                    "sell_date": d.strftime("%Y-%m-%d"),
+                    "buy_price": round(h["buy_price"], 3),
+                    "sell_price": round(sell_price, 3),
+                    "qty": _sq,
+                    "return_pct": round((sell_price / h["buy_price"] - 1) * 100, 2),
+                    "exit_reason": reason,
+                }
+            )
+
         to_sell = [c for c, h in holdings.items() if "exit_reason" in h]
         for c in to_sell:
+            # 跌停卖不出：当日封跌停则卖单无法成交，清除出场意图顺延至次日（次日重新触发）
+            if ld_enabled and _at_limit_down(c, d):
+                _h = holdings[c]
+                _h.pop("exit_reason", None)
+                _h.pop("forced_sell_price", None)
+                continue
             h = holdings.pop(c)
             if h.get("forced_sell_price") is not None:
                 sell_price = h["forced_sell_price"]

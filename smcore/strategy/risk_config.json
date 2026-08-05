@@ -74,6 +74,24 @@
       "up": 90
     },
     "hold_days": 10,
-    "slippage": 0.001
+    "slippage": 0.001,
+    "partial_take_profit": {
+      "enabled": true,
+      "trigger_pct": 0.04,
+      "tranche_pct": 0.33,
+      "trailing_tighten": 0.5,
+      "max_tranches": 2
+    }
+  },
+  "vol_target": {
+    "enabled": true,
+    "target_annual_vol": 0.30,
+    "window": 20,
+    "min_scale": 0.3,
+    "max_scale": 2.0
+  },
+  "market_friction": {
+    "model_limit_down": true,
+    "limit_down_threshold": 0.095
   }
 }

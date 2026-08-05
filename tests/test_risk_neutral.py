@@ -9,6 +9,7 @@ import pandas as pd
 from smcore.config.defaults import BETA_FALLBACK, MAX_SINGLE_WEIGHT_PCT
 from smcore.strategy import fusion as fusion_mod
 from smcore.strategy import position_sizing as ps_mod
+from smcore.strategy import risk_rules as rr
 from smcore.strategy.sectors import apply_sector_weight_cap
 
 
@@ -132,14 +133,19 @@ def test_single_weight_cap_clamps_one_dominant_name():
 
 
 def test_single_weight_cap_not_triggered_when_small():
-    """策略权重本就小于上限时，不应误截断。"""
+    """策略权重本就小于上限时，不应误截断（含波动率目标仓位倾斜后仍需受上限封顶）。"""
     df = pd.DataFrame([{"股票代码": "000001", "来源策略": "Boll", "综合评分": 100.0}])
     weights = {"boll": 5.0}
     surv = {"boll": 1}
     out, n_hit = fusion_mod._apply_position_sizing(
         df, weights, surv, total_capital=100000.0, max_single_weight_frac=MAX_SINGLE_WEIGHT_PCT / 100.0
     )
-    assert abs(out["建议仓位%"].iloc[0] - 5.0) < 1e-9
+    # vol targeting 已开启时，权重会按个股波动倾斜（无 k_data→中性 scale=1）；结果仍须 ≤ 上限且不被误截断
+    vt_cfg = rr.compute_vol_target_params()
+    vol = ps_mod._estimate_vol20(["000001"], window=vt_cfg["window"]).get("000001")
+    scale = rr.vol_target_scale(vol, vt_cfg) if vt_cfg["enabled"] else 1.0
+    expected = round(min(5.0 * scale, MAX_SINGLE_WEIGHT_PCT), 1)
+    assert abs(out["建议仓位%"].iloc[0] - expected) < 1e-9
     assert n_hit == 0
 
 

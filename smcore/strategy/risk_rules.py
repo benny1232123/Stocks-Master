@@ -62,6 +62,24 @@ _BUILTIN_DEFAULTS = {
         "trend_exit_ma": {"defensive": 40, "neutral": 60, "up": 90},
         "hold_days": 10,
         "slippage": 0.001,
+        "partial_take_profit": {
+            "enabled": True,
+            "trigger_pct": 0.04,
+            "tranche_pct": 0.33,
+            "trailing_tighten": 0.5,
+            "max_tranches": 2,
+        },
+    },
+    "vol_target": {
+        "enabled": True,
+        "target_annual_vol": 0.30,
+        "window": 20,
+        "min_scale": 0.3,
+        "max_scale": 2.0,
+    },
+    "market_friction": {
+        "model_limit_down": True,
+        "limit_down_threshold": 0.095,
     },
 }
 
@@ -275,3 +293,63 @@ def compute_sector_momentum_bonus(medians: dict) -> float:
         return float(cfg["floor"])
     disp = statistics.pstdev(vals)
     return round(_clamp(cfg["dispersion_k"] * disp, cfg["floor"], cfg["ceil"]), 2)
+
+
+def compute_vol_target_params() -> dict:
+    """波动率目标仓位（vol targeting）配置：仓位 ∝ 目标波动 / 个股波动。
+
+    高波动票自动少买、低波动票多买，在不放大回撤的前提下提升组合稳定性与收益/回撤比。
+    系数（target_annual_vol/min_scale/max_scale/window）来自 CONFIG，可热更新。
+    """
+    cfg = CONFIG["vol_target"]
+    return {
+        "enabled": bool(cfg["enabled"]),
+        "target_annual_vol": float(cfg["target_annual_vol"]),
+        "window": int(cfg["window"]),
+        "min_scale": float(cfg["min_scale"]),
+        "max_scale": float(cfg["max_scale"]),
+    }
+
+
+def vol_target_scale(stock_vol_annual: Optional[float], params: Optional[dict] = None) -> float:
+    """单只个股的波动率缩放系数：clamp(target_annual_vol / stock_vol_annual, min, max)。
+
+    stock_vol_annual 为个股近 window 日年化波动率（缺失按 1.0 中性处理）。
+    高波动 → 系数<1（少买）；低波动 → 系数>1（多买），但受 [min_scale, max_scale] 约束。
+    纯数据驱动，无代码内硬编码。
+    """
+    if params is None:
+        params = compute_vol_target_params()
+    if stock_vol_annual is None or stock_vol_annual <= 0:
+        return 1.0
+    raw = params["target_annual_vol"] / stock_vol_annual
+    return _clamp(raw, params["min_scale"], params["max_scale"])
+
+
+def compute_partial_exit_params() -> dict:
+    """分批止盈配置：盈利达阈值后卖出部分仓位并收紧余仓跟踪止损。
+
+    避免整仓在单一出场点「一刀切」，常能比单次出场多收一截利润；余仓在收紧的
+    移动止盈下继续让利润奔跑。enabled=False 时退化为原有单次出场（向后兼容）。
+    """
+    cfg = CONFIG["exit"]["partial_take_profit"]
+    return {
+        "enabled": bool(cfg["enabled"]),
+        "trigger_pct": float(cfg["trigger_pct"]),
+        "tranche_pct": float(cfg["tranche_pct"]),
+        "trailing_tighten": float(cfg["trailing_tighten"]),
+        "max_tranches": int(cfg["max_tranches"]),
+    }
+
+
+def compute_market_friction_params() -> dict:
+    """A股交易摩擦建模配置：当前仅含「跌停卖不出」。
+
+    model_limit_down=True 时，回测出场若在当日封跌停（近似日收益 ≤ -threshold 且收在最低），
+    卖单无法成交、顺延至下一交易日，去除回测虚高水分。threshold 来自 CONFIG，可热更新。
+    """
+    cfg = CONFIG["market_friction"]
+    return {
+        "model_limit_down": bool(cfg["model_limit_down"]),
+        "limit_down_threshold": float(cfg["limit_down_threshold"]),
+    }

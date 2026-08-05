@@ -8,6 +8,7 @@ from __future__ import annotations
 from datetime import datetime
 from typing import Optional
 
+import math
 import pandas as pd
 
 from smcore.config.defaults import (
@@ -111,6 +112,40 @@ def _estimate_betas(codes, as_of_yyyymmdd: str, window: int = BETA_WINDOW) -> di
     return out
 
 
+def _estimate_vol20(codes, window: int = 20) -> dict[str, Optional[float]]:
+    """估计候选股近 window 日年化波动率（本地 k_data，零联网）。
+
+    用近 window 个交易日的日收益标准差 × √252。缺本地 k_data 的票返回 None，
+    由调用方按中性(scale=1)处理，不阻断清单生成。
+    """
+    out: dict[str, Optional[float]] = {}
+    for c in codes:
+        c6 = format_stock_code(c)
+        if not c6:
+            out[c6] = None
+            continue
+        try:
+            p = STOCK_DATA_DIR / "k_data" / f"{c6}_qfq_full.csv"
+            if not p.exists():
+                out[c6] = None
+                continue
+            d = pd.read_csv(p)
+            if "date" not in d.columns or "close" not in d.columns or len(d) < window + 2:
+                out[c6] = None
+                continue
+            d["date"] = pd.to_datetime(d["date"], errors="coerce")
+            d = d.dropna(subset=["date"]).set_index("date").sort_index()
+            close = pd.to_numeric(d["close"], errors="coerce").dropna()
+            rets = close.pct_change().dropna().tail(window)
+            if len(rets) < window:
+                out[c6] = None
+                continue
+            out[c6] = float(rets.std() * math.sqrt(252))
+        except Exception:
+            out[c6] = None
+    return out
+
+
 def _portfolio_beta(df, betas: dict[str, float]) -> float:
     """按 建议仓位% 加权计算组合 β。缺 β 的票按 BETA_FALLBACK 计。"""
     if df is None or df.empty or "建议仓位%" not in df.columns:
@@ -141,6 +176,18 @@ def _apply_position_sizing(
     """
     if df is None or df.empty:
         return df, 0
+    # 波动率目标仓位：用个股近 window 日年化波动率对「置信度权重」做倾斜，
+    # 高波动票少配、低波动票多配；受单名上限封顶。配置驱动，关闭或缺失数据时中性(scale=1)。
+    _vt = None
+    try:
+        from .risk_rules import compute_vol_target_params, vol_target_scale
+
+        _vt_cfg = compute_vol_target_params()
+        if _vt_cfg["enabled"]:
+            _vt = (vol_target_scale, _vt_cfg)
+            _vols = _estimate_vol20(df["股票代码"].tolist(), window=_vt_cfg["window"])
+    except Exception:
+        _vt = None
     new_pct, new_amt = [], []
     n_hit = 0
     for _, r in df.iterrows():
@@ -156,6 +203,11 @@ def _apply_position_sizing(
             share = w / c
             if share > best:
                 best = share
+        # vol targeting：倾斜置信度（高波动↓、低波动↑），再受单名上限封顶
+        if _vt is not None:
+            scale_fn, cfg = _vt
+            v = _vols.get(format_stock_code(r["股票代码"]))
+            best = best * scale_fn(v, cfg)
         p = min(best / 100.0, max_single_weight_frac)
         if best / 100.0 > max_single_weight_frac + 1e-9:
             n_hit += 1
