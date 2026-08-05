@@ -132,6 +132,9 @@ def compute_strategy_edge(window: int = 30) -> dict:
     )[:window]
 
     strat_rets: dict[str, list[float]] = {s: [] for s in ALL_STRATEGIES}
+    total_trades = 0
+    unknown_trades = 0
+    dal_col_missing_days = 0
     for f in summary_files:
         sd = os.path.basename(f)[len("Multi-Backtest-"):-len("-summary.csv")]
         dal = STOCK_DATA_DIR / f"Daily-Action-List-{sd}.csv"
@@ -142,6 +145,8 @@ def compute_strategy_edge(window: int = 30) -> dict:
                 if {"股票代码", "来源策略"}.issubset(d.columns):
                     for _, r in d.iterrows():
                         code2strat[_norm_code(r["股票代码"])] = _norm_strategies(r["来源策略"])
+                else:
+                    dal_col_missing_days += 1
             except Exception:
                 pass
         tr = STOCK_DATA_DIR / f"Multi-Backtest-{sd}-trades.csv"
@@ -153,14 +158,26 @@ def compute_strategy_edge(window: int = 30) -> dict:
             continue
         for _, r in t.iterrows():
             c = _norm_code(r.get("code"))
+            total_trades += 1
             try:
                 rp = float(r.get("return_pct"))
             except (TypeError, ValueError):
                 continue
             strats = code2strat.get(c) or {"__unknown__"}
+            if "__unknown__" in strats:
+                unknown_trades += 1
             for s in strats:
                 if s in strat_rets:
                     strat_rets[s].append(rp)
+
+    if total_trades > 0 and unknown_trades * 2 >= total_trades:
+        print(
+            f"[adaptive_weights] WARN: 归因失败交易占比高 "
+            f"({unknown_trades}/{total_trades} 归入 __unknown__，"
+            f"{dal_col_missing_days} 个 DAL 缺『来源策略』列)。"
+            f"权重将静默回退等权，请检查 Daily-Action-List 归因完整性。",
+            file=sys.stderr,
+        )
 
     edge: dict[str, dict] = {}
     for s, rs in strat_rets.items():
@@ -368,6 +385,18 @@ def compute_adaptive_allocation(
     edge = compute_strategy_edge(edge_window)
     total_n = sum(e["n"] for e in edge.values())
     if total_n < min_n:
+        if total_n == 0:
+            print(
+                "[adaptive_weights] WARN: 有效归因交易数为 0（可能 Daily-Action-List "
+                "缺『来源策略』列），权重静默回退等权，cold_start=True。",
+                file=sys.stderr,
+            )
+        else:
+            print(
+                f"[adaptive_weights] WARN: 有效样本不足(total_n={total_n} < min_n={min_n})，"
+                f"权重静默回退等权，cold_start=True。",
+                file=sys.stderr,
+            )
         eq = round(100 / len(ALL_STRATEGIES))
         return edge, {s: eq for s in ALL_STRATEGIES}, 0, True
     weights = adaptive_weights(
