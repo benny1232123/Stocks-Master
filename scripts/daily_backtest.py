@@ -52,6 +52,8 @@ from smcore.strategy.fusion import (
 from smcore.strategy.market import compute_market_profile
 # 自适应现金：波动率分位 S 型曲线 + 趋势 regime 调整（替代硬编码 _VOL_POS_SCALE_MAP）
 from smcore.strategy.adaptive_weights import cash_from_volatility, cash_from_regime, cash_from_drawdown
+# 出场参数自适应（随波动率/regime 浮动，基线=已验证的 8/6/5/60）
+from smcore.strategy.risk_rules import compute_adaptive_exit_params
 
 STRAT_MAP = {
     "boll": "boll",
@@ -315,6 +317,7 @@ def _backtest_one(path: Path, sd: date, hold_days: int, market_profile=None, por
 
     size_by = os.environ.get("BACKTEST_SIZE_BY", "权重" if "权重" in df.columns else "综合评分") or None
 
+    _exit = compute_adaptive_exit_params(market_profile, regime=getattr(market_profile, "regime", None))
     result = run_forward_signal_backtest(
         sub,
         hold_days=hold_days,
@@ -330,12 +333,13 @@ def _backtest_one(path: Path, sd: date, hold_days: int, market_profile=None, por
         #    （relativity 实测因 MA60 破位恶化 -9.57%→-13.86%）。
         # 全样本BASELINE实测 -6.37%→-5.09%(+1.28pct)，回撤 -7.81%→-6.69% 收窄。
         # 波动率自适应：stop_loss_pct 为全局兜底(-8%)，逐只 stop_pct 列（个股 vol20 定）优先。
+        # 全局兜底也改由 compute_adaptive_exit_params 自适应（波动率/regime 浮动）。
         enable_exits=True,
         use_signal_bands=True,
-        stop_loss_pct=0.08,
-        take_profit_pct=0.06,
-        trailing_stop_pct=0.05,
-        trend_exit_ma=60,
+        stop_loss_pct=_exit["stop_loss_pct"],
+        take_profit_pct=_exit["take_profit_pct"],
+        trailing_stop_pct=_exit["trailing_stop_pct"],
+        trend_exit_ma=_exit["trend_exit_ma"],
         size_by=size_by,
         capital_scale=capital_scale,
     )

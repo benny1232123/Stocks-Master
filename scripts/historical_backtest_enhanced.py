@@ -37,8 +37,9 @@ from scripts.daily_backtest import (
     compute_market_profile,
     TOP_N,
     VOL_STOP_MULT,
-    _VOL_POS_SCALE_MAP,
 )
+from smcore.strategy.risk_rules import compute_adaptive_exit_params
+from smcore.strategy.adaptive_weights import cash_from_volatility, cash_from_regime
 
 HIST_START = os.environ.get("HIST_START", "2026-01-01")
 HIST_END = os.environ.get("HIST_END", date.today().strftime("%Y-%m-%d"))
@@ -164,13 +165,17 @@ def _run_one_day(sd, sd_tag, local, idx_ret20, market_profile, hold_days,
 
     capital_scale = 1.0
     if market_profile is not None:
-        capital_scale = _VOL_POS_SCALE_MAP.get(market_profile.volatility_level, 0.85)
+        _cash = cash_from_volatility(getattr(market_profile, "volatility_pctile", None))
+        _cash = cash_from_regime(getattr(market_profile, "regime", None), _cash)
+        capital_scale = max(0.0, 1.0 - _cash / 100.0)
 
+    _exit = compute_adaptive_exit_params(market_profile, regime=getattr(market_profile, "regime", None))
     result = run_forward_signal_backtest(
         sub, hold_days=hold_days, initial_capital=100000.0,
         max_positions=200, enable_exits=True, use_signal_bands=True,
-        stop_loss_pct=0.08, take_profit_pct=0.06, trailing_stop_pct=0.05,
-        trend_exit_ma=60, size_by="综合评分", capital_scale=capital_scale,
+        stop_loss_pct=_exit["stop_loss_pct"], take_profit_pct=_exit["take_profit_pct"],
+        trailing_stop_pct=_exit["trailing_stop_pct"], trend_exit_ma=_exit["trend_exit_ma"],
+        size_by="综合评分", capital_scale=capital_scale,
     )
     if result.summary.get("error"):
         return

@@ -28,27 +28,23 @@ from typing import Optional
 
 import pandas as pd
 
-from smcore.config.defaults import (
-    BETA_MIN_KEEP,
-    MAX_SECTOR_WEIGHT_PCT,
-    PORTFOLIO_BETA_CEILING,
-    STOCK_DATA_DIR,
+from smcore.config.defaults import STOCK_DATA_DIR
+from smcore.strategy.risk_rules import (
+    RISK_CONFIG,
+    compute_adaptive_risk_params,
+    compute_adaptive_exit_params,
 )
 from smcore.utils.code import format_stock_code
 
-DEFAULT_EXIT = dict(
-    stop_loss_pct=0.08,
-    take_profit_pct=0.06,
-    trailing_stop_pct=0.05,
-    trend_exit_ma=60,
-    hold_days=10,
-    slippage=0.001,
-)
+# 出场参数：自适应（随波动率/regime 浮动，基线=已验证的 8/6/5/60），见 risk_config.json。
+DEFAULT_EXIT = compute_adaptive_exit_params()
 
 # 回撤熔断：组合回撤越大，新建仓可部署现金越少（防守性降仓）。
 # cash_buffer = clamp(当前回撤 / DD_FULL, 0, 1) * DD_CASH_CEILING，叠加在静态 cash_frac 之上。
-DD_FULL = 0.20          # 回撤达到该比例 → 触发满额缓冲
-DD_CASH_CEILING = 0.50  # 满额缓冲时额外保留的现金比例上限（与静态 cash_frac 叠加）
+# 阈值配置驱动（见 risk_config.json），不再写死。
+_DD = RISK_CONFIG["drawdown"]
+DD_FULL = _DD["dd_full"]            # 回撤达到该比例 → 触发满额缓冲
+DD_CASH_CEILING = _DD["dd_cash_ceiling"]  # 满额缓冲时额外保留的现金比例上限
 
 
 def _load_k_window(code: str, start: str, end: str) -> pd.DataFrame:
@@ -365,20 +361,21 @@ class PaperPortfolio:
         pf.save()
     """
 
-    def __init__(self, initial_capital: float = 1_000_000.0, max_single_weight: float = 0.10,
+    def __init__(self, initial_capital: float = 1_000_000.0, max_single_weight: Optional[float] = None,
                  cash_frac: float = 0.0, max_sector_weight: Optional[float] = None,
-                 portfolio_beta_ceiling: Optional[float] = None, beta_min_keep: int = BETA_MIN_KEEP,
-                 dd_cash_ceiling: float = DD_CASH_CEILING, dd_full: float = DD_FULL,
+                 portfolio_beta_ceiling: Optional[float] = None, beta_min_keep: Optional[int] = None,
+                 dd_cash_ceiling: Optional[float] = None, dd_full: Optional[float] = None,
                  sector_resolver=None, **exit_kwargs):
+        _r = compute_adaptive_risk_params()
         self.initial_capital = initial_capital
         self.cash = initial_capital
-        self.max_single_weight = max_single_weight
+        self.max_single_weight = max_single_weight if max_single_weight is not None else (_r["max_single_weight_pct"] / 100.0)
         self.cash_frac = cash_frac
-        self.max_sector_weight = max_sector_weight if max_sector_weight is not None else (MAX_SECTOR_WEIGHT_PCT / 100.0)
-        self.portfolio_beta_ceiling = portfolio_beta_ceiling if portfolio_beta_ceiling is not None else PORTFOLIO_BETA_CEILING
-        self.beta_min_keep = beta_min_keep
-        self.dd_cash_ceiling = dd_cash_ceiling
-        self.dd_full = dd_full
+        self.max_sector_weight = max_sector_weight if max_sector_weight is not None else (_r["max_sector_weight_pct"] / 100.0)
+        self.portfolio_beta_ceiling = portfolio_beta_ceiling if portfolio_beta_ceiling is not None else _r["max_portfolio_beta"]
+        self.beta_min_keep = beta_min_keep if beta_min_keep is not None else _r["beta_min_keep"]
+        self.dd_cash_ceiling = dd_cash_ceiling if dd_cash_ceiling is not None else DD_CASH_CEILING
+        self.dd_full = dd_full if dd_full is not None else DD_FULL
         # sector_resolver(code)->行业名 或 None；为 None 时跳过行业权重再平衡（缺离线行业映射）。
         self.sector_resolver = sector_resolver
         self.exit = {**DEFAULT_EXIT, **exit_kwargs}
@@ -419,13 +416,13 @@ class PaperPortfolio:
         except Exception:
             return cls()
         pf = cls(initial_capital=d.get("initial_capital", 1_000_000.0),
-                 max_single_weight=d.get("max_single_weight", 0.10),
+                 max_single_weight=d.get("max_single_weight", None),
                  cash_frac=d.get("cash_frac", 0.0),
                  max_sector_weight=d.get("max_sector_weight", None),
                  portfolio_beta_ceiling=d.get("portfolio_beta_ceiling", None),
-                 beta_min_keep=d.get("beta_min_keep", BETA_MIN_KEEP),
-                 dd_cash_ceiling=d.get("dd_cash_ceiling", DD_CASH_CEILING),
-                 dd_full=d.get("dd_full", DD_FULL),
+                 beta_min_keep=d.get("beta_min_keep", None),
+                 dd_cash_ceiling=d.get("dd_cash_ceiling", None),
+                 dd_full=d.get("dd_full", None),
                  **d.get("exit", {}))
         pf.cash = d.get("cash", pf.initial_capital)
         pf.positions = d.get("positions", {})

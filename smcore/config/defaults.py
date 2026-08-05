@@ -49,18 +49,25 @@ IMPORTANT_SHAREHOLDERS = (
 IMPORTANT_SHAREHOLDER_TYPES = ("社保基金",)
 
 # ── 风险中性化（组合层约束，避免单一暴露拖垮组合）──
-# 行业权重上限：单行业入选总仓位占组合比例上限（%），与 sectors.py 的数量上限互补。
-MAX_SECTOR_WEIGHT_PCT = 20.0
-# 组合 β 软上限：组合对沪深300 的加权 β 超过该值则逐步剔除高 β 个股（贴近基准、控回撤）。
-PORTFOLIO_BETA_CEILING = 1.4
 # β 估计窗口（交易日），用本地 k_data 与沪深300 序列对齐计算。
 BETA_WINDOW = 60
 # 个股 β 缺数据（无本地 k_data）时的回退值：中性 1.0，不阻断清单生成。
 BETA_FALLBACK = 1.0
-# 剔除高 β 个股时，清单至少保留的只数（避免为压 β 把清单砍光）。
-BETA_MIN_KEEP = 8
-# 单名仓位上限（%）：任一单只股票的建议仓位不得超过该值。
-# 这是组合层最后一道集中度闸——行业权重上限只约束「板块」、β 上限只约束「市场暴露」，
-# 二者都管不到「单只票吃光仓位」的情形（如某策略权重 40% 且只活下来 1 只，就会把 40% 押在一只票上）。
-# 10% 上限保证极端情况下也至少有 ~10 只票平分组合，直接削掉单名黑天鹅尾部。
-MAX_SINGLE_WEIGHT_PCT = 10.0
+
+# 以下四个「上限/地板」不再是写死调参常量——其活跃值由 smcore.strategy.risk_rules
+# 按名单广度 + regime + 波动率实时计算（见 risk_config.json）。这里仅保留它们作为
+# **绝对安全天花板/地板**（取自 risk_config 的可热更新取值），防止自适应公式在极端数据下
+# 越界（如单票满仓）。它们是结构性安全约束，非自选「手工规则」。A股一手=100股(交易所规则)
+# 由 fusion/position_sizing 的 LOT_SIZE 另行强制，不在本层。
+try:
+    from smcore.strategy.risk_rules import RISK_CONFIG
+
+    MAX_SECTOR_WEIGHT_PCT = RISK_CONFIG["sector_weight"]["ceil_pct"]
+    PORTFOLIO_BETA_CEILING = RISK_CONFIG["portfolio_beta"]["max"]
+    BETA_MIN_KEEP = int(RISK_CONFIG["beta_min_keep"]["min"])
+    MAX_SINGLE_WEIGHT_PCT = RISK_CONFIG["single_weight"]["ceil_pct"]
+except Exception:  # 兜底，保证缺 risk_config 也能跑
+    MAX_SECTOR_WEIGHT_PCT = 35.0
+    PORTFOLIO_BETA_CEILING = 1.8
+    BETA_MIN_KEEP = 5
+    MAX_SINGLE_WEIGHT_PCT = 15.0

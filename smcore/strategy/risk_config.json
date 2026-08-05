@@ -1,0 +1,79 @@
+{
+  "single_weight": {
+    "expansion": 1.5,
+    "floor_pct": 5.0,
+    "ceil_pct": 15.0,
+    "vol_sensitivity": 0.5
+  },
+  "sector_weight": {
+    "expansion": 1.8,
+    "floor_pct": 10.0,
+    "ceil_pct": 35.0,
+    "regime_mult": {
+      "下行防御": 0.8,
+      "震荡轮动": 1.0,
+      "趋势上行": 1.1
+    }
+  },
+  "max_per_sector": {
+    "expansion": 1.3,
+    "min_count": 2,
+    "max_count": 12
+  },
+  "portfolio_beta": {
+    "base": 1.3,
+    "regime_delta": {
+      "下行防御": -0.3,
+      "震荡轮动": 0.0,
+      "趋势上行": 0.3
+    },
+    "min": 0.8,
+    "max": 1.8
+  },
+  "beta_min_keep": {
+    "frac_of_picks": 0.5,
+    "min": 5,
+    "max": 15
+  },
+  "max_per_strategy": {
+    "expansion": 1.0,
+    "min": 3,
+    "max": 20
+  },
+  "sector_momentum_bonus": {
+    "dispersion_k": 120.0,
+    "floor": 2.0,
+    "ceil": 12.0
+  },
+  "drawdown": {
+    "dd_full": 0.20,
+    "dd_cash_ceiling": 0.50
+  },
+  "exit": {
+    "stop_loss_pct": {
+      "base": 0.08,
+      "min": 0.04,
+      "max": 0.15,
+      "vol_sensitivity": 0.5
+    },
+    "take_profit_pct": {
+      "base": 0.06,
+      "min": 0.03,
+      "max": 0.12,
+      "vol_sensitivity": 0.5
+    },
+    "trailing_stop_pct": {
+      "base": 0.05,
+      "min": 0.025,
+      "max": 0.10,
+      "vol_sensitivity": 0.5
+    },
+    "trend_exit_ma": {
+      "defensive": 40,
+      "neutral": 60,
+      "up": 90
+    },
+    "hold_days": 10,
+    "slippage": 0.001
+  }
+}

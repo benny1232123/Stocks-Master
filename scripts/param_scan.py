@@ -33,8 +33,9 @@ from scripts.daily_backtest import (
     compute_market_profile,
     TOP_N,
     VOL_STOP_MULT,
-    _VOL_POS_SCALE_MAP,
 )
+from smcore.strategy.risk_rules import compute_adaptive_exit_params
+from smcore.strategy.adaptive_weights import cash_from_volatility, cash_from_regime
 
 HIST_START = os.environ.get("HIST_START", "2026-01-01")
 HIST_END = os.environ.get("HIST_END", date.today().strftime("%Y-%m-%d"))
@@ -78,7 +79,9 @@ def _gen_candidates(local, idx_ret20, market_profile, hold_days, top_n, min_amou
 
     caps = 1.0
     if market_profile is not None:
-        caps = _VOL_POS_SCALE_MAP.get(market_profile.volatility_level, 0.85)
+        _cash = cash_from_volatility(getattr(market_profile, "volatility_pctile", None))
+        _cash = cash_from_regime(getattr(market_profile, "regime", None), _cash)
+        caps = max(0.0, 1.0 - _cash / 100.0)
 
     out = []
     for sd in trade_dates:

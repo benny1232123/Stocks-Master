@@ -30,10 +30,10 @@ from smcore.utils.code import format_stock_code
 
 SECTOR_MAP_PATH = PROJECT_ROOT / "stock_data" / "sector_map.json"
 
-# 单板块集中度上限（最终入选清单中同一板块最多几只）
-DEFAULT_MAX_PER_SECTOR = 5
-# 单板块权重上限（最终入选清单中同一板块总仓位占比上限，%），真正的"行业中性化"约束
-DEFAULT_MAX_SECTOR_WEIGHT_PCT = 20.0
+# 单板块集中度上限 / 单板块权重上限：不再是写死常量，改由 smcore.strategy.risk_rules
+# 按名单广度（名单长度 N、行业数 M）与 regime 实时计算（见 risk_config.json），
+# 广度越窄单名可越重、行业越集中单行业可占比越高，且受天花板约束。函数默认 max_per /
+# max_weight_pct=None 时自动走自适应解析（见下方 _adaptive_* 辅助函数）。
 # 板块动量评分加成幅度（点对综合评分，领先板块 +BONUS / 落后 -BONUS，线性插值）
 SECTOR_MOMENTUM_BONUS = 6.0
 # 候选数低于此值时不做板块动量加成（样本太少无统计意义）
@@ -227,6 +227,15 @@ def compute_sector_momentum(
         if vals:
             medians[ind] = statistics.median(vals)
 
+    # 板块动量加成幅度：随板块截面离散度自适应（离散越大→对强势板块倾斜越强），
+    # 替代写死的 SECTOR_MOMENTUM_BONUS=6.0；risk_rules 不可达时回退该常量。
+    try:
+        from smcore.strategy.risk_rules import compute_sector_momentum_bonus
+
+        _bonus_amp = compute_sector_momentum_bonus(medians)
+    except Exception:
+        _bonus_amp = SECTOR_MOMENTUM_BONUS
+
     sector_bonus: dict[str, float] = {}
     valid = [m for m in medians.values() if m is not None]
     if len(valid) >= 2 and len(cand_ret20) >= MIN_SECTOR_MOMENTUM_SAMPLES:
@@ -234,7 +243,7 @@ def compute_sector_momentum(
         n = len(ranked)
         for rank, (ind, med) in enumerate(ranked):
             frac = (rank / (n - 1)) if n > 1 else 0.5  # 0..1
-            sector_bonus[ind] = round(SECTOR_MOMENTUM_BONUS * (frac - 0.5) * 2, 2)
+            sector_bonus[ind] = round(_bonus_amp * (frac - 0.5) * 2, 2)
     else:
         # 样本不足：不加成（全部 0）
         for ind in medians:
@@ -242,10 +251,42 @@ def compute_sector_momentum(
     return sector_bonus, medians
 
 
+def _count_distinct_sectors(df, sector_map) -> int:
+    """返回 df 中已映射（非"未知"）行业的不同行业数，供自适应行业上限计算广度。"""
+    if df is None or df.empty or not sector_map or "股票代码" not in df.columns:
+        return 1
+    s = set()
+    for c in df["股票代码"]:
+        ind = industry_of(c, sector_map)
+        if ind and ind != "未知":
+            s.add(ind)
+    return max(1, len(s))
+
+
+def _adaptive_max_per_sector(df, sector_map) -> int:
+    try:
+        from smcore.strategy.risk_rules import compute_adaptive_risk_params
+
+        n = len(df) if (df is not None and not df.empty) else 15
+        return compute_adaptive_risk_params(n_picks=n, n_sectors=_count_distinct_sectors(df, sector_map))["max_per_sector"]
+    except Exception:
+        return 5
+
+
+def _adaptive_max_sector_weight(df, sector_map) -> float:
+    try:
+        from smcore.strategy.risk_rules import compute_adaptive_risk_params
+
+        n = len(df) if (df is not None and not df.empty) else 15
+        return compute_adaptive_risk_params(n_picks=n, n_sectors=_count_distinct_sectors(df, sector_map))["max_sector_weight_pct"]
+    except Exception:
+        return 20.0
+
+
 def apply_sector_cap(
     df,
     sector_map: Optional[dict] = None,
-    max_per: int = DEFAULT_MAX_PER_SECTOR,
+    max_per: int = None,
     top_n: int = 15,
 ):
     """对（已按评分排序的）候选 df 施加单板块集中度上限。
@@ -263,6 +304,8 @@ def apply_sector_cap(
     Returns:
         (capped_df, hit_cap: bool): 施加上限后的 DataFrame，及是否触发了上限
     """
+    if max_per is None:
+        max_per = _adaptive_max_per_sector(df, sector_map)
     if df is None or df.empty or "股票代码" not in df.columns:
         return df, False
     if not sector_map:
@@ -294,7 +337,7 @@ def apply_sector_cap(
 def apply_sector_weight_cap(
     df,
     sector_map: Optional[dict] = None,
-    max_weight_pct: float = DEFAULT_MAX_SECTOR_WEIGHT_PCT,
+    max_weight_pct: float = None,
     top_n: int = 15,
 ):
     """对（已算好建议仓位% 的）候选 df 施加单板块*权重*口径上限。
@@ -316,6 +359,8 @@ def apply_sector_weight_cap(
     Returns:
         (capped_df, hit_cap: bool)
     """
+    if max_weight_pct is None:
+        max_weight_pct = _adaptive_max_sector_weight(df, sector_map)
     if df is None or df.empty or "股票代码" not in df.columns or "建议仓位%" not in df.columns:
         return df, False
     if not sector_map:

@@ -221,6 +221,26 @@ def run_forward_signal_backtest(
       - 持有满 hold_days 个日历日强制平仓（兜底上限）
     默认 enable_exits=False 时行为与改动前一致（仅按持有天数平仓），保证向后兼容。
     """
+    # 出场参数 None → 自适应中性（波动率中位、震荡市 → 基线 8/6/5/60），
+    # 彻底消除「None 直接禁用止损」的隐患；risk_rules 不可达时回退已验证字面量。
+    try:
+        from smcore.strategy.risk_rules import compute_adaptive_exit_params
+
+        _exit = compute_adaptive_exit_params()
+        stop_loss_pct = stop_loss_pct if stop_loss_pct is not None else _exit["stop_loss_pct"]
+        take_profit_pct = take_profit_pct if take_profit_pct is not None else _exit["take_profit_pct"]
+        trailing_stop_pct = trailing_stop_pct if trailing_stop_pct is not None else _exit["trailing_stop_pct"]
+        trend_exit_ma = trend_exit_ma if trend_exit_ma is not None else _exit["trend_exit_ma"]
+    except Exception:
+        if stop_loss_pct is None:
+            stop_loss_pct = 0.08
+        if take_profit_pct is None:
+            take_profit_pct = 0.06
+        if trailing_stop_pct is None:
+            trailing_stop_pct = 0.05
+        if trend_exit_ma is None:
+            trend_exit_ma = 60
+
     from collections import defaultdict
 
     from smcore.data.kline import fetch_daily_k

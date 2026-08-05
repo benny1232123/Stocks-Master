@@ -30,13 +30,9 @@ from __future__ import annotations
 
 import pandas as pd
 
-from smcore.config.defaults import (
-    BETA_MIN_KEEP,
-    MAX_SINGLE_WEIGHT_PCT,
-    PORTFOLIO_BETA_CEILING,
-)
 from smcore.strategy.market import compute_market_profile
 from smcore.strategy import sectors as sector_mod
+from smcore.strategy.risk_rules import compute_adaptive_risk_params
 
 # ── A 股交易约束 ─────────────────────────────────────────────────────
 LOT_SIZE = 100  # A 股最小交易单位（一手 = 100 股）
@@ -55,6 +51,18 @@ def _lot_round(amount: float, price: float) -> float:
         return float(amount)
     import math
     return math.ceil(float(amount) / lot_cost) * lot_cost
+
+
+def _count_sectors(df, sector_map) -> int:
+    """返回 df 中已映射（非"未知"）行业的不同行业数，供自适应风险参数计算广度。"""
+    if df is None or df.empty or not sector_map or "股票代码" not in df.columns:
+        return 1
+    s = set()
+    for c in df["股票代码"]:
+        ind = sector_mod.industry_of(c, sector_map)
+        if ind and ind != "未知":
+            s.add(ind)
+    return max(1, len(s))
 
 
 # ── 子模块（重新导出以兼容历史调用点）─────────────────────────────────
@@ -158,7 +166,7 @@ def fuse_signals(
     *,
     total_capital: float = 100000.0,
     max_picks: int = 50,
-    max_per_strategy: int = 10,
+    max_per_strategy: int = None,
     fetch_levels: bool = True,
     trend_guard: bool = True,
     market_gate: bool = True,
@@ -166,12 +174,13 @@ def fuse_signals(
     min_signal_amount: float = MIN_SIGNAL_AMOUNT,
     dynamic_thresholds: bool = True,
     sector_cap: bool = True,
-    max_per_sector: int = sector_mod.DEFAULT_MAX_PER_SECTOR,
+    max_per_sector: int = None,
     sector_weight_cap: bool = True,
-    max_sector_weight_pct: float = sector_mod.DEFAULT_MAX_SECTOR_WEIGHT_PCT,
+    max_sector_weight_pct: float = None,
     beta_neutral: bool = True,
-    max_portfolio_beta: float = PORTFOLIO_BETA_CEILING,
-    max_single_weight_pct: float = MAX_SINGLE_WEIGHT_PCT,
+    max_portfolio_beta: float = None,
+    max_single_weight_pct: float = None,
+    beta_min_keep: int = None,
     max_stale_days: int = 3,
 ) -> tuple[pd.DataFrame, str]:
     """融合四策略信号，输出今日操作清单。
@@ -235,8 +244,11 @@ def fuse_signals(
     weights = {s: adaptive_pct.get(s, 0) * (100 - cash_pct) / 100.0 for s in adaptive_pct}
 
     rows = []
-    # 单名仓位上限（小数），风险层最后一道集中度闸
-    max_single_weight_frac = max_single_weight_pct / 100.0
+    # 单名仓位上限（小数）：初值，最终在风险层用实际名单长度重算（自适应，零硬编码）
+    _early_risk = compute_adaptive_risk_params(regime=regime, profile=profile, n_picks=max_picks)
+    max_single_weight_frac = (
+        max_single_weight_pct if max_single_weight_pct is not None else _early_risk["max_single_weight_pct"]
+    ) / 100.0
     single_cap_hit = 0  # 命中单名上限的只数（最后一趟重算为准）
     # 候选股近20日收益（ret20），供板块轮动动量加成使用（融合已算过，零额外联网）
     cand_ret20: dict[str, Optional[float]] = {}
@@ -392,13 +404,22 @@ def fuse_signals(
                     axis=1,
                 )
         df = df.sort_values("综合评分", ascending=False).reset_index(drop=True)
+        # ── 自适应风险参数（随名单广度 + 行业数 + regime 实时计算，零硬编码）──
+        _sectors = _count_sectors(df, sector_map) if (sector_cap and sector_map) else 1
+        _risk = compute_adaptive_risk_params(
+            regime=regime, profile=profile, n_picks=max(len(df), 1), n_sectors=_sectors
+        )
+        max_per_strategy_eff = max_per_strategy if max_per_strategy is not None else _risk["max_per_strategy"]
+        max_per_sector_eff = max_per_sector if max_per_sector is not None else _risk["max_per_sector"]
+        max_sector_weight_eff = max_sector_weight_pct if max_sector_weight_pct is not None else _risk["max_sector_weight_pct"]
+
         # 按策略分散上限：防止单策略占满最终名单、压垮分散度，
         # 保证自适应策略权重能真正生效（每个策略都有代表票进入回测）
-        df = _apply_strategy_cap(df, max_per_strategy)
-        # 单板块集中度控制：最终入选单板块最多 max_per_sector 只，强制分散（映射缺失则跳过）
+        df = _apply_strategy_cap(df, max_per_strategy_eff)
+        # 单板块集中度控制：最终入选单板块最多 max_per_sector_eff 只，强制分散（映射缺失则跳过）
         if sector_cap and sector_map:
             df, sector_hit_cap = sector_mod.apply_sector_cap(
-                df, sector_map, max_per=max_per_sector, top_n=max_picks
+                df, sector_map, max_per=max_per_sector_eff, top_n=max_picks
             )
         else:
             df = df.head(max_picks)
@@ -414,28 +435,37 @@ def fuse_signals(
                 _s = _s.strip().lower()
                 if _s in _surv:
                     _surv[_s] += 1
+        # 单名仓位上限（小数）：随名单长度自适应，且受天花板约束（零硬编码）
+        max_single_eff = max_single_weight_pct if max_single_weight_pct is not None else _risk["max_single_weight_pct"]
+        max_single_weight_frac = max_single_eff / 100.0
         df, single_cap_hit = _apply_position_sizing(
             df, weights, _surv, total_capital, max_single_weight_frac
         )
 
     # ── ④ 风险中性化 ────────────────────────────────────────────────
-    # (a) 行业权重上限：任一板块总仓位 ≤ 全组合 × max_sector_weight_pct（与数量上限互补）
+    # (a) 行业权重上限：任一板块总仓位 ≤ 全组合 × max_sector_weight_eff（与数量上限互补）
     beta_hit = 0
     if not df.empty and sector_map:
         if sector_weight_cap:
             df, weight_hit = sector_mod.apply_sector_weight_cap(
-                df, sector_map, max_weight_pct=max_sector_weight_pct, top_n=max_picks
+                df, sector_map, max_weight_pct=max_sector_weight_eff, top_n=max_picks
             )
         else:
             weight_hit = False
         # (b) 组合 β 软约束：组合对沪深300 的加权 β 超上限则逐步剔除最高 β 个股
-        if beta_neutral and len(df) > BETA_MIN_KEEP:
+        max_beta_eff = max_portfolio_beta if max_portfolio_beta is not None else _risk["max_portfolio_beta"]
+        beta_min_keep_eff = beta_min_keep if beta_min_keep is not None else _risk["beta_min_keep"]
+        if beta_neutral and len(df) > beta_min_keep_eff:
             betas = _estimate_betas(df["股票代码"].tolist(), date_yyyymmdd)
-            df, beta_hit = _apply_beta_cap(df, betas, max_beta=max_portfolio_beta, min_keep=BETA_MIN_KEEP)
+            df, beta_hit = _apply_beta_cap(df, betas, max_beta=max_beta_eff, min_keep=beta_min_keep_eff)
             df = df.reset_index(drop=True)
-            # β 约束可能改变入选，重算仓位金额（避免建议金额与最终清单错位）；
-            # 这趟重算若执行，则以它为准（覆盖上面的 single_cap_hit 计数）
+            # β 约束可能改变入选，用最新名单长度重算仓位金额（覆盖上面的 single_cap_hit 计数）
             if not df.empty:
+                _risk2 = compute_adaptive_risk_params(
+                    regime=regime, profile=profile, n_picks=max(len(df), 1), n_sectors=_sectors
+                )
+                max_single_eff = max_single_weight_pct if max_single_weight_pct is not None else _risk2["max_single_weight_pct"]
+                max_single_weight_frac = max_single_eff / 100.0
                 df, single_cap_hit = _apply_position_sizing(
                     df, weights, _surv, total_capital, max_single_weight_frac
                 )
@@ -453,7 +483,7 @@ def fuse_signals(
         len(momentum),
         source_dates=source_dates,
         max_stale_days=max_stale_days,
-        max_single_weight_pct=max_single_weight_pct,
+        max_single_weight_pct=max_single_eff,
     )
     if filtered_out:
         report += f"\n- 🛡️ 趋势守卫剔除 {filtered_out} 只破位/下降通道股（价格低于 MA20 超 12%）"
@@ -475,14 +505,14 @@ def fuse_signals(
         report += f"\n- 💧 流动性门槛剔除 {liquidity_filtered_out} 只信号日成交额 < ¥{min_amt / 1e8:.2f}亿 的票（难出场/庄股陷阱；门槛随市浮动）"
     if sector_cap:
         n_sec = df["股票代码"].map(lambda c: sector_mod.industry_of(c)).nunique() if not df.empty else 0
-        cap_note = "（单板块上限 %d，已触发分散）" % max_per_sector if sector_hit_cap else "（单板块上限 %d）" % max_per_sector
+        cap_note = "（单板块上限 %d，已触发分散）" % max_per_sector_eff if sector_hit_cap else "（单板块上限 %d）" % max_per_sector_eff
         report += f"\n- 🏭 板块轮动+集中度：最终 {len(df)} 只覆盖 {n_sec} 个行业{cap_note}（强势板块候选已微调评分）"
     if not df.empty:
-        wcap_note = "（单行业权重≤%g%%，已触发）" % max_sector_weight_pct if (sector_weight_cap and weight_hit) else "（单行业权重≤%g%%）" % max_sector_weight_pct
+        wcap_note = "（单行业权重≤%g%%，已触发）" % max_sector_weight_eff if (sector_weight_cap and weight_hit) else "（单行业权重≤%g%%）" % max_sector_weight_eff
         betas = _estimate_betas(df["股票代码"].tolist(), date_yyyymmdd) if beta_neutral else {}
         pb = _portfolio_beta(df, betas) if beta_neutral else None
-        beta_note = f"；组合β={pb:.2f}（上限{max_portfolio_beta}，剔除{beta_hit}只高β）" if beta_neutral else ""
-        single_note = "（单名上限≤%g%%，已截断%d只）" % (max_single_weight_pct, single_cap_hit) if single_cap_hit else "（单名上限≤%g%%）" % max_single_weight_pct
+        beta_note = f"；组合β={pb:.2f}（上限{max_beta_eff}，剔除{beta_hit}只高β）" if beta_neutral else ""
+        single_note = "（单名上限≤%g%%，已截断%d只）" % (max_single_eff, single_cap_hit) if single_cap_hit else "（单名上限≤%g%%）" % max_single_eff
         report += f"\n- ⚖️ 风险中性化{wcap_note}{single_note}{beta_note}"
     if profile is not None:
         report += f"\n- 🌡️ 市场仪表盘：{profile.summary()}"
@@ -499,9 +529,9 @@ def fuse_signals(
             "strategy_edge": {s: edge.get(s, {}) for s in adaptive_pct},
             "market_profile": profile.summary() if profile else None,
             "portfolio_beta": round(_portfolio_beta(df, _estimate_betas(df["股票代码"].tolist(), date_yyyymmdd)), 2) if (beta_neutral and not df.empty) else None,
-            "sector_weight_cap_pct": max_sector_weight_pct if sector_weight_cap else None,
-            "beta_ceiling": max_portfolio_beta if beta_neutral else None,
-            "single_weight_cap_pct": max_single_weight_pct,
+            "sector_weight_cap_pct": max_sector_weight_eff if sector_weight_cap else None,
+            "beta_ceiling": max_beta_eff if beta_neutral else None,
+            "single_weight_cap_pct": max_single_eff,
         }
         save_regime_snapshot(snapshot)
     except Exception:
