@@ -601,7 +601,8 @@ class PaperPortfolio:
         if use_col is None:
             return
         # 回撤熔断：当前组合回撤越大，新建仓可部署现金越少（防守性降仓）。
-        investable = self.cash * (1 - self._effective_cash_frac())
+        budget = self.cash * (1 - self._effective_cash_frac())
+        spent = 0.0
         for _, r in dal.iterrows():
             code = format_stock_code(r.get("股票代码"))
             if not code or code in self.positions:
@@ -612,8 +613,10 @@ class PaperPortfolio:
                 continue
             if not pd.notna(w) or w <= 0:
                 continue
-            # 单名仓位上限
-            alloc = min(w / 100.0, self.max_single_weight) * investable
+            # 单名仓位上限（相对预算），并受剩余预算约束（预算内不超配）。
+            alloc = min(w / 100.0, self.max_single_weight) * budget
+            if spent + alloc > budget + 1e-9:
+                alloc = max(0.0, budget - spent)
             if alloc <= 0:
                 continue
             row = dal[dal["股票代码"].apply(format_stock_code) == code].iloc[0]
@@ -649,6 +652,9 @@ class PaperPortfolio:
                 "peak": bp,
                 "last_close": bp,
             }
+            # 开仓占用现金：已从预算扣减，避免现金与持仓市值重复计数（权益守恒）。
+            self.cash -= alloc
+            spent += alloc
 
     def _mark_and_exit(self, code: str, today: date) -> None:
         h = self.positions[code]

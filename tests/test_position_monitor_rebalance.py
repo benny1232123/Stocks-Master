@@ -110,3 +110,33 @@ def test_process_day_records_drawdown_without_network(monkeypatch):
     assert abs(out["drawdown_pct"] - 0.0) < 1e-9  # 净值持平 → 回撤 0
     assert out["total"] == 1_000_000.0
     assert len(pf.equity_curve) == 2
+
+
+def test_open_from_dal_deducts_cash(monkeypatch):
+    """开仓必须把 alloc 从现金扣减，否则现金与持仓市值重复计数（权益虚高）。
+
+    Round 20 烟雾测试曾抓出此 bug：期末资产从 1e6 涨到 7e6（5 天不可能）。"""
+    pf = _pf(max_single_weight=0.10, cash_frac=0.0)
+    start_cash = pf.cash
+    # 固定买入价，避免读 k_data（联网）
+    monkeypatch.setattr(pf, "_buy_open_price", lambda code, buy_date: 10.0)
+    import datetime as dt
+    import pandas as pd
+
+    fake_df = pd.DataFrame({
+        "股票代码": ["000001", "000002", "000003"],
+        "建议金额": [50.0, 30.0, 20.0],  # 合计 100 → 权重 50/30/20
+    })
+    monkeypatch.setattr(pm.pd, "read_csv", lambda *a, **k: fake_df)
+
+    pf._open_from_dal("dummy.csv", dt.date(2026, 1, 1), dt.date(2026, 1, 2))
+
+    # 单名上限 10%×budget(1e6)=100k 把每仓都 cap 到 100k；总 alloc = 300k
+    assert abs(pf.cash - (start_cash - 300_000.0)) < 1e-6
+    for c in ["000001", "000002", "000003"]:
+        assert abs(pf.positions[c]["cost"] - 100_000.0) < 1e-6
+        assert pf.positions[c]["qty"] > 0  # 有真实买入价 → 跟踪股数
+    # 权益守恒：现金 + 持仓市值 ≈ 初始资本（杜绝重复计数）
+    mv = sum(pf._market_value(h) for h in pf.positions.values())
+    assert abs((pf.cash + mv) - start_cash) < 1e-4
+

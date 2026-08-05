@@ -12,13 +12,19 @@ from __future__ import annotations
 import argparse
 import json
 import sys
+from datetime import datetime
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
-from smcore.strategy.position_monitor import run_paper_with_exits  # noqa: E402
+from smcore.config.defaults import STOCK_DATA_DIR  # noqa: E402
+from smcore.strategy.position_monitor import (  # noqa: E402
+    STATE_PATH,
+    PaperPortfolio,
+    run_paper_with_exits,
+)
 
 
 def _fmt(res: dict) -> str:
@@ -48,12 +54,108 @@ def _fmt(res: dict) -> str:
     return "\n".join(lines) + "\n"
 
 
+def run_daily_drive(initial_capital: float = 1_000_000.0, max_single_weight: float = 0.10,
+                     cash_frac: float = 0.0, sector_resolver=None, state_path=STATE_PATH,
+                     limit_days: int | None = None, **exit_kwargs) -> dict:
+    """真实每日链路（离线重放版）：按信号日逐日驱动 PaperPortfolio.process_day。
+
+    每个信号日 sd：用「上一信号日的 DAL」作为 pending 建仓清单在 sd 开盘建仓，
+    并对现有持仓盯市出场 + 漂移再平衡 + 记录组合回撤。这正是 live cron 每天会调用的
+    同一段 process_day 代码，只是离线把历史信号日顺序回放一遍，验证执行闭环无误。
+
+    状态落盘 state_path（默认 stock_data/position_monitor_state.json），支持续跑。
+    """
+    pf = PaperPortfolio.load(state_path) if Path(state_path).exists() else PaperPortfolio(
+        initial_capital=initial_capital, max_single_weight=max_single_weight,
+        cash_frac=cash_frac, sector_resolver=sector_resolver, **exit_kwargs)
+
+    files = sorted(STOCK_DATA_DIR.glob("Daily-Action-List-*.csv"))
+    days = []
+    for f in files:
+        suf = f.name.replace("Daily-Action-List-", "").replace(".csv", "")
+        if len(suf) == 8 and suf.isdigit():
+            try:
+                days.append((datetime.strptime(suf, "%Y%m%d").date(), suf))
+            except ValueError:
+                continue
+    days.sort()
+    if limit_days:
+        days = days[:limit_days]
+
+    pending = None  # (prev_signal_date, prev_dal_path)
+    for sd_date, sd_tag in days:
+        dal_path = STOCK_DATA_DIR / f"Daily-Action-List-{sd_tag}.csv"
+        if pending is not None:
+            prev_date, prev_dal = pending
+            pf.process_day(sd_date, dal_path=prev_dal, pending_signal_date=prev_date)
+        else:
+            pf.process_day(sd_date)
+        pending = (sd_date, dal_path)
+    pf.save(state_path)
+
+    eq = pf.equity_curve
+    # drawdown_pct 以正百分比存储（0~∞），最大回撤 = 曲线上的最大值。
+    max_dd = max((r.get("drawdown_pct", 0.0) for r in eq), default=0.0) if eq else 0.0
+    reasons: dict[str, int] = {}
+    for r in pf.realized:
+        reasons[r.get("exit_reason")] = reasons.get(r.get("exit_reason"), 0) + 1
+    return {
+        "n_days": len(days),
+        "final_total": round(pf.cash + sum(pf._market_value(h) for h in pf.positions.values()), 2),
+        "max_drawdown_pct": round(max_dd, 2),
+        "n_positions_open": len(pf.positions),
+        "n_realized": len(pf.realized),
+        "exit_reasons": reasons,
+        "equity_curve": eq,
+    }
+
+
+def _fmt_daily(res: dict) -> str:
+    lines = [
+        "# 纸盘每日驱动重放（真实 process_day 闭环）",
+        "",
+        f"- 信号日数：**{res['n_days']}**",
+        f"- 期末总资产：**{res['final_total']:,.2f}**",
+        f"- 最大组合回撤：**{res['max_drawdown_pct']:+.2f}%**",
+        f"- 仍持仓数：**{res['n_positions_open']}**　已平仓/再平衡笔数：**{res['n_realized']}**",
+        "",
+        "**平仓/再平衡原因分布**：",
+    ]
+    if res["exit_reasons"]:
+        for k, v in sorted(res["exit_reasons"].items(), key=lambda x: -x[1]):
+            lines.append(f"- {k}: {v}")
+    else:
+        lines.append("- （无）")
+    lines.append("")
+    lines.append("> 说明：本重放按信号日顺序逐日调用 PaperPortfolio.process_day（开仓→盯市出场→漂移再平衡→回撤熔断），")
+    lines.append("> 与 live cron 每日调用的代码路径完全一致；差异仅在定时器与实时 DAL 获取，执行逻辑已离线验证。")
+    return "\n".join(lines) + "\n"
+
+
 def main() -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("--invest-frac", type=float, default=1.0,
                     help="可投比例(其余为现金)，默认1.0=纯选股；生产约0.3")
     ap.add_argument("--emit-json", default=None)
+    ap.add_argument("--daily", action="store_true",
+                    help="真实每日链路重放：逐日驱动 PaperPortfolio.process_day（开仓/出场/再平衡/回撤熔断）")
+    ap.add_argument("--state-path", default=str(STATE_PATH),
+                    help="PaperPortfolio 状态落盘路径（默认 stock_data/position_monitor_state.json）")
+    ap.add_argument("--limit-days", type=int, default=None,
+                    help="仅重放前 N 个信号日（调试用）")
     args = ap.parse_args()
+
+    if args.daily:
+        res = run_daily_drive(state_path=args.state_path, limit_days=args.limit_days)
+        print(_fmt_daily(res))
+        if args.emit_json:
+            try:
+                with open(args.emit_json, "w", encoding="utf-8") as f:
+                    json.dump(res, f, ensure_ascii=False, indent=2, default=str)
+                print(f"\nJSON 已写：{args.emit_json}")
+            except Exception as e:  # pragma: no cover
+                print(f"写 JSON 失败：{e}")
+        return 0
 
     res = run_paper_with_exits(invest_frac=args.invest_frac)
     print(_fmt(res))
