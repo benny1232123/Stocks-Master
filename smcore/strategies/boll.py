@@ -60,14 +60,16 @@ PLOT_ONLY_SELECTED = True
 PLOT_MAX_COUNT = 50
 PLOT_SAVE_DIR = STOCK_DATA_DIR / "plots"
 
+# 重要股东过滤：仅认可「境内长线/国家队」性质的股东。
+# 重要：香港中央结算(沪深港通清算通道)几乎出现在全部 A 股的 Top10 流通股东中，
+# 若纳入会使本过滤对绝大多数股票恒为真、形同虚设，故显式排除。
+# 只保留真正具筛选力的汇金/证金，并辅以社保/养老/保险等长线机构性质。
 IMPORTANT_SHAREHOLDERS = (
-    "香港中央结算有限公司",
     "中央汇金资产管理有限公司",
     "中央汇金投资有限责任公司",
-    "香港中央结算（代理人）有限公司",
     "中国证券金融股份有限公司",
 )
-IMPORTANT_SHAREHOLDER_TYPES = ("社保基金",)
+IMPORTANT_SHAREHOLDER_TYPES = ("社保基金", "基本养老保险基金", "保险")
 
 
 # ── 工具函数 ──
@@ -326,8 +328,10 @@ def run_boll(
     f3 = set(all_fund_flow_codes.get("format_3_days_positive_funds_codes", []))
     f5 = set(all_fund_flow_codes.get("format_5_days_positive_funds_codes", []))
     f10 = set(all_fund_flow_codes.get("format_10_days_positive_funds_codes", []))
-    fund_flow_union = f3 | f5 | f10
-    print(f"[boll] 资金流向候选(3/5/10日净流入并集): {len(fund_flow_union)}")
+    # 资金流：至少两个周期同向净流入（比「任一为正」的并集更具选择性，
+    # 滤掉仅单日脉冲式流入的票，降低噪声信号）。
+    fund_flow_candidates = (f3 & f5) | (f3 & f10) | (f5 & f10)
+    print(f"[boll] 资金流向候选(≥2周期净流入): {len(fund_flow_candidates)}")
 
     # ── 2) 基本面 ──
     zcfz_codes: list = []
@@ -364,7 +368,7 @@ def run_boll(
     fundamental_intersection = set.intersection(*fundamental_sets) if fundamental_sets else set()
     print(f"[boll] 基本面交集: {len(fundamental_intersection)}")
 
-    common_codes = fundamental_intersection & fund_flow_union
+    common_codes = fundamental_intersection & fund_flow_candidates
     print(f"[boll] 基本面∩资金流: {len(common_codes)}")
 
     if exclude_gem_sci:

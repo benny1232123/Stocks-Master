@@ -335,6 +335,9 @@ def fuse_signals(
             row["止损价(下轨)"] = levels.get("lower")
             row["止盈价(上轨)"] = levels.get("upper")
             row["MA20"] = levels.get("ma20")
+            # 逐只波动率自适应止损比例（引擎 stop_pct 列优先于全局 8% 兜底），
+            # 使生产清单携带与个股波动匹配的止损，供 PositionMonitor/引擎使用。
+            row["stop_pct"] = levels.get("stop_pct")
 
         rows.append(row)
 

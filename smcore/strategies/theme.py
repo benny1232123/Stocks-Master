@@ -510,7 +510,9 @@ def _query_all_a_stocks(max_stocks, day_text, request_interval_seconds=0.0, max_
 
 
 def _fetch_recent_k(code, end_date_text, lookback_days=45, request_interval_seconds=0.0, max_retries=2):
-    adjustflag = "3"
+    # 前复权(qfq, adjustflag="2")：与 boll/relativity 一致，保证 ret5/ret20/距高点
+    # 等动量指标跨策略口径可比（不复权会在除权除息后严重失真）。
+    adjustflag = "2"
     cache_key = f"stock_data/baostock_k_{code}_{end_date_text}_{lookback_days}_adj{adjustflag}.csv"
     table_name = _cache_table_name(cache_key)
     cached_df = _read_cache_df(table_name)

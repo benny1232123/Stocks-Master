@@ -52,6 +52,12 @@ def _compute_boll_levels(code: str, as_of_date: Optional[str] = None) -> dict:
         dret = close.iloc[-20:].pct_change().dropna()
         if len(dret) >= 5:
             vol20 = float(dret.std())
+    # 波动率自适应止损比例：高波动票放宽（少被噪声洗）、低波动票收紧（保护更实）。
+    # 全局兜底仍为 8%（引擎 stop_loss_pct），此处给出逐只建议值，区间 [0.04, 0.12]。
+    stop_pct = None
+    if vol20 is not None and vol20 > 0:
+        raw = vol20 * 2.5
+        stop_pct = float(min(0.12, max(0.04, round(raw, 4))))
     return {
         "close": float(last["close"]),
         "lower": float(last["Lower"]) if pd.notna(last.get("Lower")) else None,
@@ -60,4 +66,5 @@ def _compute_boll_levels(code: str, as_of_date: Optional[str] = None) -> dict:
         "ret20": ret20,
         "amount": amount,
         "vol20": vol20,
+        "stop_pct": stop_pct,
     }

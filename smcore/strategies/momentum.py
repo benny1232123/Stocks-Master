@@ -59,6 +59,9 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--max-candidates", type=int, default=MAX_CANDIDATES)
     p.add_argument("--top-n", type=int, default=TOP_N)
     p.add_argument("--sleep-seconds", type=float, default=0.05)
+    p.add_argument("--date", default=None,
+                   help="信号日 YYYY-MM-DD（历史重放用；默认今天）。K线窗口锚定该日，"
+                        "避免 datetime.now() 造成的时点错配/前视偏差。")
     return p.parse_args()
 
 
@@ -100,9 +103,18 @@ def _fetch_spot() -> pd.DataFrame:
     return df if df is not None else pd.DataFrame()
 
 
-def _momentum_metrics(code: str, sleep_seconds: float, min_60d: float = MIN_60D_RETURN) -> dict | None:
-    end = datetime.now().strftime("%Y-%m-%d")
-    start = (datetime.now() - timedelta(days=80)).strftime("%Y-%m-%d")
+def _momentum_metrics(code: str, sleep_seconds: float, min_60d: float = MIN_60D_RETURN, as_of_date: str | None = None) -> dict | None:
+    # K线窗口锚定信号日（as_of_date），默认今天；避免 datetime.now() 造成的时点错配/前视偏差，
+    # 使策略可被历史诚实重放（backfill / PositionMonitor 传信号日即可）。
+    if as_of_date:
+        try:
+            end_dt = datetime.strptime(as_of_date, "%Y-%m-%d")
+        except (ValueError, TypeError):
+            end_dt = datetime.now()
+    else:
+        end_dt = datetime.now()
+    end = end_dt.strftime("%Y-%m-%d")
+    start = (end_dt - timedelta(days=80)).strftime("%Y-%m-%d")
     time.sleep(max(sleep_seconds, 0.0))
     df = fetch_daily_k(code, start, end, adjust="qfq")
     if df is None or len(df) < 25:
@@ -115,14 +127,17 @@ def _momentum_metrics(code: str, sleep_seconds: float, min_60d: float = MIN_60D_
     last = float(close.iloc[-1])
     if last <= 0:
         return None
+    # 必须至少 61 根才能可靠计算 60 日收益；不足则剔除（不再退回窗口起点 close[0]，避免失真评分）。
+    if len(close) <= 61:
+        return None
     try:
-        ret20 = last / float(close.iloc[-21]) - 1 if len(close) > 21 else None
-        ret60 = last / float(close.iloc[-61]) - 1 if len(close) > 61 else (last / float(close.iloc[0]) - 1)
+        ret20 = last / float(close.iloc[-21]) - 1
+        ret60 = last / float(close.iloc[-61]) - 1
     except (IndexError, ZeroDivisionError):
         return None
-    if ret60 is None or ret60 < min_60d:
+    if ret60 < min_60d:
         return None  # 必须 60 日收益达标（中期已走强；新浪快照无 60日列时由此处把关）
-    if ret20 is None or ret20 <= 0:
+    if ret20 <= 0:
         return None  # 必须 20 日收益为正（上升趋势）
     # MA20 斜率：当前 MA20 vs 20 个交易日前 MA20
     ma20_now = float(close.tail(20).mean())
@@ -160,7 +175,14 @@ def _write_empty_momentum(date_str: str, reason: str) -> None:
 def run_momentum() -> None:
     args = parse_args()
     STOCK_DATA_DIR.mkdir(parents=True, exist_ok=True)
-    today_text = datetime.now().strftime("%Y%m%d")
+    # 支持历史重放：--date 指定信号日（YYYY-MM-DD），否则默认今天。
+    if args.date:
+        try:
+            today_text = datetime.strptime(args.date, "%Y-%m-%d").strftime("%Y%m%d")
+        except (ValueError, TypeError):
+            today_text = datetime.now().strftime("%Y%m%d")
+    else:
+        today_text = datetime.now().strftime("%Y%m%d")
 
     print(f"[动量] 拉取全市场快照（新浪，东财-free）...")
     try:
@@ -214,7 +236,7 @@ def run_momentum() -> None:
     for _, r in cand.iterrows():
         code = format_stock_code(r["代码"])
         name = str(r.get("名称", "") or "")
-        m = _momentum_metrics(code, args.sleep_seconds, args.min_60d_return)
+        m = _momentum_metrics(code, args.sleep_seconds, args.min_60d_return, as_of_date=args.date)
         done += 1
         if m is None:
             continue

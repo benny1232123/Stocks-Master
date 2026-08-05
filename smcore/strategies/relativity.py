@@ -34,24 +34,32 @@ PRICE_UPPER_LIMIT = 30.0
 PRICE_LOWER_LIMIT = 5.0
 DEBT_ASSET_RATIO_LIMIT = 70.0
 
-RS_INDEX_CODE = "sh.000001"
+# 对比基准：原默认 sh.000001（上证综指）与股票池（沪深主板）错配，
+# 改用 沪深300(sh.000300) 作为更具代表性的宽基基准，含 CLI 覆盖(--index-code)。
+RS_INDEX_CODE = "sh.000300"
 RS_LOOKBACK_DAYS = 100
 RS_MIN_OVERLAP_DAYS = 30
-RS_UP_TOL = -0.025
+# 上涨满足率阈值（相对口径）：原 -0.025 过于宽松（个股在指数上涨日只要不跌超 2.5% 即计入），
+# 已改为「个股相对指数收益 ≥ up_tol」的相对口径（与抗跌侧 down_outperf 对称），
+# 默认 -0.005 表示指数上涨日个股最多跑输指数 0.5% 仍计入满足。CLI --rs-up-tol 可覆盖。
+RS_UP_TOL = -0.005
 RS_DOWN_OUTPERF = 0.0
 RS_MIN_UP_RATIO = 0.6
 RS_MIN_DOWN_RATIO = 0.7
 RS_MIN_UP_DAYS = 5
 RS_MIN_DOWN_DAYS = 5
+# 停牌/流动性时效过滤：个股最后交易日距信号日超过该天数（日历日）视为停牌或数据陈旧，直接剔除。
+RS_MAX_STALE_DAYS = 7
 
+# 重要股东过滤：仅认可「境内长线/国家队」性质的股东。
+# 重要：香港中央结算(沪深港通清算通道)几乎出现在全部 A 股的 Top10 流通股东中，
+# 若纳入会使本过滤对绝大多数股票恒为真、形同虚设，故显式排除。
 IMPORTANT_SHAREHOLDERS = [
-    "香港中央结算有限公司",
     "中央汇金资产管理有限公司",
     "中央汇金投资有限责任公司",
-    "香港中央结算（代理人）有限公司",
     "中国证券金融股份有限公司",
 ]
-IMPORTANT_SHAREHOLDER_TYPES = ["社保基金"]
+IMPORTANT_SHAREHOLDER_TYPES = ["社保基金", "基本养老保险基金", "保险"]
 
 DEFAULT_SLEEP_SECONDS = 0.0
 DEFAULT_MAX_WORKERS = max(4, min(16, (os.cpu_count() or 8)))
@@ -84,6 +92,8 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--max-workers", type=int, default=DEFAULT_MAX_WORKERS, help="相对强弱评估并发数，默认自适应CPU(4~16)")
     parser.add_argument("--holder-max-workers", type=int, default=DEFAULT_HOLDER_MAX_WORKERS, help="股东筛选并发数")
     parser.add_argument("--min-down-ratio", type=float, default=RS_MIN_DOWN_RATIO, help="抗跌满足率下限，支持 0~1 或 0~100")
+    parser.add_argument("--rs-up-tol", type=float, default=RS_UP_TOL, help="上涨满足率相对口径阈值（个股-指数收益≥该值计入满足）")
+    parser.add_argument("--max-stale-days", type=int, default=RS_MAX_STALE_DAYS, help="个股最后交易日距信号日超过该天数视为停牌/数据陈旧并剔除")
     parser.add_argument("--resume", action="store_true", help="启用相对强弱阶段断点续跑")
     parser.add_argument("--sleep-seconds", type=float, default=DEFAULT_SLEEP_SECONDS, help="慢接口调用间隔秒数，默认0")
     parser.add_argument("--disable-rs", action="store_true", help="关闭相对强弱筛选，仅输出前置候选")
@@ -324,8 +334,9 @@ def build_candidate_codes(
     set_3d = set(fund_flow_codes.get("3d", []))
     set_5d = set(fund_flow_codes.get("5d", []))
     set_10d = set(fund_flow_codes.get("10d", []))
-    fund_flow_union = set_3d | set_5d | set_10d
-    print(f"资金流向条件(至少满足一个)交集: {len(fund_flow_union)}")
+    # 至少两个周期同向净流入（比「任一为正」的并集更具选择性，滤掉单日脉冲流入）
+    fund_flow_union = (set_3d & set_5d) | (set_3d & set_10d) | (set_5d & set_10d)
+    print(f"资金流向条件(≥2周期净流入)交集: {len(fund_flow_union)}")
 
     common_codes_set = fundamental_intersection & fund_flow_union
     print(f"所有条件交集后: {len(common_codes_set)}")
@@ -623,7 +634,9 @@ def relative_strength_pass(
             "overlap_days": int(len(m)),
         }
 
-    up_ok = int((m.loc[up_mask, "sret"] >= up_tol).sum())
+    # 上涨侧改为相对口径（个股-指数收益 ≥ up_tol），与抗跌侧(down_outperf)对称，
+    # 真正刻画「指数上涨日个股是否跟上/跑赢」，避免原绝对阈值(up_tol=-0.025)形同虚设。
+    up_ok = int(((m.loc[up_mask, "sret"] - m.loc[up_mask, "iret"]) >= up_tol).sum())
     down_ok = int(((m.loc[down_mask, "sret"] - m.loc[down_mask, "iret"]) >= down_outperf).sum())
 
     up_ratio = up_ok / up_days if up_days else 0.0
@@ -684,6 +697,7 @@ def _evaluate_single_code(
     min_down_ratio: float,
     bs_request_interval_seconds: float,
     bs_max_retries: int,
+    max_stale_days: int = RS_MAX_STALE_DAYS,
 ) -> tuple[str, bool, dict]:
     code_bs = add_market_prefix_dotted(code)
     stock_close_df = fetch_bs_daily_close(
@@ -701,6 +715,16 @@ def _evaluate_single_code(
             "end_date": end_date,
         }
 
+    # 停牌/流动性时效过滤：个股最后交易日距信号日过远 → 停牌或行情陈旧，剔除避免用陈旧价下单。
+    latest_trade_date = stock_close_df["date"].iloc[-1]
+    if (pd.to_datetime(end_date) - latest_trade_date).days > max_stale_days:
+        return format_stock_code(code), False, {
+            "reason": "stale_or_suspended",
+            "latest_trade_date": latest_trade_date.strftime("%Y-%m-%d"),
+            "end_date": end_date,
+            "max_stale_days": int(max_stale_days),
+        }
+
     latest_close = float(stock_close_df["close"].iloc[-1])
     ma10 = float(stock_close_df["close"].tail(10).mean()) if len(stock_close_df) >= 10 else latest_close
     suggested_buy = round(min(latest_close, ma10), 2)
@@ -713,7 +737,7 @@ def _evaluate_single_code(
         stock_close_df,
         index_close_df,
         min_overlap_days=RS_MIN_OVERLAP_DAYS,
-        up_tol=RS_UP_TOL,
+        up_tol=up_tol,
         down_outperf=RS_DOWN_OUTPERF,
         min_up_ratio=RS_MIN_UP_RATIO,
         min_down_ratio=min_down_ratio,
@@ -738,6 +762,8 @@ def run_relative_strength(
     min_down_ratio: float,
     bs_request_interval_seconds: float,
     bs_max_retries: int,
+    max_stale_days: int = RS_MAX_STALE_DAYS,
+    up_tol: float = RS_UP_TOL,
 ) -> list[dict]:
     if not final_candidate_codes:
         return []
@@ -850,6 +876,7 @@ def run_relative_strength(
                 min_down_ratio,
                 bs_request_interval_seconds,
                 bs_max_retries,
+                max_stale_days,
             )
             if passed:
                 print(
@@ -888,6 +915,7 @@ def run_relative_strength(
                     min_down_ratio,
                     bs_request_interval_seconds,
                     bs_max_retries,
+                    max_stale_days,
                 )
                 futures[fut] = (code_fmt, stock_name)
 
@@ -1040,6 +1068,8 @@ def run_relativity() -> None:
                 min_down_ratio=min_down_ratio,
                 bs_request_interval_seconds=float(args.bs_request_interval_seconds),
                 bs_max_retries=int(args.bs_max_retries),
+                max_stale_days=int(args.max_stale_days),
+                up_tol=float(args.rs_up_tol),
             )
     finally:
         pass  # 单例自动管理登出（进程退出时）
