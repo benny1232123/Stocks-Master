@@ -388,6 +388,95 @@ function _renderMacroInsight(macro) {
   )
 }
 
+function _renderMacroVerdict(macro) {
+  // 各维度打分：+1(利好) / 0(中性) / -1(利空)
+  const scores = { total: 0, details: [] }
+
+  // ── 汇率：人民币偏强→外资流入偏好(+1)；偏弱(-1)
+  if (macro['美元/人民币'] != null) {
+    const v = Number(macro['美元/人民币'])
+    let s = 0, label = ''
+    if (v < 7.0) { s = 1; label = '人民币偏强，利于外资流入' }
+    else if (v > 7.3) { s = -1; label = '人民币承压，外资流出风险' }
+    else { s = 0; label = '汇率中性区间' }
+    scores.total += s; scores.details.push({ name: '汇率', s, label, val: `USD/CNY ${v.toFixed(2)}` })
+  }
+
+  // ── 流动性：SHIBOR 低=充裕(+1)；高=偏紧(-1)
+  if (macro['Shibor隔夜'] != null) {
+    const v = Number(macro['Shibor隔夜'])
+    let s = 0, label = ''
+    if (v < 1.5) { s = 1; label = '流动性充裕' }
+    else if (v > 2.0) { s = -1; label = '资金面偏紧' }
+    else { s = 0; label = '流动性中性' }
+    scores.total += s; scores.details.push({ name: '流动性', s, label, val: `SHIBOR ${v.toFixed(2)}%` })
+  }
+
+  // ── 景气：PMI >=51 扩张(+1)；<50 收缩(-1)
+  if (macro['制造业PMI'] != null) {
+    const v = Number(macro['制造业PMI'])
+    let s = 0, label = ''
+    if (v >= 51) { s = 1; label = '制造业扩张向好' }
+    else if (v < 50) { s = -1; label = '制造业收缩' }
+    else { s = 0; label = '荣枯线附近' }
+    scores.total += s; scores.details.push({ name: '景气', s, label, val: `PMI ${v.toFixed(1)}` })
+  }
+
+  // ── 物价：CPI 温和 0~2%(+1)；>3% 通胀(-1)；<0 通缩(-1)
+  if (macro['CPI同比'] != null) {
+    const v = Number(macro['CPI同比'])
+    let s = 0, label = ''
+    if (v >= 0 && v <= 2) { s = 1; label = '物价温和' }
+    else if (v > 3) { s = -1; label = '通胀偏高' }
+    else { s = -1; label = '通缩/低通胀' }
+    scores.total += s; scores.details.push({ name: '物价', s, label, val: `CPI ${v >= 0 ? '+' : ''}${v.toFixed(1)}%` })
+  }
+
+  // ── 利率环境：10Y 国债低=宽松(+1)；高=收紧(-1)
+  if (macro['10Y国债收益率'] != null) {
+    const v = Number(macro['10Y国债收益率'])
+    let s = 0, label = ''
+    if (v < 2.5) { s = 1; label = '利率低位，估值支撑强' }
+    else if (v > 3.5) { s = -1; label = '利率偏高，估值承压' }
+    else { s = 0; label = '利率中性' }
+    scores.total += s; scores.details.push({ name: '利率', s, label, val: `10Y ${v.toFixed(2)}%` })
+  }
+
+  // ── 综合判定
+  let verdict, verdictCls, verdictIcon, advice
+  if (scores.total >= 3) {
+    verdict = '适合积极交易'; verdictCls = 'verdict-good'; verdictIcon = '🟢'
+    advice = '宏观环境整体偏多，流动性充裕+景气扩张+汇率稳定，可适当提高仓位参与市场。注意控制单票仓位上限与行业分散。'
+  } else if (scores.total >= 1) {
+    verdict = '可谨慎参与'; verdictCls = 'verdict-neutral'; verdictIcon = '🟡'
+    advice = '宏观环境中性偏暖，部分维度有利但存在隐忧（见下方分项）。建议维持中等仓位，优选确定性高的标的，避免追高。'
+  } else {
+    verdict = '建议防守观望'; verdictCls = 'verdict-bad'; verdictIcon = '🔴'
+    advice = '宏观环境偏空，多维度发出警示信号。建议降低仓位、增加现金比例、优先防御性板块，等待信号改善后再积极布局。'
+  }
+
+  return (
+    <div className={`macro-verdict ${verdictCls}`}>
+      <div className="verdict-header">
+        <span className="verdict-icon">{verdictIcon}</span>
+        <span className="verdict-title">{verdict}</span>
+        <span className="verdict-score">综合评分: {scores.total > 0 ? '+' : ''}{scores.total} / 5</span>
+      </div>
+      <div className="verdict-advice">{advice}</div>
+      <div className="verdict-breakdown">
+        {scores.details.map((d) => (
+          <div key={d.name} className={cn('verdict-item', d.s > 0 ? 'v-good' : d.s < 0 ? 'v-bad' : 'v-neutral')}>
+            <span className="v-name">{d.name}</span>
+            <span className="v-val">{d.val}</span>
+            <span className="v-label">{d.label}</span>
+            <span className="v-score">{d.s > 0 ? '+' : ''}{d.s}</span>
+          </div>
+        ))}
+      </div>
+    </div>
+  )
+}
+
 function EquityChart({ equity, initialCapital }) {
   if (!equity || equity.length < 2) return null
 
@@ -1273,6 +1362,11 @@ function App() {
               />
             </section>
 
+            {/* ── 总体交易结论 ── */}
+            <SectionCard title="宏观交易结论" subtitle="基于当前宏观数据的综合判定，供仓位与策略参考" className="verdict-card-wrapper">
+              {_renderMacroVerdict(macroSnapshot)}
+            </SectionCard>
+
             {/* 汇率 + 利率 双栏 */}
             <div className="grid grid-cols-1 lg:grid-cols-2 gap-4 mb-4">
               <SectionCard title="汇率（中行折算价）" subtitle="人民币兑主要外币 · 中行每日公布">
@@ -1282,30 +1376,30 @@ function App() {
                       name: '美元/人民币',
                       val: macroSnapshot['美元/人民币'],
                       fmt: 'price',
-                      note: '1 USD = ? CNY · 核心汇率指标',
+                      note: macroSnapshot['美元/人民币'] != null ? `1 USD ≈ ${Number(macroSnapshot['美元/人民币']).toFixed(4)} CNY · 核心汇率指标` : '1 USD = ? CNY · 核心汇率指标',
                       src: macroSnapshot['美元/人民币_src'],
                     },
                     {
                       name: '欧元/人民币',
                       val: macroSnapshot['欧元/人民币'],
                       fmt: 'price',
-                      note: '1 EUR = ? CNY',
+                      note: macroSnapshot['欧元/人民币'] != null ? `1 EUR ≈ ${Number(macroSnapshot['欧元/人民币']).toFixed(4)} CNY` : '1 EUR = ? CNY',
                       src: macroSnapshot['欧元/人民币_src'],
                     },
                     {
                       name: '日元/人民币',
                       val: macroSnapshot['日元/人民币_inverted'] ?? (macroSnapshot['日元/人民币'] ? (1 / Number(macroSnapshot['日元/人民币'])).toFixed(4) : null),
                       fmt: 'price',
-                      note: macroSnapshot['日元/人民币'] != null
-                        ? `1 CNY ≈ ${Number(macroSnapshot['日元/人民币_inverted'] ?? (100 / Number(macroSnapshot['日元/人民币']))).toFixed(2)} JPY`
-                        : '1 CNY = ? JPY（直观展示）',
+                      note: macroSnapshot['日元/人民币_inverted'] != null
+                        ? `1 CNY ≈ ${Number(macroSnapshot['日元/人民币_inverted']).toFixed(2)} JPY`
+                        : (macroSnapshot['日元/人民币'] != null ? `1 CNY ≈ ${(100 / Number(macroSnapshot['日元/人民币'])).toFixed(2)} JPY（直观展示）` : '1 CNY = ? JPY'),
                       src: macroSnapshot['日元/人民币_src'],
                     },
                     {
                       name: '港币/人民币',
                       val: macroSnapshot['港币/人民币'],
                       fmt: 'price',
-                      note: '1 HKD = ? CNY · 联系汇率制',
+                      note: macroSnapshot['港币/人民币'] != null ? `1 HKD ≈ ${Number(macroSnapshot['港币/人民币']).toFixed(4)} CNY · 联系汇率制` : '1 HKD = ? CNY · 联系汇率制',
                       src: macroSnapshot['港币/人民币_src'],
                     },
                   ].map((item) => (
