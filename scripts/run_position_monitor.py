@@ -64,9 +64,11 @@ def run_daily_drive(initial_capital: float = 1_000_000.0, max_single_weight: flo
     并对现有持仓盯市出场 + 漂移再平衡 + 记录组合回撤。这正是 live cron 每天会调用的
     同一段 process_day 代码，只是离线把历史信号日顺序回放一遍，验证执行闭环无误。
 
-    状态落盘 state_path（默认 stock_data/position_monitor_state.json），支持续跑。
+    **始终从 initial_capital 全新重放**（不读取旧 state）：DAL 历史是不可变的事实源，
+    每次重放都确定性重建完整纸盘组合；旧 state 仅作输出快照（落盘 state_path），
+    不作为累加器——否则 CI 定时器续跑时会把全部历史再处理一遍导致重复计数。
     """
-    pf = PaperPortfolio.load(state_path) if Path(state_path).exists() else PaperPortfolio(
+    pf = PaperPortfolio(
         initial_capital=initial_capital, max_single_weight=max_single_weight,
         cash_frac=cash_frac, sector_resolver=sector_resolver, **exit_kwargs)
 

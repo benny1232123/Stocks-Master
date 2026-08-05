@@ -1,0 +1,54 @@
+name: 纸盘组合每日执行（真实 process_day 闭环）
+
+# 把 PaperPortfolio 的每日执行闭环接入 CI：每个交易日收盘后，用当日（及历史）Daily-Action-List
+# 离线重放 process_day（开仓→盯市出场→漂移再平衡→回撤熔断），产出纸盘组合快照与回撤报告。
+# 纯纸盘、零实盘、零网络（只读 daily-pick 已提交的 k_data 缓存 + DAL + sector_map.json）。
+#
+# 时序：daily-pick 在 08:30 UTC（北京 16:30）跑并 force-push 当日 DAL + k_data；
+# 本流程排在其后（11:00 UTC = 北京 19:00），确保当日数据已落库再重放。
+
+on:
+  schedule:
+    - cron: "0 11 * * 1-5"
+  workflow_dispatch: {}
+
+permissions:
+  contents: read
+  issues: write
+
+jobs:
+  paper-portfolio:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - name: 检出（浅克隆，取最新 DAL + k_data 缓存 + sector_map）
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
+
+      - name: 配置 Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: 安装依赖（仅 pandas；离线重放，零网络）
+        run: pip install --quiet pandas
+
+      - name: 纸盘每日执行（开仓→盯市出场→漂移再平衡→回撤熔断）
+        id: paper
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          python scripts/run_position_monitor.py --daily \
+            --state-path stock_data/position_monitor_state.json \
+            --emit-json stock_data/paper_portfolio_report.json
+
+      - name: 上传纸盘产物
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: paper-portfolio-report
+          path: |
+            stock_data/position_monitor_state.json
+            stock_data/paper_portfolio_report.json
+          retention-days: 30
