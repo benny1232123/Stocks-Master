@@ -463,8 +463,25 @@ def _live_bond_10y():
 
 
 def _live_pmi():
+    """制造业 PMI（月度发布）。多源 fallback 保证海外部署也能拉到。"""
     import akshare as ak
-    # 主源：年度（jin10）
+
+    # 源1：akshare 月度（东财，列名「制造业-指数」）
+    try:
+        df = ak.macro_china_pmi()
+        if df is not None and not df.empty:
+            last = df.iloc[-1]
+            # 实际列名：['月份','制造业-指数','制造业-同比增长','非制造业-指数',...]
+            for col in ("制造业-指数", "制造业PMI", "PMI", "值", "数值"):
+                if col in last and pd.notna(last[col]):
+                    v = float(last[col])
+                    if 30 < v < 70:
+                        dt = str(last.get("月份") or "")
+                        return (v, dt if dt else None)
+    except Exception as exc:
+        print(f"[dashboard] PMI(月度)失败: {exc}")
+
+    # 源2：akshare 年度（jin10）
     try:
         df = ak.macro_china_pmi_yearly()
         if df is not None and not df.empty:
@@ -474,84 +491,124 @@ def _live_pmi():
                     v = float(last[col])
                     if 30 < v < 70:
                         dt = last.get("月份") or last.get("date") or last.get("时间")
-                        return (v, str(dt) if dt is not None else None)
-    except Exception:
-        pass
-    # 备源：月度
+                        return (v, str(dt) if dt else None)
+    except Exception as exc:
+        print(f"[dashboard] PMI(年度)失败: {exc}")
+
+    # 源3：World Bank API（无需key，海外可达）— 用中国 GDP 制造业增长近似
+    # WB 没有 PMI，但用 OECD 或 tradingeconomics 作为最终兜底
     try:
-        df = ak.macro_china_pmi()
-        if df is not None and not df.empty:
-            last = df.iloc[-1]
-            for col in ("制造业PMI", "PMI", "值", "数值", "制造业-指数"):
-                if col in last and pd.notna(last[col]):
-                    v = float(last[col])
-                    if 30 < v < 70:
-                        dt = last.get("月份") or last.get("date") or last.get("时间")
-                        return (v, str(dt) if dt is not None else None)
-    except Exception:
-        pass
+        url = ("https://stats.oecd.org/SDMX-JSON/data/DP_LIVE"
+               "/.PMI.TOT.CHN.M/OECD?contentType=csv&detail=dataOnly"
+               "&startPeriod=2025-01&endPeriod=2026-12")
+        import urllib.request
+        req = urllib.request.Request(url, headers={"User-Agent": "Mozilla/5.0"})
+        resp = urllib.request.urlopen(req, timeout=8)
+        text = resp.read().decode("utf-8", "ignore").strip()
+        lines = [l for l in text.split("\n") if l]
+        if lines:
+            for line in reversed(lines):
+                parts = [p.strip().strip('"') for p in line.split(",")]
+                for p in parts[3:-1]:  # skip TIME/GEO/LOCATION prefix
+                    try:
+                        v = float(p)
+                        if 30 < v < 70:
+                            return (v, parts[2] if len(parts) > 2 else None)
+                    except (ValueError, IndexError):
+                        continue
+    except Exception as exc:
+        print(f"[dashboard] PMI(OECD)失败: {exc}")
+
     return None
 
 
 def _live_cpi():
+    """中国 CPI 同比（%）。多源 fallback。"""
     import akshare as ak
-    # 主源：年度
-    try:
-        df = ak.macro_china_cpi_yearly()
-        if df is not None and not df.empty:
-            last = df.iloc[-1]
-            for col in ("全国CPI_当月同比", "CPI", "CPI年率", "居民消费价格指数_当月同比", "同比增长"):
-                if col in last and pd.notna(last[col]):
-                    v = float(last[col])
-                    if -10 < v < 20:
-                        dt = last.get("月份") or last.get("date")
-                        return (v, str(dt) if dt is not None else None)
-    except Exception:
-        pass
-    # 备源：月度
+
+    # 源1：akshare 月度（东财，列名「今值」）
     try:
         df = ak.macro_china_cpi_monthly()
         if df is not None and not df.empty:
             last = df.iloc[-1]
-            for col in ("全国CPI_当月同比", "CPI", "CPI年率", "居民消费价格指数_当月同比", "同比增长"):
+            # 实际列名：['商品','日期','今值','预测值','前值']
+            for col in ("今值", "全国CPI_当月同比", "CPI", "CPI年率",
+                         "居民消费价格指数_当月同比"):
+                if col in last and pd.notna(last[col]):
+                    v = float(last[col])
+                    if -10 < v < 20:
+                        dt = str(last.get("日期") or last.get("月份") or "")
+                        return (v, dt if dt else None)
+    except Exception as exc:
+        print(f"[dashboard] CPI(月度)失败: {exc}")
+
+    # 源2：akshare 年度（jin10）
+    try:
+        df = ak.macro_china_cpi_yearly()
+        if df is not None and not df.empty:
+            last = df.iloc[-1]
+            for col in ("全国CPI_当月同比", "CPI", "CPI年率",
+                         "居民消费价格指数_当月同比", "同比增长"):
                 if col in last and pd.notna(last[col]):
                     v = float(last[col])
                     if -10 < v < 20:
                         dt = last.get("月份") or last.get("date")
-                        return (v, str(dt) if dt is not None else None)
-    except Exception:
-        pass
+                        return (v, str(dt) if dt else None)
+    except Exception as exc:
+        print(f"[dashboard] CPI(年度)失败: {exc}")
+
+    # 源3：World Bank API（无需key，海外100%可达）
+    try:
+        import urllib.request
+        url = ("http://api.worldbank.org/v2/country/CHN/indicator/"
+               "FP.CPI.TOTL.ZG?format=json&date=2024:2026&per_page=2")
+        req = urllib.request.Request(url, headers={"User-Agent": "Mozilla/5.0"})
+        resp = urllib.request.urlopen(req, timeout=8)
+        data = _json.loads(resp.read())
+        if isinstance(data, list) and len(data) > 1 and data[1]:
+            e = data[1][0]
+            if e.get("value") is not None:
+                return (float(e["value"]), str(e.get("date", "")))
+    except Exception as exc:
+        print(f"[dashboard] CPI(WorldBank)失败: {exc}")
+
     return None
 
 
 def _live_ppi():
+    """中国 PPI 同比（%）。多源 fallback。"""
     import akshare as ak
-    # 主源：年度
+
+    # 源1：akshare macro_china_ppi（东财，最新数据，列名「当月同比增长」）
+    try:
+        df = ak.macro_china_ppi()
+        if df is not None and not df.empty:
+            # 数据按时间倒序排列，首行即最新
+            first = df.iloc[0]
+            for col in ("当月同比增长", "全国PPI_当月同比", "PPI", "PPI年率"):
+                if col in first and pd.notna(first[col]):
+                    v = float(first[col])
+                    if -20 < v < 20:
+                        dt = str(first.get("月份") or "")
+                        return (v, dt if dt else None)
+    except Exception as exc:
+        print(f"[dashboard] PPI(东财)失败: {exc}")
+
+    # 源2：akshare 年度（jin10）
     try:
         df = ak.macro_china_ppi_yearly()
         if df is not None and not df.empty:
             last = df.iloc[-1]
-            for col in ("全国PPI_当月同比", "PPI", "PPI年率", "工业生产者出厂价格指数_当月同比", "同比增长"):
+            for col in ("全国PPI_当月同比", "PPI", "PPI年率",
+                         "工业生产者出厂价格指数_当月同比", "同比增长"):
                 if col in last and pd.notna(last[col]):
                     v = float(last[col])
                     if -20 < v < 20:
                         dt = last.get("月份") or last.get("date")
-                        return (v, str(dt) if dt is not None else None)
-    except Exception:
-        pass
-    # 备源：月度
-    try:
-        df = ak.macro_china_ppi_monthly()
-        if df is not None and not df.empty:
-            last = df.iloc[-1]
-            for col in ("全国PPI_当月同比", "PPI", "PPI年率", "工业生产者出厂价格指数_当月同比", "同比增长"):
-                if col in last and pd.notna(last[col]):
-                    v = float(last[col])
-                    if -20 < v < 20:
-                        dt = last.get("月份") or last.get("date")
-                        return (v, str(dt) if dt is not None else None)
-    except Exception:
-        pass
+                        return (v, str(dt) if dt else None)
+    except Exception as exc:
+        print(f"[dashboard] PPI(年度)失败: {exc}")
+
     return None
 
 
