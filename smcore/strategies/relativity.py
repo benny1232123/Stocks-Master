@@ -168,49 +168,20 @@ def _cache_table_name(cache_key: str) -> str:
 
 def fetch_data_with_fallback(api_func, cache_key: str, *args, **kwargs) -> pd.DataFrame:
     """优先读取 sqlite 缓存，缺失时再调用 API 并写回本地缓存。"""
-    DB_PATH.parent.mkdir(parents=True, exist_ok=True)
+    from smcore.data.fetch_util import fetch_data_core
+
     table_name = _cache_table_name(cache_key)
-
-    conn = sqlite3.connect(DB_PATH)
-    try:
-        try:
-            df = pd.read_sql(f"SELECT * FROM {table_name}", conn)
-            if not df.empty:
-                print(f"成功读取本地数据库表: {table_name}")
-                return df
-            print(f"本地数据库表为空: {table_name}，准备调用 API 补充")
-        except Exception:
-            print(f"本地数据库缺少表: {table_name}，准备调用 API 补充")
-
-        # 调用 API：遇到瞬断网络错误（连接重置 / 超时）自动重试，减少被迫回退本地库
-        transient_errors = (OSError, ConnectionError, socket.timeout)
-        max_retries = int(os.getenv("AK_RETRY", "3"))
-        retry_backoff = float(os.getenv("AK_RETRY_BACKOFF", "2"))
-        df = None
-        for attempt in range(max_retries + 1):
-            try:
-                df = api_func(*args, **kwargs)
-                break
-            except transient_errors as exc:
-                if attempt < max_retries:
-                    print(f"API连接异常，{retry_backoff}s 后重试 ({attempt + 1}/{max_retries}): {exc}")
-                    time.sleep(retry_backoff * (attempt + 1))
-                    continue
-                print(f"API重试 {max_retries} 次仍失败: {exc}")
-                raise
-
-        if isinstance(df, pd.DataFrame) and not df.empty:
-            df.to_sql(table_name, conn, if_exists="replace", index=False)
-            print(f"API调用成功。数据已保存至数据库表: {table_name}")
-            return df
-
-        print(f"API返回空数据: {table_name}")
-        return pd.DataFrame()
-    except Exception as exc:
-        print(f"本地读取和API调用都失败: {exc}")
-        return pd.DataFrame()
-    finally:
-        conn.close()
+    return fetch_data_core(
+        api_func,
+        table_name,
+        *args,
+        db_path=str(DB_PATH),
+        prefer_local=True,
+        timeout=None,
+        retries=int(os.getenv("AK_RETRY", "3")),
+        retry_backoff=float(os.getenv("AK_RETRY_BACKOFF", "2")),
+        **kwargs,
+    )
 
 
 def resolve_report_dates(now: datetime) -> tuple[str, str, list[str], int]:

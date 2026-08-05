@@ -128,26 +128,22 @@ def _sanitize_table_name(name: str) -> str:
 
 
 def fetch_data_with_fallback(api_func, table_name: str, *args, **kwargs):
-    """通用数据获取：优先 API，失败/空时回退本地 SQLite（stock_data/stocks_data.db）。"""
-    db_path = str(STOCK_DATA_DIR / "stocks_data.db")
-    conn = sqlite3.connect(db_path)
-    try:
-        try:
-            df_api = api_func(*args, **kwargs)
-            if isinstance(df_api, pd.DataFrame) and not df_api.empty:
-                df_api.to_sql(table_name, conn, if_exists="replace", index=False)
-                return df_api
-        except Exception:
-            pass
-        try:
-            df_local = pd.read_sql_query(f'SELECT * FROM "{table_name}"', conn)
-            if not df_local.empty:
-                return df_local
-        except Exception:
-            pass
-        return pd.DataFrame()
-    finally:
-        conn.close()
+    """通用数据获取：优先 API，失败/空时回退本地 SQLite（stock_data/stocks_data.db）。
+
+    表名原样传入（不做 sanitize，与历史行为一致）；逻辑委托给统一骨架。
+    """
+    from smcore.data.fetch_util import fetch_data_core
+
+    return fetch_data_core(
+        api_func,
+        table_name,
+        *args,
+        db_path=str(STOCK_DATA_DIR / "stocks_data.db"),
+        prefer_local=False,
+        timeout=None,
+        retries=0,
+        **kwargs,
+    )
 
 
 def _compute_report_dates(today: str | None = None):

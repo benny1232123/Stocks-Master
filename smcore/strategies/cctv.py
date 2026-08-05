@@ -598,7 +598,7 @@ def fetch_data_with_fallback(api_func, file_path, *args, **kwargs):
     :param args, kwargs: 传递给api_func的参数。
     :return: pandas DataFrame。
     """
-    db_path = str(DATA_DIR / "stocks_data.db")
+    from smcore.data.fetch_util import fetch_data_core
 
     def sanitize_table_name(name: str) -> str:
         name = str(name)
@@ -612,32 +612,16 @@ def fetch_data_with_fallback(api_func, file_path, *args, **kwargs):
         return name
 
     table_name = sanitize_table_name(file_path)
-
-    conn = sqlite3.connect(db_path)
-
-    try:
-        try:
-            df_api = _call_with_timeout(lambda: api_func(*args, **kwargs), AK_API_TIMEOUT)
-            if isinstance(df_api, pd.DataFrame) and not df_api.empty:
-                df_api.to_sql(table_name, conn, if_exists='replace', index=False)
-                print(f"API调用成功。数据已保存至数据库表: {table_name}")
-                return df_api
-            print(f"API返回空数据: {table_name}，尝试回退本地数据库")
-        except Exception as api_exc:
-            print(f"API调用失败: {table_name} | {api_exc}，尝试回退本地数据库")
-
-        try:
-            df_local = pd.read_sql_query(f'SELECT * FROM "{table_name}"', conn)
-            if not df_local.empty:
-                print(f"回退成功，读取本地数据库表: {table_name}")
-                return df_local
-            print(f"本地数据库表为空: {table_name}")
-        except Exception:
-            print(f"本地数据库缺少表: {table_name}")
-
-        return pd.DataFrame()
-    finally:
-        conn.close()
+    return fetch_data_core(
+        api_func,
+        table_name,
+        *args,
+        db_path=str(DATA_DIR / "stocks_data.db"),
+        prefer_local=False,
+        timeout=AK_API_TIMEOUT,
+        retries=0,
+        **kwargs,
+    )
 
 
 def _read_local_table(file_path):
