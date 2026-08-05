@@ -772,9 +772,28 @@ def build_dashboard_payload() -> dict[str, Any]:
     cached_breadth = _load_cache("market_breadth")
     payload["market_breadth"] = cached_breadth if isinstance(cached_breadth, dict) else {}
 
+    # ── 宏观快照：缓存完整校验 + TTL 懒刷新 ─────────────────
     maybe_refresh_macro_cache()
     cached_macro = _load_cache("macro_snapshot")
-    payload["macro_snapshot"] = cached_macro if isinstance(cached_macro, dict) else {}
+    if not isinstance(cached_macro, dict):
+        cached_macro = {}
+    # 如果缓存中任何核心指标为空（旧代码遗留的 None），强制同步重拉
+    _CORE_MACRO_KEYS = [
+        "美元/人民币", "Shibor隔夜", "LPR_1年", "10Y国债收益率",
+        "制造业PMI", "CPI同比",
+    ]
+    if any(cached_macro.get(k) is None for k in _CORE_MACRO_KEYS):
+        print("[dashboard] 宏观缓存存在空指标，强制同步重拉...")
+        fresh = fetch_macro_snapshot()
+        if fresh and isinstance(fresh, dict):
+            # 确认新数据补全了之前的空项
+            if all(fresh.get(k) is not None for k in _CORE_MACRO_KEYS):
+                save_cache("macro_snapshot", fresh)
+                cached_macro = fresh
+                print("[dashboard] 宏观缓存已更新")
+            else:
+                print(f"[dashboard] 重拉后仍有空项: {[k for k in _CORE_MACRO_KEYS if fresh.get(k) is None]}")
+    payload["macro_snapshot"] = cached_macro
     return payload
 
 
