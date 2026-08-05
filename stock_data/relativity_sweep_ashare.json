@@ -1,0 +1,375 @@
+{
+  "n_signal_days": 29,
+  "n_universe": 2747,
+  "total_eval": 11976,
+  "index_proxy": "000001",
+  "forward_days": 10,
+  "grid_up_tol": [
+    -0.01,
+    -0.007,
+    -0.005,
+    -0.003,
+    -0.001,
+    0.0,
+    0.005
+  ],
+  "grid_stale": [
+    3,
+    5,
+    7,
+    10,
+    14
+  ],
+  "rows": [
+    {
+      "up_tol": -0.001,
+      "stale_days": 3,
+      "pass_rate": 0.0,
+      "n_passed": 4,
+      "mean_fwd_ret": 0.0122,
+      "mean_excess": 0.0122,
+      "wf_early_excess": null,
+      "wf_late_excess": 0.0122
+    },
+    {
+      "up_tol": -0.001,
+      "stale_days": 5,
+      "pass_rate": 0.0,
+      "n_passed": 4,
+      "mean_fwd_ret": 0.0122,
+      "mean_excess": 0.0122,
+      "wf_early_excess": null,
+      "wf_late_excess": 0.0122
+    },
+    {
+      "up_tol": -0.001,
+      "stale_days": 7,
+      "pass_rate": 0.0,
+      "n_passed": 4,
+      "mean_fwd_ret": 0.0122,
+      "mean_excess": 0.0122,
+      "wf_early_excess": null,
+      "wf_late_excess": 0.0122
+    },
+    {
+      "up_tol": -0.001,
+      "stale_days": 10,
+      "pass_rate": 0.0,
+      "n_passed": 4,
+      "mean_fwd_ret": 0.0122,
+      "mean_excess": 0.0122,
+      "wf_early_excess": null,
+      "wf_late_excess": 0.0122
+    },
+    {
+      "up_tol": -0.001,
+      "stale_days": 14,
+      "pass_rate": 0.0,
+      "n_passed": 4,
+      "mean_fwd_ret": 0.0122,
+      "mean_excess": 0.0122,
+      "wf_early_excess": null,
+      "wf_late_excess": 0.0122
+    },
+    {
+      "up_tol": 0.0,
+      "stale_days": 3,
+      "pass_rate": 0.0,
+      "n_passed": 4,
+      "mean_fwd_ret": 0.0122,
+      "mean_excess": 0.0122,
+      "wf_early_excess": null,
+      "wf_late_excess": 0.0122
+    },
+    {
+      "up_tol": 0.0,
+      "stale_days": 5,
+      "pass_rate": 0.0,
+      "n_passed": 4,
+      "mean_fwd_ret": 0.0122,
+      "mean_excess": 0.0122,
+      "wf_early_excess": null,
+      "wf_late_excess": 0.0122
+    },
+    {
+      "up_tol": 0.0,
+      "stale_days": 7,
+      "pass_rate": 0.0,
+      "n_passed": 4,
+      "mean_fwd_ret": 0.0122,
+      "mean_excess": 0.0122,
+      "wf_early_excess": null,
+      "wf_late_excess": 0.0122
+    },
+    {
+      "up_tol": 0.0,
+      "stale_days": 10,
+      "pass_rate": 0.0,
+      "n_passed": 4,
+      "mean_fwd_ret": 0.0122,
+      "mean_excess": 0.0122,
+      "wf_early_excess": null,
+      "wf_late_excess": 0.0122
+    },
+    {
+      "up_tol": 0.0,
+      "stale_days": 14,
+      "pass_rate": 0.0,
+      "n_passed": 4,
+      "mean_fwd_ret": 0.0122,
+      "mean_excess": 0.0122,
+      "wf_early_excess": null,
+      "wf_late_excess": 0.0122
+    },
+    {
+      "up_tol": -0.003,
+      "stale_days": 3,
+      "pass_rate": 0.0,
+      "n_passed": 11,
+      "mean_fwd_ret": -0.0454,
+      "mean_excess": -0.0454,
+      "wf_early_excess": -0.0978,
+      "wf_late_excess": -0.0154
+    },
+    {
+      "up_tol": -0.003,
+      "stale_days": 5,
+      "pass_rate": 0.0,
+      "n_passed": 11,
+      "mean_fwd_ret": -0.0454,
+      "mean_excess": -0.0454,
+      "wf_early_excess": -0.0978,
+      "wf_late_excess": -0.0154
+    },
+    {
+      "up_tol": -0.003,
+      "stale_days": 7,
+      "pass_rate": 0.0,
+      "n_passed": 11,
+      "mean_fwd_ret": -0.0454,
+      "mean_excess": -0.0454,
+      "wf_early_excess": -0.0978,
+      "wf_late_excess": -0.0154
+    },
+    {
+      "up_tol": -0.003,
+      "stale_days": 10,
+      "pass_rate": 0.0,
+      "n_passed": 11,
+      "mean_fwd_ret": -0.0454,
+      "mean_excess": -0.0454,
+      "wf_early_excess": -0.0978,
+      "wf_late_excess": -0.0154
+    },
+    {
+      "up_tol": -0.003,
+      "stale_days": 14,
+      "pass_rate": 0.0,
+      "n_passed": 11,
+      "mean_fwd_ret": -0.0454,
+      "mean_excess": -0.0454,
+      "wf_early_excess": -0.0978,
+      "wf_late_excess": -0.0154
+    },
+    {
+      "up_tol": -0.01,
+      "stale_days": 3,
+      "pass_rate": 0.0195,
+      "n_passed": 233,
+      "mean_fwd_ret": -0.0613,
+      "mean_excess": -0.0613,
+      "wf_early_excess": -0.0488,
+      "wf_late_excess": -0.0937
+    },
+    {
+      "up_tol": -0.01,
+      "stale_days": 5,
+      "pass_rate": 0.0195,
+      "n_passed": 233,
+      "mean_fwd_ret": -0.0613,
+      "mean_excess": -0.0613,
+      "wf_early_excess": -0.0488,
+      "wf_late_excess": -0.0937
+    },
+    {
+      "up_tol": -0.01,
+      "stale_days": 7,
+      "pass_rate": 0.0195,
+      "n_passed": 233,
+      "mean_fwd_ret": -0.0613,
+      "mean_excess": -0.0613,
+      "wf_early_excess": -0.0488,
+      "wf_late_excess": -0.0937
+    },
+    {
+      "up_tol": -0.01,
+      "stale_days": 10,
+      "pass_rate": 0.0195,
+      "n_passed": 233,
+      "mean_fwd_ret": -0.0613,
+      "mean_excess": -0.0613,
+      "wf_early_excess": -0.0488,
+      "wf_late_excess": -0.0937
+    },
+    {
+      "up_tol": -0.01,
+      "stale_days": 14,
+      "pass_rate": 0.0195,
+      "n_passed": 233,
+      "mean_fwd_ret": -0.0613,
+      "mean_excess": -0.0613,
+      "wf_early_excess": -0.0488,
+      "wf_late_excess": -0.0937
+    },
+    {
+      "up_tol": -0.007,
+      "stale_days": 3,
+      "pass_rate": 0.0,
+      "n_passed": 125,
+      "mean_fwd_ret": -0.0716,
+      "mean_excess": -0.0716,
+      "wf_early_excess": -0.0567,
+      "wf_late_excess": -0.1116
+    },
+    {
+      "up_tol": -0.007,
+      "stale_days": 5,
+      "pass_rate": 0.0,
+      "n_passed": 125,
+      "mean_fwd_ret": -0.0716,
+      "mean_excess": -0.0716,
+      "wf_early_excess": -0.0567,
+      "wf_late_excess": -0.1116
+    },
+    {
+      "up_tol": -0.007,
+      "stale_days": 7,
+      "pass_rate": 0.0,
+      "n_passed": 125,
+      "mean_fwd_ret": -0.0716,
+      "mean_excess": -0.0716,
+      "wf_early_excess": -0.0567,
+      "wf_late_excess": -0.1116
+    },
+    {
+      "up_tol": -0.007,
+      "stale_days": 10,
+      "pass_rate": 0.0,
+      "n_passed": 125,
+      "mean_fwd_ret": -0.0716,
+      "mean_excess": -0.0716,
+      "wf_early_excess": -0.0567,
+      "wf_late_excess": -0.1116
+    },
+    {
+      "up_tol": -0.007,
+      "stale_days": 14,
+      "pass_rate": 0.0,
+      "n_passed": 125,
+      "mean_fwd_ret": -0.0716,
+      "mean_excess": -0.0716,
+      "wf_early_excess": -0.0567,
+      "wf_late_excess": -0.1116
+    },
+    {
+      "up_tol": -0.005,
+      "stale_days": 3,
+      "pass_rate": 0.0,
+      "n_passed": 63,
+      "mean_fwd_ret": -0.1055,
+      "mean_excess": -0.1055,
+      "wf_early_excess": -0.0945,
+      "wf_late_excess": -0.1327
+    },
+    {
+      "up_tol": -0.005,
+      "stale_days": 5,
+      "pass_rate": 0.0,
+      "n_passed": 63,
+      "mean_fwd_ret": -0.1055,
+      "mean_excess": -0.1055,
+      "wf_early_excess": -0.0945,
+      "wf_late_excess": -0.1327
+    },
+    {
+      "up_tol": -0.005,
+      "stale_days": 7,
+      "pass_rate": 0.0,
+      "n_passed": 63,
+      "mean_fwd_ret": -0.1055,
+      "mean_excess": -0.1055,
+      "wf_early_excess": -0.0945,
+      "wf_late_excess": -0.1327
+    },
+    {
+      "up_tol": -0.005,
+      "stale_days": 10,
+      "pass_rate": 0.0,
+      "n_passed": 63,
+      "mean_fwd_ret": -0.1055,
+      "mean_excess": -0.1055,
+      "wf_early_excess": -0.0945,
+      "wf_late_excess": -0.1327
+    },
+    {
+      "up_tol": -0.005,
+      "stale_days": 14,
+      "pass_rate": 0.0,
+      "n_passed": 63,
+      "mean_fwd_ret": -0.1055,
+      "mean_excess": -0.1055,
+      "wf_early_excess": -0.0945,
+      "wf_late_excess": -0.1327
+    },
+    {
+      "up_tol": 0.005,
+      "stale_days": 3,
+      "pass_rate": 0.0,
+      "n_passed": 0,
+      "mean_fwd_ret": null,
+      "mean_excess": null,
+      "wf_early_excess": null,
+      "wf_late_excess": null
+    },
+    {
+      "up_tol": 0.005,
+      "stale_days": 5,
+      "pass_rate": 0.0,
+      "n_passed": 0,
+      "mean_fwd_ret": null,
+      "mean_excess": null,
+      "wf_early_excess": null,
+      "wf_late_excess": null
+    },
+    {
+      "up_tol": 0.005,
+      "stale_days": 7,
+      "pass_rate": 0.0,
+      "n_passed": 0,
+      "mean_fwd_ret": null,
+      "mean_excess": null,
+      "wf_early_excess": null,
+      "wf_late_excess": null
+    },
+    {
+      "up_tol": 0.005,
+      "stale_days": 10,
+      "pass_rate": 0.0,
+      "n_passed": 0,
+      "mean_fwd_ret": null,
+      "mean_excess": null,
+      "wf_early_excess": null,
+      "wf_late_excess": null
+    },
+    {
+      "up_tol": 0.005,
+      "stale_days": 14,
+      "pass_rate": 0.0,
+      "n_passed": 0,
+      "mean_fwd_ret": null,
+      "mean_excess": null,
+      "wf_early_excess": null,
+      "wf_late_excess": null
+    }
+  ]
+}
