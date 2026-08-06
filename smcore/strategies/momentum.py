@@ -34,19 +34,39 @@ from smcore.config.defaults import STOCK_DATA_DIR
 from smcore.data.kline import fetch_daily_k
 from smcore.utils.code import format_stock_code
 
-# —— 预筛参数 ——
-PRICE_UPPER_LIMIT = 30.0
-PRICE_LOWER_LIMIT = 5.0
-MIN_TURNOVER = 2e8          # 成交额下限（流动性，元）
-MIN_TURNOVER_RATE = 1.0     # 换手率下限（%）
-MIN_60D_RETURN = 0.0        # 60日涨幅下限（必须中期已走强）
-MAX_CANDIDATES = 80         # 预筛后最多拉 K 线确认的数量（控制耗时）
-TOP_N = 30                  # 最终输出数量
+
+def _load_momentum_config():
+    """从 risk_config.json 读取动量策略参数（消除模块级魔数）。"""
+    try:
+        import json
+        _cfg_path = STOCK_DATA_DIR.parent / "smcore" / "strategy" / "risk_config.json"
+        with open(_cfg_path, "r", encoding="utf-8") as _f:
+            _cfg = json.load(_f)
+        return _cfg.get("momentum", {})
+    except Exception:
+        return {}
+
+
+# —— 预筛参数（默认值仅作 fallback；正常全部走 config）——
+_MCFG = _load_momentum_config()
+PRICE_UPPER_LIMIT = float(_MCFG.get("price_upper_limit", 50.0))
+PRICE_LOWER_LIMIT = float(_MCFG.get("price_lower_limit", 5.0))
+MIN_TURNOVER = float(_MCFG.get("min_turnover", 2e8))
+MIN_TURNOVER_RATE = float(_MCFG.get("min_turnover_rate", 1.0))
+MIN_60D_RETURN = float(_MCFG.get("min_60d_return", 0.0))
+MAX_CANDIDATES = int(_MCFG.get("max_candidates", 80))
+TOP_N = int(_MCFG.get("top_n", 30))
 
 # 动量评分权重
-W_RET20 = 0.40
-W_RET60 = 0.30
-W_MA20_SLOPE = 0.30
+W_RET20 = float(_MCFG.get("w_ret20", 0.40))
+W_RET60 = float(_MCFG.get("w_ret60", 0.30))
+W_MA20_SLOPE = float(_MCFG.get("w_ma20_slope", 0.30))
+
+# 打分校正（原 +5/-8 魔数已改为与分数量纲对齐的合理值）
+VOL_CONFIRM_BONUS = float(_MCFG.get("vol_confirm_bonus", 2.0))
+NEAR_HIGH_PENALTY = float(_MCFG.get("near_high_penalty", 3.0))
+NEAR_HIGH_THRESHOLD = float(_MCFG.get("near_high_threshold", 0.02))
+FAR_FROM_HIGH_THRESHOLD = float(_MCFG.get("far_from_high_threshold", -0.18))
 
 
 def parse_args() -> argparse.Namespace:
@@ -246,11 +266,11 @@ def run_momentum() -> None:
             + m["ma20_slope"] * 100 * W_MA20_SLOPE
         )
         if m["vol_confirm"]:
-            score += 5.0
-        # 距高点过近（>2%）视为追高，略降分；过远（<-18%）视为转弱，剔除
-        if m["dist_from_high"] > 0.02:
-            score -= 8.0
-        if m["dist_from_high"] < -0.18:
+            score += VOL_CONFIRM_BONUS
+        # 距高点过近视为追高略降分；过远视为转弱剔除（阈值均走 config）
+        if m["dist_from_high"] > NEAR_HIGH_THRESHOLD:
+            score -= NEAR_HIGH_PENALTY
+        if m["dist_from_high"] < FAR_FROM_HIGH_THRESHOLD:
             continue
         rows.append({
             "股票代码": code,

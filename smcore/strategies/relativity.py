@@ -26,32 +26,46 @@ from smcore.utils.checkpoint import load_checkpoint_df, save_checkpoint_df
 from smcore.utils.code import format_stock_code, normalize_code_series
 
 
-ROOT_DIR = PROJECT_ROOT
-CHECKPOINT_DIR = STOCK_DATA_DIR / "checkpoints"
-DB_PATH = STOCK_DATA_DIR / "stocks_data.db"
+def _load_relativity_config():
+    """从 risk_config.json 读取相对强弱策略参数（消除模块级魔数）。"""
+    try:
+        import json
+        _cfg_path = STOCK_DATA_DIR.parent / "smcore" / "strategy" / "risk_config.json"
+        with open(_cfg_path, "r", encoding="utf-8") as _f:
+            _cfg = json.load(_f)
+        return _cfg.get("relativity", {})
+    except Exception:
+        return {}
 
-PRICE_UPPER_LIMIT = 30.0
-PRICE_LOWER_LIMIT = 5.0
-DEBT_ASSET_RATIO_LIMIT = 70.0
+
+# —— 策略参数（默认值仅作 fallback；正常全部走 config）——
+_RCFG = _load_relativity_config()
+PRICE_UPPER_LIMIT = float(_RCFG.get("price_upper_limit", 30.0))
+PRICE_LOWER_LIMIT = float(_RCFG.get("price_lower_limit", 5.0))
+DEBT_ASSET_RATIO_LIMIT = float(_RCFG.get("debt_asset_ratio_limit", 70.0))
 
 # 对比基准：原默认 sh.000001（上证综指）与股票池（沪深主板）错配，
 # 改用 沪深300(sh.000300) 作为更具代表性的宽基基准，含 CLI 覆盖(--index-code)。
-RS_INDEX_CODE = "sh.000300"
-RS_LOOKBACK_DAYS = 100
-RS_MIN_OVERLAP_DAYS = 30
+RS_INDEX_CODE = str(_RCFG.get("rs_index_code", "sh.000300"))
+RS_LOOKBACK_DAYS = int(_RCFG.get("rs_lookback_days", 100))
+RS_MIN_OVERLAP_DAYS = int(_RCFG.get("rs_min_overlap_days", 30))
 # 上涨满足率阈值（相对口径）：原 -0.025 过于宽松（个股在指数上涨日只要不跌超 2.5% 即计入），
 # 已改为「个股相对指数收益 ≥ up_tol」的相对口径（与抗跌侧 down_outperf 对称），
 # 默认 -0.010 表示指数上涨日个股最多跑输指数 1.0% 仍计入满足。CLI --rs-up-tol 可覆盖。
 # Round 20e 离线复核（广谱宇宙 + A 股宇宙数值一致、walk-forward 前半/后半超额同号）确认
 # 原 -0.005 偏严且逆向筛选（在 -0.010~-0.005 非平凡样本区间单调性最差），故采纳放宽到 -0.010。
-RS_UP_TOL = -0.010
-RS_DOWN_OUTPERF = 0.0
-RS_MIN_UP_RATIO = 0.6
-RS_MIN_DOWN_RATIO = 0.7
-RS_MIN_UP_DAYS = 5
-RS_MIN_DOWN_DAYS = 5
+RS_UP_TOL = float(_RCFG.get("rs_up_tol", -0.010))
+RS_DOWN_OUTPERF = float(_RCFG.get("rs_down_outperf", 0.0))
+RS_MIN_UP_RATIO = float(_RCFG.get("rs_min_up_ratio", 0.6))
+RS_MIN_DOWN_RATIO = float(_RCFG.get("rs_min_down_ratio", 0.7))
+RS_MIN_UP_DAYS = int(_RCFG.get("rs_min_up_days", 5))
+RS_MIN_DOWN_DAYS = int(_RCFG.get("rs_min_down_days", 5))
 # 停牌/流动性时效过滤：个股最后交易日距信号日超过该天数（日历日）视为停牌或数据陈旧，直接剔除。
-RS_MAX_STALE_DAYS = 7
+RS_MAX_STALE_DAYS = int(_RCFG.get("rs_max_stale_days", 7))
+
+ROOT_DIR = PROJECT_ROOT
+CHECKPOINT_DIR = STOCK_DATA_DIR / "checkpoints"
+DB_PATH = STOCK_DATA_DIR / "stocks_data.db"
 
 # 重要股东过滤：仅认可「境内长线/国家队」性质的股东。
 # 重要：香港中央结算(沪深港通清算通道)几乎出现在全部 A 股的 Top10 流通股东中，

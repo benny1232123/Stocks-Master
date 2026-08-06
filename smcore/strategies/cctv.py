@@ -17,19 +17,40 @@ from smcore.config.defaults import PROJECT_ROOT, STOCK_DATA_DIR
 from smcore.data.kline import fetch_daily_k
 
 
-TOP_N = 15
-MENTION_WEIGHT = 2
-PREVIEW_LEN = 120
-EMERGING_TOP_N = 40
+def _load_cctv_config():
+    """从 risk_config.json 读取 CCTV 策略参数（消除模块级魔数）。"""
+    try:
+        import json
+        _cfg_path = STOCK_DATA_DIR.parent / "smcore" / "strategy" / "risk_config.json"
+        with open(_cfg_path, "r", encoding="utf-8") as _f:
+            _cfg = json.load(_f)
+        return _cfg.get("cctv", {})
+    except Exception:
+        return {}
+
+
+# —— 策略参数（默认值仅作 fallback；正常全部走 config）——
+_CCFG = _load_cctv_config()
+TOP_N = int(_CCFG.get("top_n", 15))
+MENTION_WEIGHT = int(_CCFG.get("mention_weight", 2))
+PREVIEW_LEN = int(_CCFG.get("preview_len", 120))
+EMERGING_TOP_N = int(_CCFG.get("emerging_top_n", 40))
 
 # akshare 主数据调用超时（秒）。超时即抛 TimeoutError，触发本地回退，
 # 避免单条请求卡死拖垮整个流程（API 无原生超时，挂起会一直等到 step 上限）。
-AK_API_TIMEOUT = float(os.getenv("AK_API_TIMEOUT", "30"))
+AK_API_TIMEOUT = float(os.getenv("AK_API_TIMEOUT", str(_CCFG.get("ak_api_timeout", 30))))
 
 POSITIVE_WORDS = ["增长", "提升", "突破", "回暖", "提振", "改善", "加速", "扩产", "景气", "超预期", "利好"]
 NEGATIVE_WORDS = ["下滑", "下降", "承压", "收缩", "风险", "波动", "走弱", "放缓", "亏损", "违约", "不及预期"]
 NEUTRAL_WORDS = ["推进", "建设", "部署", "召开", "会议", "发布", "落实", "调研", "强调"]
 GENERIC_MACRO_WORDS = ["中国", "经济", "企业", "产业", "市场", "发展", "全国", "地方", "项目", "部门"]
+
+# 情感打分权重（走 config）
+_SENT_NEUTRAL_W = float(_CCFG.get("sentiment_neutral_weight", -0.3))
+_SENT_MACRO_W = float(_CCFG.get("sentiment_macro_weight", -0.2))
+# 置信度档位阈值（走 config）
+_CONF_HIGH = float(_CCFG.get("confidence_high_threshold", 40))
+_CONF_MID = float(_CCFG.get("confidence_mid_threshold", 16))
 
 
 def _log_step(message):
@@ -193,7 +214,7 @@ def _sentiment_score(text):
     neg = sum(txt.count(w.lower()) for w in NEGATIVE_WORDS)
     neutral = sum(txt.count(w.lower()) for w in NEUTRAL_WORDS)
     macro = sum(txt.count(w.lower()) for w in GENERIC_MACRO_WORDS)
-    score = pos - neg - 0.3 * neutral - 0.2 * macro
+    score = pos - neg + _SENT_NEUTRAL_W * neutral + _SENT_MACRO_W * macro
     return round(score, 2), pos, neg, neutral, macro
 
 
@@ -581,9 +602,9 @@ def build_n_day_sector_board(current_date_str, unit_days):
 
 def _confidence_tier(heat_score, mention, sentiment):
     signal = heat_score + mention * 0.5 + max(sentiment, 0) * 0.3
-    if signal >= 40:
+    if signal >= _CONF_HIGH:
         return "高"
-    if signal >= 16:
+    if signal >= _CONF_MID:
         return "中"
     return "观察"
 
