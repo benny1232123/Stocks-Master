@@ -1,1 +1,4 @@
-﻿
+﻿code,buy_date,sell_date,buy_price,sell_price,qty,return_pct,exit_reason
+601700,2026-08-05,2026-08-06,6.517,7.153,100,9.76,take_partial
+600801,2026-08-05,2026-08-06,21.421,22.987,100,7.31,take_partial_final
+601700,2026-08-05,2026-08-06,6.517,7.153,200,9.76,take_pct
