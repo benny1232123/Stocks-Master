@@ -13,8 +13,22 @@ from pathlib import Path
 import akshare as ak
 import pandas as pd
 
+try:
+    import jieba
+    jieba.setLogLevel(20)  # 抑制 jieba 的构建日志噪音
+    _HAS_JIEBA = True
+except Exception:
+    _HAS_JIEBA = False
+
 from smcore.config.defaults import PROJECT_ROOT, STOCK_DATA_DIR
 from smcore.data.kline import fetch_daily_k
+
+
+def _tokenize(text):
+    """中文分词：优先 jieba 精确模式；不可用时回退正则粗切（保持旧行为）。"""
+    if _HAS_JIEBA:
+        return [t for t in jieba.lcut(text or "") if t and t.strip()]
+    return re.findall(r"[\u4e00-\u9fff]{2,8}", text or "")
 
 
 def _load_cctv_config():
@@ -51,6 +65,21 @@ _SENT_MACRO_W = float(_CCFG.get("sentiment_macro_weight", -0.2))
 # 置信度档位阈值（走 config）
 _CONF_HIGH = float(_CCFG.get("confidence_high_threshold", 40))
 _CONF_MID = float(_CCFG.get("confidence_mid_threshold", 16))
+
+# —— NLP 增强（Tier-1）：情感修饰词与板块同义词 ——
+# 程度副词：放大其后相邻情感词的极性强度（×1.8）
+_INTENSIFIERS = {"大幅", "显著", "明显", "强劲", "快速", "加速", "持续", "进一步", "重磅", "空前", "翻倍", "猛增", "飙升", "暴增", "集中", "全面", "大举", "强势"}
+# 否定词：翻转其后相邻情感词的极性
+_NEGATORS = {"不", "未", "无", "没", "非", "否", "难以", "尚未", "不再", "并未", "未达", "难有", "无力", "杜绝", "缺席", "避免"}
+
+# 情感词集合（小写，加速命中）
+_POS_SET = {w.lower() for w in POSITIVE_WORDS}
+_NEG_SET = {w.lower() for w in NEGATIVE_WORDS}
+_NEU_SET = {w.lower() for w in NEUTRAL_WORDS}
+_MACRO_SET = {w.lower() for w in GENERIC_MACRO_WORDS}
+
+# 板块同义词扩展（走 config）：基础关键词 -> 同义表述，提升语义级召回
+_SECTOR_SYNONYMS = {k: list(v) for k, v in _CCFG.get("sector_synonyms", {}).items()}
 
 
 def _log_step(message):
@@ -209,23 +238,72 @@ def _get_news_text(row):
 
 
 def _sentiment_score(text):
-    txt = text.lower()
-    pos = sum(txt.count(w.lower()) for w in POSITIVE_WORDS)
-    neg = sum(txt.count(w.lower()) for w in NEGATIVE_WORDS)
-    neutral = sum(txt.count(w.lower()) for w in NEUTRAL_WORDS)
-    macro = sum(txt.count(w.lower()) for w in GENERIC_MACRO_WORDS)
-    score = pos - neg + _SENT_NEUTRAL_W * neutral + _SENT_MACRO_W * macro
+    """加权情感打分（Tier-1）：jieba 分词 + 程度副词放大 + 否定词翻转。
+
+    返回 (score, pos, neg, neutral, macro)：
+    - score 为加权净情感分（连续值）；程度副词使其后相邻情感词极性 ×1.8，否定词翻转极性
+    - pos/neg/neutral/macro 为各极性词命中计数（诊断用，不受修饰影响）
+    """
+    tokens = _tokenize(text)
+    low = [t.lower() for t in tokens]
+    pos = neg = neutral = macro = 0
+    sent_sum = 0.0  # 加权净情感（含否定翻转与程度放大）
+    for i, tok in enumerate(low):
+        prev = low[i - 1] if i > 0 else ""
+        prev2 = low[i - 2] if i > 1 else ""
+        is_intens = prev in _INTENSIFIERS or prev2 in _INTENSIFIERS
+        is_neg = prev in _NEGATORS or prev2 in _NEGATORS
+        mult = 1.8 if is_intens else 1.0
+        if is_neg:
+            mult = -mult
+        if tok in _POS_SET:
+            pos += 1
+            sent_sum += mult
+        elif tok in _NEG_SET:
+            neg += 1
+            sent_sum -= mult
+        elif tok in _NEU_SET:
+            neutral += 1
+        elif tok in _MACRO_SET:
+            macro += 1
+    score = sent_sum + _SENT_NEUTRAL_W * neutral + _SENT_MACRO_W * macro
     return round(score, 2), pos, neg, neutral, macro
 
 
-def _match_sectors(text, sector_keywords):
-    txt = text.lower()
-    matched = []
+def _build_token_sector_map(sector_keywords):
+    """构建 token->sector 映射，含同义词扩展（Tier-1）。"""
+    mapping = {}
     for sector, kws in sector_keywords.items():
-        hits = [k for k in kws if k and k.lower() in txt]
-        if hits:
-            matched.append((sector, hits))
-    return matched
+        for k in kws:
+            if k:
+                mapping.setdefault(k.lower(), sector)
+    # 同义词扩展：同义词也映射到其 base 关键词所属 sector
+    for base, alts in _SECTOR_SYNONYMS.items():
+        target = mapping.get(base.lower())
+        if target is None:
+            for sector in sector_keywords:
+                if base.lower() in sector.lower():
+                    target = sector
+                    break
+        if target is None:
+            continue
+        for alt in alts:
+            mapping.setdefault(alt.lower(), target)
+    return mapping
+
+
+def _match_sectors(text, sector_keywords):
+    """板块匹配（Tier-1）：jieba 分词 + 同义词扩展，避免子串误命中（如『停车』→『车』）。
+
+    命中基于分词后的 token 精确匹配，而非原文子串包含，显著降低噪声。
+    """
+    tokens = {t.lower() for t in _tokenize(text)}
+    mapping = _build_token_sector_map(sector_keywords)
+    matched = {}
+    for tok in tokens:
+        if tok in mapping:
+            matched.setdefault(mapping[tok], []).append(tok)
+    return [(s, sorted(set(h))) for s, h in matched.items()]
 
 
 def _normalize_news_df(df):
@@ -490,8 +568,9 @@ def extract_emerging_keywords(news_df, sector_keywords, top_n):
     counter = {}
     for _, row in news_df.iterrows():
         txt = _get_news_text(row)
-        for tok in re.findall(r"[\u4e00-\u9fff]{2,8}", txt):
-            if tok in stopwords or tok.lower() in known:
+        for tok in _tokenize(txt):
+            tl = tok.lower()
+            if tl in stopwords or tl in known:
                 continue
             counter[tok] = counter.get(tok, 0) + 1
     if not counter:

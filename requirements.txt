@@ -13,6 +13,7 @@ baostock
 matplotlib
 pillow              # 仅 Frequently-Used-Program/boll-visualizer 用到；后端不依赖，可考虑移除
 requests
+jieba                # CCTV 策略 Tier-1 NLP：中文分词 + 加权情感词典（本地 + CI 均安装）
 
 # 可选：云端交易同步（TRADES_BACKEND=supabase）
 supabase>=2.0
