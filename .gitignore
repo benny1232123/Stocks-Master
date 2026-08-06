@@ -95,3 +95,6 @@ stock_data/daily_cache/macro_last_good.json
 # Residue from earlier audit/sandbox sessions (kept locally, not in repo)
 _t_normal.py
 _t_secret.py
+
+# 仓库损坏恢复时的本地取证备份（不入库）
+.git.bak-20260806/
