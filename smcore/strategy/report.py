@@ -12,6 +12,14 @@ import pandas as pd
 from smcore.config.defaults import STOCK_DATA_DIR
 from smcore.utils.format import fmt_num
 
+# 操作清单 CSV 的标准列（与正常 Daily-Action-List 完全一致；空清单占位时也用此表头，
+# 保证下游统一 read_csv 读回仍是空 DataFrame，接口零兼容风险）。
+ACTION_LIST_COLUMNS = [
+    "股票代码", "股票名称", "命中策略数", "来源策略", "综合评分", "权重",
+    "建议买入价", "建议仓位%", "建议金额", "最新价", "止损价(下轨)",
+    "止盈价(上轨)", "MA20", "stop_pct",
+]
+
 
 def _build_report_text(
     df: pd.DataFrame,
@@ -105,10 +113,40 @@ def _format_source_date_notes(
     return "\n".join(["", "**数据日期说明**", *notes])
 
 
-def save_action_list(df: pd.DataFrame, date_yyyymmdd: str) -> Optional[Path]:
-    """保存操作清单 CSV，返回路径。"""
+def save_action_list(
+    df: pd.DataFrame,
+    date_yyyymmdd: str,
+    *,
+    placeholder_when_empty: bool = False,
+) -> Optional[Path]:
+    """保存操作清单 CSV，返回路径。
+
+    placeholder_when_empty=True 时，即使候选为空也写一份「仅表头」占位 CSV：
+    下游 read_csv 读回仍是 empty DataFrame（接口零兼容风险），避免无候选日看起来像
+    「漏跑」，提升可追溯性。占位行为由配置 action_list.placeholder_when_empty 控制。
+    """
     if df.empty:
-        return None
+        if not placeholder_when_empty:
+            return None
+        cols = list(df.columns) if len(df.columns) else ACTION_LIST_COLUMNS
+        path = STOCK_DATA_DIR / f"Daily-Action-List-{date_yyyymmdd}.csv"
+        pd.DataFrame(columns=cols).to_csv(path, index=False, encoding="utf-8-sig")
+        return path
     path = STOCK_DATA_DIR / f"Daily-Action-List-{date_yyyymmdd}.csv"
     df.to_csv(path, index=False, encoding="utf-8-sig")
+    return path
+
+
+def save_action_report(date_yyyymmdd: str, text: str) -> Optional[Path]:
+    """把日报叙述文本（含「无候选」原因 / 策略贡献度）落盘为同目录 .md。
+
+    即便候选为空也落盘，便于事后追溯「为什么今天没有操作清单」。文本为空则不写。
+    """
+    if not text:
+        return None
+    path = STOCK_DATA_DIR / f"Daily-Action-List-{date_yyyymmdd}.md"
+    try:
+        path.write_text(text, encoding="utf-8")
+    except Exception:
+        return None
     return path

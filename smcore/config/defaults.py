@@ -21,6 +21,20 @@ DEFAULT_K = 1.645            # 90% 概率区间
 DEFAULT_NEAR_RATIO = 1.015   # 收盘价 <= 下轨 × near_ratio 视为"接近下轨"
 DEFAULT_UPPER_NEAR_RATIO = 0.985
 
+# ── Boll 布林触发信号（重构：优质股回踩买点，破解"优质股∩超卖"内在冲突）──
+# 原逻辑仅触发"超卖(close<下轨)/近下轨(close<=下轨×near_ratio)"，与前置"资金流好+基本面好+
+# 国家队重仓"筛选天然冲突（优质股极少同时超卖），导致候选长期 0~4 只/天。
+# 重构后新增两类与优质股特征自洽的触发：
+#   ① 中轨回踩：|close-MA20|/MA20 < mid_pullback_pct（优质股常态回调买点）
+#   ② 带宽收缩(volatility squeeze)：bandwidth < 近 squeeze_window 日 squeeze_pctile 分位
+# 并保留超卖/近下轨作为极端兜底；连续触发抑制阈值放宽到可配置 continuous_streak_cap。
+# 全部参数走 risk_config.json 的 boll 段（run_boll 直接读文件，避免循环导入），此处为 fallback。
+DEFAULT_BOLL_MID_PULLBACK_PCT = 0.02     # 中轨回踩容差 |close-MA|/MA < 2%
+DEFAULT_BOLL_SQUEEZE_ENABLED = True      # 启用带宽收缩触发
+DEFAULT_BOLL_SQUEEZE_WINDOW = 20         # 带宽分位回看窗口（交易日）
+DEFAULT_BOLL_SQUEEZE_PCTILE = 0.20       # bandwidth < 近窗口 20% 分位视为收口
+DEFAULT_BOLL_CONTINUOUS_STREAK_CAP = 3   # 同一信号连续触发超过该天数则本日不重复选
+
 # 复权方式：全项目统一前复权(qfq)。
 # Boll 选股曾用不复权(adjustflag=3)，除权除息日布林带断裂、
 # 信号失真——这是"结果不可信"的头号原因。现已统一为前复权。

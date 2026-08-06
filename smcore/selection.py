@@ -10,7 +10,9 @@ from smcore.cache_daily import get_daily
 from smcore.data.kline import fetch_daily_k
 from smcore.indicators.boll import calc_bollinger, evaluate_boll_signal
 from smcore.strategies.boll import run_boll
-from smcore.strategy import fuse_signals, save_action_list
+from smcore.strategy import fuse_signals
+from smcore.strategy.report import save_action_list, save_action_report
+from smcore.strategy.risk_rules import RISK_CONFIG
 from smcore.utils.code import format_stock_code
 
 
@@ -137,11 +139,17 @@ def run_strategy_fusion(
         max_picks=max_picks,
         max_stale_days=max_stale_days,
     )
-    path = save_action_list(df, date_yyyymmdd) if not df.empty else None
+    placeholder = RISK_CONFIG.get("action_list", {}).get("placeholder_when_empty", True)
+    path = save_action_list(df, date_yyyymmdd, placeholder_when_empty=placeholder)
+    report_path = None
+    if df.empty and path is not None:
+        report_path = save_action_report(date_yyyymmdd, meta)
     return {
         "date": date_yyyymmdd,
         "count": int(len(df)),
         "meta": meta,
         "saved_path": str(path) if path else None,
+        "report_path": str(report_path) if report_path else None,
+        "placeholder": bool(df.empty and path is not None),
         "rows": df.to_dict(orient="records") if not df.empty else [],
     }

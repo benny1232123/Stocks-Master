@@ -62,52 +62,107 @@ def evaluate_boll_signal(
     df: pd.DataFrame,
     near_ratio: float = 1.015,
     upper_near_ratio: float = 0.985,
-    suppress_continuous_oversold: bool = True,
-    max_oversold_streak_for_entry: int = 1,
+    mid_pullback_pct: float = 0.02,
+    squeeze_enabled: bool = True,
+    squeeze_window: int = 20,
+    squeeze_pctile: float = 0.20,
+    continuous_streak_cap: int = 3,
 ) -> dict[str, object]:
-    """评估最新一根 K 线的布林带信号。
+    """评估最新一根 K 线的布林带信号（重构版：优质股回踩买点）。
 
-    信号类型：
-    - oversold: 收盘价低于下轨（超卖，触发）
-    - near_lower: 收盘价接近下轨（触发）
-    - oversold_continuous: 连续超卖，本日不重复触发
-    - overbought / near_upper / neutral: 不触发
-    - insufficient / empty: 数据不足
+    触发分支（互斥优先级，先到先得）：
+    - oversold:      close < lower（超卖，极端兜底）
+    - near_lower:    close <= lower*near_ratio（接近下轨，兜底）
+    - mid_pullback:  |close-MA|/MA < mid_pullback_pct（中轨回踩，主触发①）
+    - squeeze:       bandwidth < 近 squeeze_window 日 squeeze_pctile 分位（带宽收缩，主触发②）
+    - *_continuous:  同一分支连续触发超过 continuous_streak_cap 天 → 本日不重复选
+    - overbought / near_upper / neutral / insufficient / empty: 不触发
+
+    设计动机：Boll 前置「资金流好+基本面好+国家队重仓」已锁定优质股，要求其同时
+    超卖（close<下轨）天然矛盾，导致候选长期 0~4 只/天。新增「中轨回踩」「带宽收缩」
+    两类与优质股特征自洽的买点，使其常态产生信号；超卖/近下轨保留为极端兜底。
     """
+    def _res(signal, selected, signal_type, streak=None, is_squeeze=False):
+        dist_mid = (close - middle) / middle * 100 if middle else None
+        return {
+            "signal": signal,
+            "selected": selected,
+            "signal_type": signal_type,
+            **bm,
+            "dist_to_mid_pct": round(dist_mid, 2) if dist_mid is not None else None,
+            "is_squeeze": is_squeeze,
+            **({"streak": streak} if streak is not None else {}),
+        }
+
     if df.empty:
         return {"signal": "无数据", "selected": False, "signal_type": "empty",
-                **_band_metrics(0, 0, 0)}
+                "dist_to_lower_pct": None, "dist_to_upper_pct": None,
+                "bandwidth": None, "dist_to_mid_pct": None, "is_squeeze": False}
 
     latest = df.iloc[-1]
-    if pd.isna(latest.get("Lower")) or pd.isna(latest.get("Upper")):
+    if pd.isna(latest.get("Lower")) or pd.isna(latest.get("Upper")) or pd.isna(latest.get("MA")):
         return {"signal": "数据不足（至少 20 个交易日）", "selected": False, "signal_type": "insufficient",
-                **_band_metrics(0, 0, 0)}
+                "dist_to_lower_pct": None, "dist_to_upper_pct": None,
+                "bandwidth": None, "dist_to_mid_pct": None, "is_squeeze": False}
 
     close = float(latest["close"])
     lower = float(latest["Lower"])
     upper = float(latest["Upper"])
-    middle = float(latest["MA"]) if pd.notna(latest.get("MA")) else None
+    middle = float(latest["MA"])
     bm = _band_metrics(close, lower, upper, middle)
 
-    close_series = pd.to_numeric(df.get("close", pd.Series(dtype=float)), errors="coerce")
-    lower_series = pd.to_numeric(df.get("Lower", pd.Series(dtype=float)), errors="coerce")
-    oversold_mask = (close_series < lower_series) if len(close_series) == len(lower_series) else pd.Series(dtype=bool)
-    oversold_streak = _trailing_true_count(oversold_mask) if not oversold_mask.empty else 0
+    # ── 序列与分支 mask（互斥：后续分支排除已命中的前序分支）──
+    close_series = pd.to_numeric(df["close"], errors="coerce")
+    lower_series = pd.to_numeric(df["Lower"], errors="coerce")
+    middle_series = pd.to_numeric(df["MA"], errors="coerce")
+    upper_series = pd.to_numeric(df["Upper"], errors="coerce")
+    bandwidth_series = (upper_series - lower_series) / middle_series
+
+    oversold_mask = close_series < lower_series
+    near_lower_mask = (close_series <= lower_series * near_ratio) & ~oversold_mask
+    mid_mask = (
+        ((close_series - middle_series).abs() / middle_series < mid_pullback_pct)
+        & ~near_lower_mask & ~oversold_mask
+    )
+
+    is_squeeze = False
+    squeeze_mask = pd.Series(False, index=df.index)
+    if squeeze_enabled and bandwidth_series.notna().sum() >= squeeze_window:
+        squeeze_thresh_series = bandwidth_series.rolling(squeeze_window).quantile(squeeze_pctile)
+        valid = bandwidth_series.notna() & squeeze_thresh_series.notna()
+        squeeze_mask = (bandwidth_series < squeeze_thresh_series) & valid
+        is_squeeze = bool(squeeze_mask.iloc[-1])
+    squeeze_mask = squeeze_mask & ~mid_mask & ~near_lower_mask & ~oversold_mask
+
+    oversold_streak = _trailing_true_count(oversold_mask)
+    near_lower_streak = _trailing_true_count(near_lower_mask)
+    mid_streak = _trailing_true_count(mid_mask)
+    squeeze_streak = _trailing_true_count(squeeze_mask)
+
+    cap = max(1, int(continuous_streak_cap))
 
     if close < lower:
-        if suppress_continuous_oversold and oversold_streak > max(1, int(max_oversold_streak_for_entry)):
-            return {
-                "signal": f"连续超卖：已连续{oversold_streak}日低于下轨（本日不重复触发）",
-                "selected": False,
-                "signal_type": "oversold_continuous",
-                "streak": oversold_streak,
-                **bm,
-            }
-        return {"signal": "超卖：收盘价低于下轨", "selected": True, "signal_type": "oversold", **bm}
+        if oversold_streak > cap:
+            return _res(f"连续超卖：已连续{oversold_streak}日低于下轨（本日不重复触发）",
+                        False, "oversold_continuous", streak=oversold_streak)
+        return _res("超卖：收盘价低于下轨", True, "oversold", is_squeeze=is_squeeze)
     if close <= lower * near_ratio:
-        return {"signal": "关注：收盘价接近下轨", "selected": True, "signal_type": "near_lower", **bm}
+        if near_lower_streak > cap:
+            return _res(f"连续接近下轨：已连续{near_lower_streak}日（本日不重复触发）",
+                        False, "near_lower_continuous", streak=near_lower_streak)
+        return _res("关注：收盘价接近下轨", True, "near_lower", is_squeeze=is_squeeze)
+    if bool(mid_mask.iloc[-1]):
+        if mid_streak > cap:
+            return _res(f"连续中轨回踩：已连续{mid_streak}日（本日不重复触发）",
+                        False, "mid_pullback_continuous", streak=mid_streak)
+        return _res("中轨回踩：价格贴近20日线", True, "mid_pullback", is_squeeze=is_squeeze)
+    if is_squeeze:
+        if squeeze_streak > cap:
+            return _res(f"连续带宽收缩：已连续{squeeze_streak}日（本日不重复触发）",
+                        False, "squeeze_continuous", streak=squeeze_streak, is_squeeze=True)
+        return _res("带宽收缩：波动率收敛蓄势", True, "squeeze", is_squeeze=True)
     if close > upper:
-        return {"signal": "偏热：收盘价高于上轨", "selected": False, "signal_type": "overbought", **bm}
+        return _res("偏热：收盘价高于上轨", False, "overbought", is_squeeze=is_squeeze)
     if close >= upper * upper_near_ratio:
-        return {"signal": "高位：收盘价接近上轨", "selected": False, "signal_type": "near_upper", **bm}
-    return {"signal": "中性：位于布林带中部", "selected": False, "signal_type": "neutral", **bm}
+        return _res("高位：收盘价接近上轨", False, "near_upper", is_squeeze=is_squeeze)
+    return _res("中性：位于布林带中部", False, "neutral", is_squeeze=is_squeeze)

@@ -236,7 +236,7 @@ def _z_into(raw, fund, prez, out_key, src_keys):
             cnt[c] += 1
     any_ok = False
     for c in raw:
-        if cnt[c] > 0:
+        if cnt[c] > 0 and raw.get(c):
             raw[c][out_key] = zsum[c] / cnt[c]
             any_ok = True
     if any_ok:
@@ -276,7 +276,7 @@ def _value_into(raw, fund, prez):
             cnt[c] += 1
     any_ok = False
     for c in raw:
-        if cnt[c] > 0:
+        if cnt[c] > 0 and raw.get(c):
             raw[c]["value"] = zsum[c] / cnt[c]
             any_ok = True
     if any_ok:

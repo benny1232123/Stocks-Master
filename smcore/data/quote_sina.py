@@ -14,7 +14,20 @@ import logging
 import re
 from typing import Iterable, Optional
 
-import requests
+# requests 是可选依赖（CI/轻量环境可能未安装）；延迟导入，缺失时实时行情降级为空
+_requests: object | None = None
+
+
+def _get_requests():
+    """延迟导入 requests，缺失时返回 None（调用方降级返回空）。"""
+    global _requests
+    if _requests is None:
+        try:
+            import requests as _req
+            _requests = _req
+        except ImportError:
+            _requests = False  # 标记"确认不可用"，避免反复尝试
+    return _requests if _requests is not False else None
 
 logger = logging.getLogger("smcore.data.quote_sina")
 
@@ -49,8 +62,12 @@ def fetch_sina_quotes(codes: Iterable[str]) -> dict:
         return {}
 
     result = {}
+    req = _get_requests()
+    if req is None:
+        logger.debug("requests 不可用，新浪行情降级为空")
+        return {}
     try:
-        resp = requests.get(
+        resp = req.get(
             _SINA_URL + ",".join(symbols),
             headers=_SINA_HEADERS,
             timeout=8,
@@ -148,8 +165,12 @@ def fetch_sina_index_quotes(codes: Iterable[str]) -> dict:
         return {}
 
     result = {}
+    req = _get_requests()
+    if req is None:
+        logger.debug("requests 不可用，新浪行情降级为空")
+        return {}
     try:
-        resp = requests.get(
+        resp = req.get(
             _SINA_URL + ",".join(symbols),
             headers=_SINA_HEADERS,
             timeout=8,

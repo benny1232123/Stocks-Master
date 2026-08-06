@@ -44,10 +44,15 @@ from smcore.config.defaults import (
     DEFAULT_NEAR_RATIO,
     DEFAULT_PRICE_LOWER_LIMIT,
     DEFAULT_PRICE_UPPER_LIMIT,
+    DEFAULT_BOLL_MID_PULLBACK_PCT,
+    DEFAULT_BOLL_SQUEEZE_ENABLED,
+    DEFAULT_BOLL_SQUEEZE_WINDOW,
+    DEFAULT_BOLL_SQUEEZE_PCTILE,
+    DEFAULT_BOLL_CONTINUOUS_STREAK_CAP,
     STOCK_DATA_DIR,
 )
 from smcore.data import fetch_daily_k
-from smcore.indicators.boll import calc_bollinger
+from smcore.indicators.boll import calc_bollinger, evaluate_boll_signal
 from smcore.utils.code import format_stock_code
 
 # ── 默认参数（与原始脚本一致）──
@@ -70,6 +75,36 @@ IMPORTANT_SHAREHOLDERS = (
     "中国证券金融股份有限公司",
 )
 IMPORTANT_SHAREHOLDER_TYPES = ("社保基金", "基本养老保险基金", "保险")
+
+
+def _load_boll_config() -> dict:
+    """读取 risk_config.json 的 boll 段（直接读文件，避免循环导入 risk_rules）。
+
+    以 defaults.py 的 DEFAULT_BOLL_* 为 fallback；若 risk_config.json 的 boll 段存在对应键
+    则覆盖。每次运行读取最新值，支持热更新。
+    """
+    import json
+
+    default = {
+        "near_ratio": DEFAULT_NEAR_RATIO,
+        "k": DEFAULT_K,
+        "mid_pullback_pct": DEFAULT_BOLL_MID_PULLBACK_PCT,
+        "squeeze_enabled": DEFAULT_BOLL_SQUEEZE_ENABLED,
+        "squeeze_window": DEFAULT_BOLL_SQUEEZE_WINDOW,
+        "squeeze_pctile": DEFAULT_BOLL_SQUEEZE_PCTILE,
+        "continuous_streak_cap": DEFAULT_BOLL_CONTINUOUS_STREAK_CAP,
+    }
+    try:
+        cfg_path = Path(__file__).resolve().parents[1] / "strategy" / "risk_config.json"
+        with open(cfg_path, "r", encoding="utf-8") as f:
+            user = json.load(f)
+        boll_user = user.get("boll", {})
+        for key in default:
+            if key in boll_user:
+                default[key] = boll_user[key]
+    except Exception:
+        pass
+    return default
 
 
 # ── 工具函数 ──
@@ -270,8 +305,13 @@ def run_boll(
     today: Optional[str] = None,
     *,
     enable_visualization: Optional[bool] = None,
-    k: float = BOLL_STD_MULTIPLIER,
-    near_ratio: float = BOLL_NEAR_LOWER_MARGIN,
+    k: float | None = None,
+    near_ratio: float | None = None,
+    mid_pullback_pct: float | None = None,
+    squeeze_enabled: bool | None = None,
+    squeeze_window: int | None = None,
+    squeeze_pctile: float | None = None,
+    continuous_streak_cap: int | None = None,
     price_upper: float = PRICE_UPPER_LIMIT,
     price_lower: float = PRICE_LOWER_LIMIT,
     debt_limit: float = DEBT_ASSET_RATIO_LIMIT,
@@ -295,6 +335,16 @@ def run_boll(
     today = today or date.today().strftime("%Y%m%d")
     if enable_visualization is None:
         enable_visualization = os.getenv("ENABLE_VISUALIZATION", "0") != "0"
+
+    # 布林触发参数：配置驱动（risk_config.json 的 boll 段），None 时用配置/默认值
+    _boll_cfg = _load_boll_config()
+    k = k if k is not None else _boll_cfg["k"]
+    near_ratio = near_ratio if near_ratio is not None else _boll_cfg["near_ratio"]
+    mid_pullback_pct = mid_pullback_pct if mid_pullback_pct is not None else _boll_cfg["mid_pullback_pct"]
+    squeeze_enabled = squeeze_enabled if squeeze_enabled is not None else _boll_cfg["squeeze_enabled"]
+    squeeze_window = squeeze_window if squeeze_window is not None else _boll_cfg["squeeze_window"]
+    squeeze_pctile = squeeze_pctile if squeeze_pctile is not None else _boll_cfg["squeeze_pctile"]
+    continuous_streak_cap = continuous_streak_cap if continuous_streak_cap is not None else _boll_cfg["continuous_streak_cap"]
 
     dates = _compute_report_dates(today)
     report_date_profit = dates["report_date_profit"]
@@ -457,36 +507,25 @@ def run_boll(
         if boll_df.empty:
             continue
         latest = boll_df.iloc[-1]
-        if pd.isna(latest.get("Lower")) or pd.isna(latest.get("Upper")):
+        if pd.isna(latest.get("Lower")) or pd.isna(latest.get("Upper")) or pd.isna(latest.get("MA")):
             continue
 
-        close_series = pd.to_numeric(boll_df["close"], errors="coerce")
-        lower_series = pd.to_numeric(boll_df["Lower"], errors="coerce")
-        oversold_mask = (close_series < lower_series)
-        selected_zone_mask = (close_series <= lower_series * near_ratio)
-        near_lower_only_mask = selected_zone_mask & ~oversold_mask
-        oversold_streak = _count_trailing_true(oversold_mask)
-        near_lower_streak = _count_trailing_true(near_lower_only_mask)
-
-        selected = False
-        if float(latest["close"]) < float(latest["Lower"]):
-            if oversold_streak > 1:
-                print(f"{fncode} {stock_name} 连续{oversold_streak}日低于布林带下轨，本日不重复触发")
-            else:
-                print(f"{fncode} {stock_name} 价格低于布林带下轨 (95%概率)，超卖")
-                suggested_buy = round(min(float(latest["close"]), float(latest["Lower"])), 2)
-                boll_selected_codes.append(fncode)
-                boll_selected_buy[format_stock_code(fncode)] = suggested_buy
-                selected = True
-        elif float(latest["close"]) <= float(latest["Lower"]) * near_ratio:
-            if near_lower_streak > 1:
-                print(f"{fncode} {stock_name} 连续{near_lower_streak}日处于下轨附近，本日不重复触发")
-            else:
-                print(f"{fncode} {stock_name} 价格接近布林带下轨 (95%概率)，关注")
-                suggested_buy = round(min(float(latest["close"]), float(latest["Lower"])), 2)
-                boll_selected_codes.append(fncode)
-                boll_selected_buy[format_stock_code(fncode)] = suggested_buy
-                selected = True
+        sig = evaluate_boll_signal(
+            boll_df,
+            near_ratio=near_ratio,
+            mid_pullback_pct=mid_pullback_pct,
+            squeeze_enabled=squeeze_enabled,
+            squeeze_window=squeeze_window,
+            squeeze_pctile=squeeze_pctile,
+            continuous_streak_cap=continuous_streak_cap,
+        )
+        if sig["selected"]:
+            suggested_buy = round(min(float(latest["close"]), float(latest["Lower"])), 2)
+            boll_selected_codes.append(fncode)
+            boll_selected_buy[format_stock_code(fncode)] = suggested_buy
+            print(f"{fncode} {stock_name} 布林信号: {sig['signal']}")
+        else:
+            print(f"{fncode} {stock_name} 未触发(布林): {sig['signal']}")
 
         if do_plot and plot_saved_count < PLOT_MAX_COUNT and (not PLOT_ONLY_SELECTED or selected):
             _plot_bollinger(

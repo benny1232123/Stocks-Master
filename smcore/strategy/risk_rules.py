@@ -88,12 +88,24 @@ _BUILTIN_DEFAULTS = {
         "w_rel_strength": 0.6,
         "w_volatility": -0.4,
         "w_liquidity": 0.3,
-        "use_fundamentals": False,
-        "w_quality": 0.0,
-        "w_value": 0.0,
-        "w_fund_flow": 0.0,
+        "use_fundamentals": True,
+        "w_quality": 0.5,
+        "w_value": 0.5,
+        "w_fund_flow": 0.4,
         "scale": 4.0,
         "max_bonus": 15.0,
+    },
+    "action_list": {
+        "placeholder_when_empty": True,
+    },
+    "boll": {
+        "near_ratio": 1.015,
+        "k": 1.645,
+        "mid_pullback_pct": 0.02,
+        "squeeze_enabled": True,
+        "squeeze_window": 20,
+        "squeeze_pctile": 0.20,
+        "continuous_streak_cap": 3,
     },
 }
 

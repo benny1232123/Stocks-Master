@@ -17,7 +17,7 @@
 
 用法：
   python scripts/tune_factor_weights.py                 # 调优并打印/写回稳健配置
-  VE_TOPN=8 VE_HOLD_DAYS=10 python scripts/tune_factor_weights.py
+  VE_TOPN=5 VE_HOLD_DAYS=10 python scripts/tune_factor_weights.py
   VE_DRYRUN=1 python scripts/tune_factor_weights.py     # 只评估不改配置
 """
 from __future__ import annotations
@@ -49,10 +49,11 @@ except Exception:  # pragma: no cover
     from smcore.config.defaults import PROJECT_ROOT
     STOCK_DATA_DIR = PROJECT_ROOT / "stock_data"
 
-TOPN = int(os.environ.get("VE_TOPN", "8"))
+TOPN = int(os.environ.get("VE_TOPN", "5"))  # 默认5：真实单日候选中位数~14，TOPN偏大(8)会导致2*TOPN门槛永远不满足
 HOLD_DAYS = int(os.environ.get("VE_HOLD_DAYS", "10"))
 DRY_RUN = os.environ.get("VE_DRYRUN", "0") == "1"
 MIN_IMPROVE_PP = 0.05  # 相对当前配置，平均多空价差至少提升 0.05pp 才视为稳健改进
+MIN_BASE_AVG_PP = -2.0  # 当前基线平均前向收益门槛：样本整体亏损超过此值则放弃校准（因子无区分意义）
 
 _SCALES = [3.0, 4.0, 5.0, 6.0, 8.0]
 
@@ -212,9 +213,19 @@ def main() -> int:
     cur_res = _eval_config({**cur_weights, "scale": cur_scale,
                             "use_fundamentals": cur["use_fundamentals"]},
                            picks_by_day, raw_by_day, base_by_day)
+    if cur_res.get("n_days", 0) == 0:
+        # fail-soft：无足够有效信号日（候选不足或无 K 线缓存）时优雅退出，不抛栈
+        print("[tune] 无有效信号日（候选不足或无 K 线缓存），无法校准。"
+              "请在有完整数据的环境运行（联网主机填充基本面缓存后）。")
+        rec = {"current": {"scale": cur_scale, "weights": cur_weights, "avg_port": None},
+               "recommended": None, "improvement_pp": 0.0, "robust": False}
+        out = ROOT / "stock_data" / "factor_weight_tune.json"
+        out.write_text(json.dumps(rec, ensure_ascii=False, indent=2, default=str), encoding="utf-8")
+        print(f"明细已写：{out}")
+        return 0
     cur_avg = cur_res.get("avg_port") or 0.0
     print(f"当前配置 scale={cur_scale} 头N组合平均前向收益={cur_avg:+.4f}pp "
-          f"（多空价差诊断 {cur_res.get('avg_spread'):+.4f}pp，{cur_res.get('n_days')} 天）")
+          f"（多空价差诊断 {(cur_res.get('avg_spread') or 0.0):+.4f}pp，{cur_res.get('n_days')} 天）")
 
     grid = []
     for name, preset in _PRESETS.items():
@@ -266,6 +277,13 @@ def main() -> int:
     if not robust:
         print(f"[tune] 未达稳健阈值（改进={improve:+.4f}pp ≥ {MIN_IMPROVE_PP} 且 前后两半都改善），"
               f"保持当前配置，不写回。")
+        return 0
+
+    # 样本质量守卫：当前基线平均前向收益过差（样本整体亏损）时，因子权重差异被噪声主导，
+    # 此时校准无意义且易过拟合，放弃写回。
+    if cur_avg <= MIN_BASE_AVG_PP:
+        print(f"[tune] 放弃校准：当前基线平均前向收益 {cur_avg:+.4f}pp ≤ {MIN_BASE_AVG_PP}pp"
+              f"（样本整体亏损，因子权重无区分意义）。保持当前配置。")
         return 0
 
     if DRY_RUN:

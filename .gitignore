@@ -38,6 +38,7 @@ stock_data/plots/
 stock_data/tasks/
 stock_data/ui_uploads/
 stock_data/cache/
+stock_data/fundamental_cache/
 stock_data/*.csv
 !stock_data/Daily-Action-List-*.csv
 !stock_data/Multi-Backtest-*.csv
