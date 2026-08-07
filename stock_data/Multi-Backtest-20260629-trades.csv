@@ -1,3 +1,0 @@
-﻿code,buy_date,sell_date,buy_price,sell_price,qty,return_pct,exit_reason
-000100,2026-06-30,2026-07-01,5.355,6.114,2300,14.16,take_pct
-601985,2026-06-30,2026-07-10,9.049,8.901,100,-1.63,max_hold

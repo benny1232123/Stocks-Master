@@ -1,2 +1,0 @@
-﻿num_trades,initial_capital,ending_total,total_return,max_drawdown,win_rate,avg_return,avg_win,avg_loss,profit_factor,sharpe,strategies,signal_mode,date,run_date,signal_start,signal_end,hold_days,exit_mode,size_mode,vol_mode,capital_scale,cash_pct,signals_days,codes_count,start,end
-2,100000.0,99773.71,-0.23,-0.37,50.0,-6.47,2.15,-15.09,0.14,-3.1,"cctv,theme",forward,20260616,20260803,2026-06-16,2026-06-16,10,boll_upper_take+take6%+trailing5%+MA60break,adaptive_weight(权重),scaled_stop+pos0.30000000000000004,0.3,70,1,12,2026-06-16,2026-06-26
