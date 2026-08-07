@@ -147,6 +147,19 @@ _BUILTIN_DEFAULTS = {
         "min_ir": 0.5,
         "min_positive_frac": 0.6,
     },
+    "execution": {
+        "enabled": True,
+        "default_algo": "VWAP",
+        "n_slices": 20,
+        "u_shape_alpha": 1.0,
+        "u_shape_sigma": 3.0,
+        "u_shape_base": 0.15,
+        "impact_coef": 1.0,
+        "vol_window": 20,
+        "min_slice_shares": 100,
+        "max_participation": 0.30,
+        "seeds": [0, 1, 2, 3, 4],
+    },
 }
 
 

@@ -164,6 +164,14 @@ jobs:
             --emit-json stock_data/ml_factors.json \
             --emit-md stock_data/ml_factors_report.md
 
+      - name: TWAP/VWAP 执行质量（子单调度 + 成本建模，合成日内路径回测）
+        id: execution
+        continue-on-error: true
+        run: |
+          python scripts/run_execution.py \
+            --emit-json stock_data/execution_quality.json \
+            --emit-md stock_data/execution_report.md
+
       - name: 上传监控产物
         uses: actions/upload-artifact@v4
         if: always()
@@ -179,4 +187,6 @@ jobs:
             stock_data/risk_model_report.md
             stock_data/ml_factors.json
             stock_data/ml_factors_report.md
+            stock_data/execution_quality.json
+            stock_data/execution_report.md
           retention-days: 30
