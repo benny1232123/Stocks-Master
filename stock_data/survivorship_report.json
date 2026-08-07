@@ -1,0 +1,254 @@
+{
+  "generated_at": "2026-08-07T11:13:49.532684+00:00",
+  "summary": {
+    "total_dal_files": 33,
+    "total_candidates": 406,
+    "st_candidates": 0,
+    "overall_st_ratio": 0.0,
+    "days_with_st": 0,
+    "threshold_max_st_ratio": 0.02,
+    "alert": false
+  },
+  "universe_note": {
+    "selection_sources": [
+      "ak.stock_zh_a_spot() (current-listed snapshot)",
+      "stock_info_a_code_name (current list)"
+    ],
+    "forward_selection_unbiased": true,
+    "historical_oos_point_in_time": false,
+    "recommendation": "历史回测估值改用按信号日取数的 point-in-time 列表（baostock.get_all_stock(signal_date) 含当时在市/已退市），以正确计入退市票的损失。"
+  },
+  "per_day": [
+    {
+      "date": "20260610",
+      "candidates": 11,
+      "st_candidates": 0,
+      "st_ratio": 0.0,
+      "has_st": false
+    },
+    {
+      "date": "20260611",
+      "candidates": 15,
+      "st_candidates": 0,
+      "st_ratio": 0.0,
+      "has_st": false
+    },
+    {
+      "date": "20260615",
+      "candidates": 11,
+      "st_candidates": 0,
+      "st_ratio": 0.0,
+      "has_st": false
+    },
+    {
+      "date": "20260616",
+      "candidates": 12,
+      "st_candidates": 0,
+      "st_ratio": 0.0,
+      "has_st": false
+    },
+    {
+      "date": "20260617",
+      "candidates": 12,
+      "st_candidates": 0,
+      "st_ratio": 0.0,
+      "has_st": false
+    },
+    {
+      "date": "20260618",
+      "candidates": 12,
+      "st_candidates": 0,
+      "st_ratio": 0.0,
+      "has_st": false
+    },
+    {
+      "date": "20260619",
+      "candidates": 12,
+      "st_candidates": 0,
+      "st_ratio": 0.0,
+      "has_st": false
+    },
+    {
+      "date": "20260622",
+      "candidates": 12,
+      "st_candidates": 0,
+      "st_ratio": 0.0,
+      "has_st": false
+    },
+    {
+      "date": "20260623",
+      "candidates": 14,
+      "st_candidates": 0,
+      "st_ratio": 0.0,
+      "has_st": false
+    },
+    {
+      "date": "20260624",
+      "candidates": 14,
+      "st_candidates": 0,
+      "st_ratio": 0.0,
+      "has_st": false
+    },
+    {
+      "date": "20260625",
+      "candidates": 14,
+      "st_candidates": 0,
+      "st_ratio": 0.0,
+      "has_st": false
+    },
+    {
+      "date": "20260628",
+      "candidates": 13,
+      "st_candidates": 0,
+      "st_ratio": 0.0,
+      "has_st": false
+    },
+    {
+      "date": "20260629",
+      "candidates": 13,
+      "st_candidates": 0,
+      "st_ratio": 0.0,
+      "has_st": false
+    },
+    {
+      "date": "20260630",
+      "candidates": 15,
+      "st_candidates": 0,
+      "st_ratio": 0.0,
+      "has_st": false
+    },
+    {
+      "date": "20260701",
+      "candidates": 15,
+      "st_candidates": 0,
+      "st_ratio": 0.0,
+      "has_st": false
+    },
+    {
+      "date": "20260702",
+      "candidates": 4,
+      "st_candidates": 0,
+      "st_ratio": 0.0,
+      "has_st": false
+    },
+    {
+      "date": "20260713",
+      "candidates": 3,
+      "st_candidates": 0,
+      "st_ratio": 0.0,
+      "has_st": false
+    },
+    {
+      "date": "20260714",
+      "candidates": 3,
+      "st_candidates": 0,
+      "st_ratio": 0.0,
+      "has_st": false
+    },
+    {
+      "date": "20260719",
+      "candidates": 11,
+      "st_candidates": 0,
+      "st_ratio": 0.0,
+      "has_st": false
+    },
+    {
+      "date": "20260720",
+      "candidates": 15,
+      "st_candidates": 0,
+      "st_ratio": 0.0,
+      "has_st": false
+    },
+    {
+      "date": "20260721",
+      "candidates": 14,
+      "st_candidates": 0,
+      "st_ratio": 0.0,
+      "has_st": false
+    },
+    {
+      "date": "20260722",
+      "candidates": 13,
+      "st_candidates": 0,
+      "st_ratio": 0.0,
+      "has_st": false
+    },
+    {
+      "date": "20260723",
+      "candidates": 14,
+      "st_candidates": 0,
+      "st_ratio": 0.0,
+      "has_st": false
+    },
+    {
+      "date": "20260724",
+      "candidates": 15,
+      "st_candidates": 0,
+      "st_ratio": 0.0,
+      "has_st": false
+    },
+    {
+      "date": "20260727",
+      "candidates": 15,
+      "st_candidates": 0,
+      "st_ratio": 0.0,
+      "has_st": false
+    },
+    {
+      "date": "20260728",
+      "candidates": 14,
+      "st_candidates": 0,
+      "st_ratio": 0.0,
+      "has_st": false
+    },
+    {
+      "date": "20260729",
+      "candidates": 13,
+      "st_candidates": 0,
+      "st_ratio": 0.0,
+      "has_st": false
+    },
+    {
+      "date": "20260730",
+      "candidates": 14,
+      "st_candidates": 0,
+      "st_ratio": 0.0,
+      "has_st": false
+    },
+    {
+      "date": "20260731",
+      "candidates": 15,
+      "st_candidates": 0,
+      "st_ratio": 0.0,
+      "has_st": false
+    },
+    {
+      "date": "20260803",
+      "candidates": 15,
+      "st_candidates": 0,
+      "st_ratio": 0.0,
+      "has_st": false
+    },
+    {
+      "date": "20260804",
+      "candidates": 15,
+      "st_candidates": 0,
+      "st_ratio": 0.0,
+      "has_st": false
+    },
+    {
+      "date": "20260805",
+      "candidates": 13,
+      "st_candidates": 0,
+      "st_ratio": 0.0,
+      "has_st": false
+    },
+    {
+      "date": "20260806",
+      "candidates": 5,
+      "st_candidates": 0,
+      "st_ratio": 0.0,
+      "has_st": false
+    }
+  ]
+}

@@ -107,6 +107,16 @@ _BUILTIN_DEFAULTS = {
         "squeeze_pctile": 0.20,
         "continuous_streak_cap": 3,
     },
+    "calibration_significance": {
+        "enabled": True,
+        "sr_benchmark": 0.0,
+        "significance": 0.05,
+        "min_t_stat": 3.0,
+    },
+    "survivorship_monitor": {
+        "max_st_ratio": 0.02,
+        "alert_on_st_candidate": True,
+    },
 }
 
 

@@ -42,6 +42,7 @@ from smcore.strategy.risk_rules import (  # noqa: E402
     save_risk_config,
 )
 from smcore.utils.code import format_stock_code  # noqa: E402
+from smcore.strategy.significance import significance_report  # noqa: E402
 
 try:
     from smcore.strategy.risk_rules import STOCK_DATA_DIR
@@ -54,6 +55,13 @@ HOLD_DAYS = int(os.environ.get("VE_HOLD_DAYS", "10"))
 DRY_RUN = os.environ.get("VE_DRYRUN", "0") == "1"
 MIN_IMPROVE_PP = 0.05  # 相对当前配置，平均多空价差至少提升 0.05pp 才视为稳健改进
 MIN_BASE_AVG_PP = -2.0  # 当前基线平均前向收益门槛：样本整体亏损超过此值则放弃校准（因子无区分意义）
+
+# 统计显著性守卫（多重检验 / 削减夏普）——全部走 risk_config，禁硬编码魔数
+_CALIB_SIG = RISK_CONFIG.get("calibration_significance", {})
+SIG_ENABLED = bool(_CALIB_SIG.get("enabled", True))
+SIG_SR_BENCH = float(_CALIB_SIG.get("sr_benchmark", 0.0))
+SIG_SIGNIFICANCE = float(_CALIB_SIG.get("significance", 0.05))
+SIG_MIN_T = float(_CALIB_SIG.get("min_t_stat", 3.0))
 
 _SCALES = [3.0, 4.0, 5.0, 6.0, 8.0]
 
@@ -187,6 +195,7 @@ def _eval_config(params: dict, picks_by_day: dict, raw_by_day: dict, base_by_day
         "first_half": round(first, 4),
         "second_half": round(second, 4),
         "avg_spread": round(avg_spread, 4),
+        "port_returns": [r for _, r in port],  # 每信号日头N组合前向收益序列，供显著性检验
     }
 
 
@@ -244,12 +253,18 @@ def main() -> int:
     # 稳健性判定：改进幅度 ≥ 阈值 且 前后两半都相对当前配置改善（防过拟合单段行情）
     robust = False
     improve = 0.0
+    sig = None
     if best:
         improve = round(best["avg_port"] - cur_avg, 4)
         cur_first = cur_res.get("first_half") or 0.0
         cur_second = cur_res.get("second_half") or 0.0
         stable_both = (best["first_half"] - cur_first >= -0.01) and (best["second_half"] - cur_second >= -0.01)
         robust = (improve >= MIN_IMPROVE_PP) and stable_both
+        if SIG_ENABLED:
+            sig = significance_report(
+                best.get("port_returns", []), n_trials=max(1, len(grid)),
+                sr_benchmark=SIG_SR_BENCH, significance=SIG_SIGNIFICANCE, min_t_stat=SIG_MIN_T,
+            )
 
     print("\n=== Top5 配置（头N组合前向收益 / 多空价差诊断） ===")
     print(f"{'preset':>14}{'scale':>7}{'头N收益':>10}{'价差':>10}{'前半':>9}{'后半':>9}")
@@ -263,6 +278,7 @@ def main() -> int:
         "recommended": None,
         "improvement_pp": improve,
         "robust": robust,
+        "significance": sig,
     }
     if best:
         rec["recommended"] = {"preset": best["preset"], "scale": best["scale"],
@@ -277,6 +293,13 @@ def main() -> int:
     if not robust:
         print(f"[tune] 未达稳健阈值（改进={improve:+.4f}pp ≥ {MIN_IMPROVE_PP} 且 前后两半都改善），"
               f"保持当前配置，不写回。")
+        return 0
+
+    # 统计显著性守卫：即便改进稳健，若最优配置只是 N 次尝试里凑出的噪声（多重检验不通过），拒绝写回
+    if sig is not None and not sig["significant"]:
+        print(f"[tune] 统计不显著，拒绝写回：SR={sig['sharpe']} t={sig['t_stat']} "
+              f"(多重检验阈值≥{SIG_MIN_T}) PSR={sig['psr']} n_trials={sig['n_trials']}。"
+              f"疑似数据挖矿噪声，保持当前配置。")
         return 0
 
     # 样本质量守卫：当前基线平均前向收益过差（样本整体亏损）时，因子权重差异被噪声主导，

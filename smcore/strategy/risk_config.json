@@ -179,5 +179,15 @@
       "养猪": ["生猪", "猪肉", "养殖", "农牧"],
       "化工": ["化纤", "塑料", "化肥", "纯碱", "钛白粉"]
     }
+  },
+  "calibration_significance": {
+    "enabled": true,
+    "sr_benchmark": 0.0,
+    "significance": 0.05,
+    "min_t_stat": 3.0
+  },
+  "survivorship_monitor": {
+    "max_st_ratio": 0.02,
+    "alert_on_st_candidate": true
   }
 }

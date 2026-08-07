@@ -59,6 +59,12 @@ except Exception:  # pragma: no cover
 
     STOCK_DATA_DIR = PROJECT_ROOT / "stock_data"
 
+from smcore.strategy.significance import significance_report, sharpe_ratio  # noqa: E402
+try:  # 读全局 risk_config（含 calibration_significance 守卫阈值）
+    from smcore.strategy.risk_rules import CONFIG as RISK_CONFIG  # noqa: E402
+except Exception:  # pragma: no cover
+    RISK_CONFIG = {}
+
 EDGE_WINDOW = 20          # 与生产 compute_adaptive_allocation 默认一致
 MIN_N = 8                 # 总样本不足则冷启动回退等权
 MIN_IMPROVE_PP = 2.0      # 推荐配置须相对当前配置至少多赚 2pp 才视为稳健改进
@@ -549,13 +555,27 @@ def recommend() -> dict:
     monotonic = (tert[2]["mean_ret"] is not None and tert[0]["mean_ret"] is not None
                  and tert[2]["mean_ret"] > tert[0]["mean_ret"])
     stable = r_first <= 3 and r_second <= 3
-    robust = improve_pp >= MIN_IMPROVE_PP and monotonic and stable
+
+    # 统计显著性守卫：自适应 vs 等权，经多重检验(削减夏普)校正后是否真有 edge
+    _sig_cfg = (RISK_CONFIG or {}).get("calibration_significance", {})
+    _sig_enabled = bool(_sig_cfg.get("enabled", True))
+    valid_rows = [r for r in cur["rows"] if not r.get("skipped") and r.get("adaptive_ret") is not None]
+    _ad = [r["adaptive_ret"] for r in valid_rows]
+    _eq = [r["equal_ret"] for r in valid_rows]
+    sig = significance_report(
+        _ad, n_trials=max(1, len(full)),
+        sr_benchmark=(sharpe_ratio(_eq) or 0.0),
+        significance=float(_sig_cfg.get("significance", 0.05)),
+        min_t_stat=float(_sig_cfg.get("min_t_stat", 3.0)),
+    )
+    robust = improve_pp >= MIN_IMPROVE_PP and monotonic and stable and (not _sig_enabled or sig["significant"])
 
     return {
         "current": {"shrinkage": CONFIG["shrinkage"], "floor": CONFIG["FLOOR"]},
         "recommended": {"shrinkage": best["shrinkage"], "floor": best["floor"]},
         "improvement_pp": improve_pp,
         "robust": robust,
+        "significance": sig,
         "checks": {
             "min_improve_pp": MIN_IMPROVE_PP,
             "improve_ok": improve_pp >= MIN_IMPROVE_PP,
