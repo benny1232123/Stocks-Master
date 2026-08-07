@@ -125,6 +125,11 @@ _BUILTIN_DEFAULTS = {
         "window": 20,
         "risk_parity_fallback": "equal_weight",
     },
+    "regime_robustness": {
+        "enabled": True,
+        "min_regimes": 2,
+        "min_days_per_regime": 3,
+    },
 }
 
 

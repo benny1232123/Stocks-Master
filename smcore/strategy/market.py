@@ -21,6 +21,8 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from pathlib import Path
+from typing import Optional
 
 import pandas as pd
 
@@ -154,25 +156,44 @@ def _safe_std(rets: pd.Series, win: int) -> float | None:
     return float(rets.tail(win).std())
 
 
-def compute_market_profile() -> MarketProfile:
-    """计算多维市场仪表盘。任何数据缺失都保守降级，不抛异常。"""
-    # 默认值（数据不足时）
-    default = MarketProfile(
-        regime="震荡轮动", regime_strength=0.5, trend="side",
-        volatility_level="mid", volatility_pct=0.0, volatility_pctile=0.5,
-        breadth_score=0.5, activity_ratio=1.0, hs300_ret20=0.0,
-    )
+_INDEX_SERIES_CACHE: dict = {}  # code -> 全量索引序列 DataFrame（date-indexed），跨 as_of 复用
 
-    # 数据源优先级：新浪历史K线（海外可达，主源）→ baostock → akshare。
-    # 海外 CI 上 baostock 连不上国内券商、akshare 指数接口不稳，若只靠它们会静默回退默认 regime。
-    hs_sina = _fetch_index_series_sina(_HS300)
-    hs = hs_sina if hs_sina is not None else _fetch_index_series(_HS300)
+
+def _get_index_series(code: str) -> Optional["pd.DataFrame"]:
+    """取单只指数全量日线（新浪主源→baostock/akshare兜底），模块级缓存避免重复联网。"""
+    if code in _INDEX_SERIES_CACHE:
+        return _INDEX_SERIES_CACHE[code]
+    sina = _fetch_index_series_sina(code)
+    df = sina if sina is not None else _fetch_index_series(code)
+    if df is None:
+        return None
+    _INDEX_SERIES_CACHE[code] = df
+    return df
+
+
+_MARKET_PROFILE_CACHE: dict = {}  # as_of -> MarketProfile（None 键=最新）
+
+
+def _profile_from_full_series(hs: "pd.DataFrame", zz500: Optional["pd.DataFrame"],
+                              zz1000: Optional["pd.DataFrame"],
+                              as_of=None) -> Optional[MarketProfile]:
+    """由（已抓取的全量/已切片）指数序列合成 MarketProfile。任何数据不足返回 None。
+
+    抽离自原 compute_market_profile，便于「最新」与「历史 as_of」两种场景复用同一套
+    趋势/波动率/宽度/量能合成逻辑，避免逻辑分叉。
+    """
+    # 历史切片：只保留 <= as_of 的索引数据（因果安全）
+    if as_of is not None and hs is not None:
+        try:
+            hs = hs.loc[:pd.Timestamp(as_of)]
+        except Exception:
+            pass
     if hs is None or len(hs) < 65:
-        return default
+        return None
 
     close = pd.to_numeric(hs["close"], errors="coerce").dropna()
     if len(close) < 65:
-        return default
+        return None
     c = close.values.astype(float)
     price = c[-1]
 
@@ -192,7 +213,7 @@ def compute_market_profile() -> MarketProfile:
     rets = pd.Series(c).pct_change().dropna()
     vol_20 = _safe_std(rets, 20)
     if vol_20 is None or vol_20 <= 0:
-        return default
+        return None
     ann_vol = vol_20 * (252 ** 0.5)
     # 波动率分位（近 250 日滚动 std）
     roll = rets.rolling(20).std().dropna() * (252 ** 0.5)
@@ -208,11 +229,12 @@ def compute_market_profile() -> MarketProfile:
         vol_level = "mid"
 
     # —— 宽度（三大宽基近20日收益一致性）——
-    # 宽度维度同样优先新浪（海外可达），baostock/akshare 兜底
-    zz500_sina = _fetch_index_series_sina(_ZZ500)
-    zz500 = zz500_sina if zz500_sina is not None else _fetch_index_series(_ZZ500)
-    zz1000_sina = _fetch_index_series_sina(_ZZ1000)
-    zz1000 = zz1000_sina if zz1000_sina is not None else _fetch_index_series(_ZZ1000)
+    if as_of is not None:
+        try:
+            zz500 = zz500.loc[:pd.Timestamp(as_of)] if zz500 is not None else None
+            zz1000 = zz1000.loc[:pd.Timestamp(as_of)] if zz1000 is not None else None
+        except Exception:
+            pass
     r300 = c[-1] / c[-21] - 1 if len(c) >= 21 else 0.0
     breadth = 0.5  # 默认中性
     if zz500 is not None and zz1000 is not None and len(zz500) >= 21 and len(zz1000) >= 21:
@@ -257,3 +279,87 @@ def compute_market_profile() -> MarketProfile:
         volatility_pctile=round(vol_pctile, 2), breadth_score=round(breadth, 2),
         activity_ratio=round(activity, 2), hs300_ret20=round(r300, 4),
     )
+
+
+def compute_market_profile(as_of=None) -> MarketProfile:
+    """计算多维市场仪表盘。任何数据缺失都保守降级，不抛异常。
+
+    as_of 给定时按该历史日切片（因果安全：只用 <= as_of 的索引数据），用于 walk-forward
+    把每个信号日归类到当时的市场状态（趋势上行/下行防御/震荡轮动），避免未来函数。
+    """
+    cache_key = as_of
+    if cache_key in _MARKET_PROFILE_CACHE:
+        return _MARKET_PROFILE_CACHE[cache_key]
+
+    # 默认值（数据不足时）
+    default = MarketProfile(
+        regime="震荡轮动", regime_strength=0.5, trend="side",
+        volatility_level="mid", volatility_pct=0.0, volatility_pctile=0.5,
+        breadth_score=0.5, activity_ratio=1.0, hs300_ret20=0.0,
+    )
+
+    # 数据源优先级：新浪历史K线（海外可达，主源）→ baostock → akshare。
+    # 海外 CI 上 baostock 连不上国内券商、akshare 指数接口不稳，若只靠它们会静默回退默认 regime。
+    hs = _get_index_series(_HS300)
+    zz500 = _get_index_series(_ZZ500)
+    zz1000 = _get_index_series(_ZZ1000)
+    prof = _profile_from_full_series(hs, zz500, zz1000, as_of=as_of)
+    if prof is None:
+        _MARKET_PROFILE_CACHE[cache_key] = default
+        return default
+    _MARKET_PROFILE_CACHE[cache_key] = prof
+    return prof
+
+
+_REGIME_SERIES_CACHE: dict = {}  # code -> 新浪全量序列 DataFrame（进程内缓存，避免批量标注重复联网）
+
+
+def _load_index_series_sina_cached(code: str, cache_dir: Path) -> Optional["pd.DataFrame"]:
+    """新浪历史K线（海外可达），带本地文件缓存 + 进程内缓存；失败返回 None。"""
+    if code in _REGIME_SERIES_CACHE:
+        return _REGIME_SERIES_CACHE[code]
+    cname = code.replace(".", "")
+    cf = cache_dir / f"{cname}.csv"
+    df = None
+    if cf.exists():
+        try:
+            df = pd.read_csv(cf, index_col=0, parse_dates=True)
+            if "close" not in df.columns or len(df) < 65:
+                df = None
+        except Exception:
+            df = None
+    if df is None:
+        df = _fetch_index_series_sina(code)
+        if df is not None:
+            try:
+                cache_dir.mkdir(parents=True, exist_ok=True)
+                df.to_csv(cf)
+            except Exception:
+                pass
+    _REGIME_SERIES_CACHE[code] = df
+    return df
+
+
+def regime_as_of(sd: str, cache_dir=None) -> str:
+    """历史信号日 sd 当时的市场状态（因果安全：只用 <= sd 的索引数据）。
+
+    用于 walk-forward 把每个信号日归类到当时的市场状态（趋势上行/下行防御/震荡轮动）。
+    数据源：仅新浪历史K线（海外可达），带本地文件缓存（stock_data/index_cache）与进程内缓存，
+    避免批量标注时回退到慢源（baostock/akshare）挂死。任何失败/超时回退「震荡轮动」（vacuous）。
+    """
+    try:
+        from smcore.config.defaults import PROJECT_ROOT
+        cache_dir = cache_dir or (PROJECT_ROOT / "stock_data" / "index_cache")
+    except Exception:
+        cache_dir = Path("stock_data") / "index_cache"
+    cache_dir = Path(cache_dir)
+
+    hs = _load_index_series_sina_cached(_HS300, cache_dir)
+    if hs is None or len(hs) < 65:
+        return "震荡轮动"
+    zz500 = _load_index_series_sina_cached(_ZZ500, cache_dir)
+    zz1000 = _load_index_series_sina_cached(_ZZ1000, cache_dir)
+    prof = _profile_from_full_series(hs, zz500, zz1000, as_of=sd)
+    if prof is None:
+        return "震荡轮动"
+    return prof.regime

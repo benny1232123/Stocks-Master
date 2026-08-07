@@ -60,10 +60,14 @@ except Exception:  # pragma: no cover
     STOCK_DATA_DIR = PROJECT_ROOT / "stock_data"
 
 from smcore.strategy.significance import significance_report, sharpe_ratio  # noqa: E402
-try:  # 读全局 risk_config（含 calibration_significance 守卫阈值）
+try:  # 读全局 risk_config（含 calibration_significance / regime_robustness 守卫阈值）
     from smcore.strategy.risk_rules import CONFIG as RISK_CONFIG  # noqa: E402
 except Exception:  # pragma: no cover
     RISK_CONFIG = {}
+try:  # 市场状态检测（as_of 历史切片，因果安全；新浪主源+本地缓存，离线可用）
+    from smcore.strategy.market import regime_as_of as _market_regime_as_of  # noqa: E402
+except Exception:  # pragma: no cover
+    _market_regime_as_of = None
 
 EDGE_WINDOW = 20          # 与生产 compute_adaptive_allocation 默认一致
 MIN_N = 8                 # 总样本不足则冷启动回退等权
@@ -388,6 +392,36 @@ def _eff(shrinkage, floor, zero_negative_edge):
     return shrinkage, eff_floor
 
 
+def _regime_as_of(sd: str) -> str:
+    """信号日 sd 当时的市场状态（因果安全：只用 <= sd 的索引数据）。
+
+    复用 fusion 同款四维合成（market.regime_as_of，新浪主源+本地缓存），失败/数据不足回退「震荡轮动」。
+    进程内缓存（market._REGIME_SERIES_CACHE）避免对同日期重复联网。
+    """
+    if _market_regime_as_of is None:
+        return "震荡轮动"
+    try:
+        return _market_regime_as_of(sd)
+    except Exception:
+        return "震荡轮动"
+
+
+def _regime_robust_gate(regime_table: dict, enabled: bool = True,
+                        min_regimes: int = 2, min_days_per_regime: int = 3) -> dict:
+    """机制稳健性闸门（纯函数，便于单测）。
+
+    自适应权重须在「足够样本的不同市场状态」下都跑赢等权，而非只赌对某一种行情。
+    - 仅在覆盖 >=2 个市场状态（每状态 >= min_days_per_regime 天）时才启用闸门；
+      否则视为「样本不足以分状态检验」→ 真空通过（regime_robust=True），不阻断月度重验。
+    - 返回 {robust, diverse, qualified, beat}。
+    """
+    qualified = [rg for rg, d in regime_table.items() if d.get("n_days", 0) >= min_days_per_regime]
+    diverse = len(qualified) >= 2
+    beat = sum(1 for rg in qualified if regime_table[rg]["adaptive_pct"] > regime_table[rg]["equal_pct"])
+    robust = (not enabled) or (not diverse) or (beat >= min_regimes)
+    return {"robust": robust, "diverse": diverse, "qualified": qualified, "beat": beat}
+
+
 def run(shrinkage=None, floor=None, zero_negative_edge=True) -> dict:
     shrinkage, eff_floor = _eff(shrinkage, floor, zero_negative_edge)
     days = _all_signal_days()
@@ -424,6 +458,7 @@ def run(shrinkage=None, floor=None, zero_negative_edge=True) -> dict:
             "equal_ret": round(equal_ret, 3),
             "cold": cold,
             "backfilled": is_backfilled,
+            "regime": _regime_as_of(sd),
         })
 
     def cum(rows, key):
@@ -454,6 +489,25 @@ def run(shrinkage=None, floor=None, zero_negative_edge=True) -> dict:
         else:
             tert_stats.append({"label": label, "n": 0, "mean_ret": None, "win_rate": None})
 
+    # 按市场状态分层：自适应 vs 等权 的样本外累计收益（稳健性检验的核心视图）
+    regime_agg: dict[str, dict] = {}
+    for r in valid:
+        rg = r.get("regime")
+        if rg is None:
+            continue
+        a = regime_agg.setdefault(rg, {"n": 0, "adaptive": 1.0, "equal": 1.0})
+        a["n"] += 1
+        if r["adaptive_ret"] is not None:
+            a["adaptive"] *= (1 + r["adaptive_ret"] / 100.0)
+        if r["equal_ret"] is not None:
+            a["equal"] *= (1 + r["equal_ret"] / 100.0)
+    regime_table = {}
+    for rg, a in regime_agg.items():
+        ad = (a["adaptive"] - 1) * 100
+        eq = (a["equal"] - 1) * 100
+        regime_table[rg] = {"n_days": a["n"], "adaptive_pct": round(ad, 2),
+                            "equal_pct": round(eq, 2), "diff_pct": round(ad - eq, 2)}
+
     return {
         "n_days": len(days),
         "n_valid_days": len(valid),
@@ -465,6 +519,7 @@ def run(shrinkage=None, floor=None, zero_negative_edge=True) -> dict:
         "adaptive_win_rate": round(awin / len(valid) * 100, 1) if valid else None,
         "equal_win_rate": round(ewin / len(valid) * 100, 1) if valid else None,
         "tercile": tert_stats,
+        "regime_table": regime_table,
         "rows": rows,
         "pairs": [(round(w, 1), round(r, 3), round(a, 4), sd, c) for w, r, a, sd, c in all_pairs],
     }
@@ -568,7 +623,23 @@ def recommend() -> dict:
         significance=float(_sig_cfg.get("significance", 0.05)),
         min_t_stat=float(_sig_cfg.get("min_t_stat", 3.0)),
     )
-    robust = improve_pp >= MIN_IMPROVE_PP and monotonic and stable and (not _sig_enabled or sig["significant"])
+
+    # 机制稳健性闸门（P1-3）：自适应权重须「跨市场状态」都跑赢等权，而非只赌对某一种行情。
+    # 仅在有效样本覆盖 >=2 个市场状态（每个状态 >= min_days_per_regime 天，避免小样本误判）时
+    # 才启用闸门；否则视为「样本不足以分状态检验」→ 真空通过，不阻断月度重验。
+    _rr_cfg = (RISK_CONFIG or {}).get("regime_robustness", {})
+    _rr_enabled = bool(_rr_cfg.get("enabled", True))
+    _rr_min = int(_rr_cfg.get("min_regimes", 2))
+    _rr_min_days = int(_rr_cfg.get("min_days_per_regime", 3))
+    _regime_table = cur.get("regime_table", {})
+    _gate = _regime_robust_gate(_regime_table, enabled=_rr_enabled,
+                                min_regimes=_rr_min, min_days_per_regime=_rr_min_days)
+    _regime_diverse = _gate["diverse"]
+    _regime_beat = _gate["beat"]
+    regime_robust = _gate["robust"]
+
+    robust = (improve_pp >= MIN_IMPROVE_PP and monotonic and stable
+              and (not _sig_enabled or sig["significant"]) and regime_robust)
 
     return {
         "current": {"shrinkage": CONFIG["shrinkage"], "floor": CONFIG["FLOOR"]},
@@ -576,6 +647,7 @@ def recommend() -> dict:
         "improvement_pp": improve_pp,
         "robust": robust,
         "significance": sig,
+        "regime_table": _regime_table,
         "checks": {
             "min_improve_pp": MIN_IMPROVE_PP,
             "improve_ok": improve_pp >= MIN_IMPROVE_PP,
@@ -583,6 +655,12 @@ def recommend() -> dict:
             "stable_first_half_rank": r_first,
             "stable_second_half_rank": r_second,
             "stable_ok": stable,
+            "regime_robust_enabled": _rr_enabled,
+                "regime_diverse": _regime_diverse,
+                "regime_qualified": _gate["qualified"],
+                "regime_beat_count": _regime_beat,
+            "regime_min_regimes": _rr_min,
+            "regime_robust_ok": regime_robust,
         },
         "current_report": {k: cur[k] for k in ("adaptive_total_pct", "equal_total_pct",
                                                 "adaptive_win_rate", "equal_win_rate", "tercile")},
@@ -606,6 +684,16 @@ def _print_report(res: dict) -> None:
     for t in res["tercile"]:
         mr = f"{t['mean_ret']:+.3f}%" if t["mean_ret"] is not None else "n/a"
         print(f"  {t['label']:>8}  n={t['n']:>3}  均值收益={mr:>8}  胜率={t['win_rate']}%")
+    print("-" * 64)
+    rt = res.get("regime_table") or {}
+    print("按市场状态分层（自适应 vs 等权，样本外累计收益）：")
+    if rt:
+        for rg, d in sorted(rt.items(), key=lambda x: -x[1]["diff_pct"]):
+            flag = "✓跑赢" if d["diff_pct"] > 0 else "✗跑输"
+            print(f"  {rg:>6}  n={d['n_days']:>3}  自适应={d['adaptive_pct']:+.2f}%  "
+                  f"等权={d['equal_pct']:+.2f}%  差值={d['diff_pct']:+.2f}%  {flag}")
+    else:
+        print("  （无市场状态分层数据）")
     print("-" * 64)
     print("说明：以上为「100% 持仓、连续再投资」口径（无现金缓冲）")
     print("生产回测的 -1.63% 是「各 sleeve 独立 + 含 70% 现金」口径，两者对象不同。")

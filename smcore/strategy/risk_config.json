@@ -197,5 +197,10 @@
     "erc_max_iter": 50,
     "window": 20,
     "risk_parity_fallback": "equal_weight"
+  },
+  "regime_robustness": {
+    "enabled": true,
+    "min_regimes": 2,
+    "min_days_per_regime": 3
   }
 }
