@@ -53,6 +53,9 @@ EMERGING_TOP_N = int(_CCFG.get("emerging_top_n", 40))
 # akshare 主数据调用超时（秒）。超时即抛 TimeoutError，触发本地回退，
 # 避免单条请求卡死拖垮整个流程（API 无原生超时，挂起会一直等到 step 上限）。
 AK_API_TIMEOUT = float(os.getenv("AK_API_TIMEOUT", str(_CCFG.get("ak_api_timeout", 30))))
+# 申万行业接口超时（秒，走 config 可覆盖）。该接口非必需（已有内置板块词库兜底），
+# 必须设超时避免网络挂起卡死整条流程。默认值偏小，因为失败即走内置兜底，不值得久等。
+SW_API_TIMEOUT = float(_CCFG.get("sw_api_timeout", os.getenv("SW_API_TIMEOUT", "10")))
 
 POSITIVE_WORDS = ["增长", "提升", "突破", "回暖", "提振", "改善", "加速", "扩产", "景气", "超预期", "利好"]
 NEGATIVE_WORDS = ["下滑", "下降", "承压", "收缩", "风险", "波动", "走弱", "放缓", "亏损", "违约", "不及预期"]
@@ -80,6 +83,60 @@ _MACRO_SET = {w.lower() for w in GENERIC_MACRO_WORDS}
 
 # 板块同义词扩展（走 config）：基础关键词 -> 同义表述，提升语义级召回
 _SECTOR_SYNONYMS = {k: list(v) for k, v in _CCFG.get("sector_synonyms", {}).items()}
+
+# —— 内置板块词库（兜底，绝不依赖网络）——
+# 申万行业接口（akshare）在沙箱/断网环境经常拉取失败，导致 sector_keywords 为空、整池为空。
+# 这里内置一份覆盖 A 股主要热点板块的词库作为基础词表，保证「即使申万行业不可用，
+# 也能从新闻内容直接发现热点板块」。结构：板块名 -> 代表性关键词（供 jieba 分词 token 精确匹配）。
+# 可由 risk_config.json 的 cctv.builtin_sector_keywords 整体覆盖。
+_BUILTIN_SECTOR_KEYWORDS_DEFAULT = {
+    "电力": ["电力", "火电", "水电", "核电", "风电", "绿电", "电网", "特高压", "供电", "发电", "智能电网", "电力设备"],
+    "新能源车": ["新能源汽车", "新能源车", "智能驾驶", "自动驾驶", "整车", "汽车零部件", "充电桩", "锂电汽车"],
+    "汽车": ["汽车", "整车", "汽车零部件", "乘用车", "商用车", "重卡"],
+    "机器人": ["机器人", "人形机器人", "工业机器人", "减速器", "伺服", "具身智能"],
+    "半导体": ["半导体", "芯片", "集成电路", "晶圆", "光刻机", "封测", "半导体设备", "碳化硅", "功率半导体"],
+    "消费电子": ["消费电子", "苹果链", "面板", "PCB", "被动元件", "光学"],
+    "光伏": ["光伏", "太阳能", "硅片", "组件", "逆变器", "hjt", "topcon", "钙钛矿"],
+    "储能": ["储能", "便携式储能", "工商业储能", "抽水蓄能"],
+    "锂电": ["锂电", "锂电池", "固态电池", "碳酸锂", "正极材料", "负极材料", "电解液"],
+    "医药": ["医药", "创新药", "医疗器械", "生物制药", "cxo", "中药", "医疗服务", "疫苗", "医美"],
+    "消费": ["消费", "白酒", "食品饮料", "家电", "零售", "餐饮", "旅游", "免税", "商超"],
+    "物流": ["物流", "快递", "航运", "港口", "集装箱", "仓储"],
+    "航空机场": ["航空", "机场", "民航", "飞机"],
+    "军工": ["军工", "国防", "航空发动机", "卫星", "导弹", "船舶", "北斗", "军工电子"],
+    "计算机": ["软件", "信创", "操作系统", "数据库", "网络安全", "云计算", "工业软件"],
+    "人工智能": ["人工智能", "ai", "大模型", "算力", "服务器", "gpu", "数据中心", "智能体"],
+    "通信": ["通信", "5g", "6g", "光纤", "光模块", "运营商", "通信设备"],
+    "化工": ["化工", "新材料", "化学制品", "钛白粉", "农药", "化肥", "电子化学品"],
+    "钢铁": ["钢铁", "特钢", "螺纹钢", "板材"],
+    "有色金属": ["有色", "铜", "铝", "黄金", "白银", "镍", "钴", "铅锌"],
+    "煤炭": ["煤炭", "焦煤", "动力煤", "无烟煤"],
+    "稀土": ["稀土", "稀土永磁", "磁材"],
+    "地产": ["地产", "房地产", "物业服务", "园区"],
+    "建筑建材": ["建筑", "建材", "水泥", "玻璃", "装修", "防水", "钢结构"],
+    "金融": ["券商", "银行", "保险", "基金", "信托", "期货", "金融"],
+    "农业": ["农业", "种业", "养殖", "猪肉", "饲料", "化肥", "农药"],
+    "传媒": ["传媒", "游戏", "影视", "广告", "出版", "动漫", "直播"],
+    "教育": ["教育", "职业教育", "培训", "教育信息化"],
+    "环保": ["环保", "污水处理", "固废", "垃圾发电", "节能", "环卫"],
+    "石油石化": ["石油", "石化", "天然气", "油气", "油气开采", "炼化"],
+    "工程机械": ["工程机械", "挖掘机", "机床", "重卡", "叉车"],
+    "纺织服装": ["纺织", "服装", "品牌服饰", "家纺"],
+    "氢能源": ["氢能源", "氢能", "燃料电池", "氢燃料电池"],
+    "数字经济": ["数据要素", "数字经济", "大数据", "数字孪生", "数据确权"],
+    "国企改革": ["国企改革", "中字头", "央企", "混改", "国资"],
+    "一带一路": ["一带一路", "出海", "外贸", "跨境"],
+    "元宇宙": ["元宇宙", "vr", "ar", "虚拟现实"],
+    "数字货币": ["区块链", "数字货币", "数字人民币", "加密货币"],
+    "风电": ["风电", "海上风电", "风机", "风电场"],
+    "核电": ["核电", "核电机组", "核能"],
+    "专精特新": ["专精特新", "小巨人", "单项冠军"],
+    "食品": ["食品", "休闲食品", "调味品", "乳制品", "速冻"],
+    "家电": ["家电", "白色家电", "厨电", "小家电"],
+    "电商": ["电商", "直播电商", "跨境电商", "平台经济"],
+    "医美": ["医美", "化妆品", "美妆"],
+}
+_BUILTIN_SECTOR_KEYWORDS = _CCFG.get("builtin_sector_keywords") or _BUILTIN_SECTOR_KEYWORDS_DEFAULT
 
 
 def _log_step(message):
@@ -150,7 +207,7 @@ def _load_sw_industry_index():
         if fn is None:
             continue
         try:
-            df = fn()
+            df = _call_with_timeout(fn, SW_API_TIMEOUT)
         except Exception as exc:
             print(f"获取申万行业列表失败: {exc}")
             continue
@@ -197,7 +254,7 @@ def _fetch_sw_industry_members(industry_code):
     if not code:
         return pd.DataFrame()
     try:
-        df = ak.index_component_sw(code)
+        df = _call_with_timeout(lambda: ak.index_component_sw(code), SW_API_TIMEOUT)
     except Exception:
         return pd.DataFrame()
     if df is None or df.empty:
@@ -580,13 +637,30 @@ def extract_emerging_keywords(news_df, sector_keywords, top_n):
 
 
 def _build_auto_sector_keywords(news_df, top_n):
+    """构建板块关键词词表。
+
+    设计原则（修复「申万接口失败→整池为空」根因）：
+    1) 始终以内置板块词库为**基础词表**——绝不依赖网络，保证板块发现可用；
+    2) 叠加申万行业（网络可用时提供更细粒度覆盖）；
+    3) 即使申万接口彻底失败，也能从新闻内容直接发现热点板块。
+    """
     sector_keywords = {}
+    # 1) 内置板块词库（兜底）
+    for sec, kws in _BUILTIN_SECTOR_KEYWORDS.items():
+        bucket = sector_keywords.setdefault(sec, [])
+        for k in kws:
+            if k and k not in bucket:
+                bucket.append(k)
+    # 2) 叠加申万行业（失败则为空，不影响板块发现）
     sw_index = _load_sw_industry_index()
+    sw_ok = bool(sw_index)
     for item in sw_index:
         name = _safe_text(item.get("行业名称"))
-        if not name or name in sector_keywords:
+        if not name:
             continue
-        sector_keywords[name] = [name]
+        sector_keywords.setdefault(name, [name])
+    if not sw_ok:
+        print("[cctv] 申万行业接口不可用 → 已用内置板块词库兜底（板块发现不受影响）")
 
     emerging_df = extract_emerging_keywords(news_df, sector_keywords, top_n)
     return sector_keywords, emerging_df
@@ -725,17 +799,27 @@ def fetch_data_with_fallback(api_func, file_path, *args, **kwargs):
 
 
 def _read_local_table(file_path):
-    """直接从本地 SQLite 读取表数据，不调任何 API。"""
-    table_name = file_path.replace("/", "_").replace("\\", "_").replace(".", "_").rstrip("_")
-    if not table_name or table_name[0].isdigit():
-        table_name = f"t_{table_name}"
+    """直接从本地 SQLite 读取表数据，不调任何 API。
+
+    表名优先取文件名（去目录/扩展名），并兜底兼容旧式「全路径替换分隔符/点」拼法，
+    避免 DB 实际表名（如 stock_info_a_code_name）与拼出的 stock_data_stock_info_a_code_name_csv 不匹配。
+    """
+    from pathlib import Path as _Path
+    stem = _Path(file_path).stem
+    legacy = file_path.replace("/", "_").replace("\\", "_").replace(".", "_").rstrip("_")
+    candidates = [t for t in dict.fromkeys([stem, legacy]) if t]  # stem 优先，去重
     try:
         conn = sqlite3.connect(str(DATA_DIR / "stocks_data.db"))
-        df = pd.read_sql_query(f'SELECT * FROM "{table_name}"', conn)
-        conn.close()
-        return df
-    except Exception:
+        for raw in candidates:
+            table_name = f"t_{raw}" if raw[0].isdigit() else raw
+            try:
+                df = pd.read_sql_query(f'SELECT * FROM "{table_name}"', conn)
+                return df
+            except Exception:
+                continue
         return pd.DataFrame()
+    finally:
+        conn.close()
 
 
 def build_sector_stock_pool(date_str, sector_df, stock_hints, sector_keywords, *, use_sw_industry=True):
@@ -764,8 +848,11 @@ def build_sector_stock_pool(date_str, sector_df, stock_hints, sector_keywords, *
         keywords = sector_keywords.get(sector, [])
         sw_matched = _match_sw_industries(sector, keywords, sw_index)
 
-        if not hints and not sw_matched:
-            hints = [k for k in keywords if _safe_text(k) and 1 < len(_safe_text(k)) <= 6]
+        # 关键词名称子串兜底：无论 SW 是否命中都尝试（SW 仅名称匹配但成员拉取失败时，
+        # 仍能靠「板块词出现在股票名中」产出个股，避免整池为空）
+        kw_hints = [k for k in keywords if _safe_text(k) and 1 < len(_safe_text(k)) <= 6]
+        if not hints:
+            hints = kw_hints
         if not hints and not sw_matched:
             continue
         mask = pd.Series(False, index=tmp.index)
@@ -968,7 +1055,7 @@ def run_cctv():
         sector_df,
         {},
         sector_keywords,
-        use_sw_industry=(not args.disable_sw_industry),
+        use_sw_industry=(not args.disable_sw_industry) and bool(_CCFG.get("use_sw_industry", True)),
     )
 
     hot_path = DATA_DIR / f"CCTV-Hot-Sectors-{date_str}.csv"

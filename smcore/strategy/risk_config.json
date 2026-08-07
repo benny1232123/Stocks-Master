@@ -157,6 +157,8 @@
     "preview_len": 120,
     "emerging_top_n": 40,
     "ak_api_timeout": 30,
+    "sw_api_timeout": 10,
+    "use_sw_industry": false,
     "confidence_high_threshold": 40,
     "confidence_mid_threshold": 16,
     "sentiment_neutral_weight": -0.3,
