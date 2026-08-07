@@ -172,6 +172,14 @@ jobs:
             --emit-json stock_data/execution_quality.json \
             --emit-md stock_data/execution_report.md
 
+      - name: 出场参数样本外扫描（P3，网格：止损%×trailing%×持有期，出场感知回补）
+        id: exitsweep
+        continue-on-error: true
+        run: |
+          pip install --quiet --retries 3 numpy 2>/dev/null || true
+          python scripts/walk_forward_validator.py \
+            --exit-sweep-json stock_data/exit_sweep.json
+
       - name: 实验台账汇总（Experiment Ledger 审计记录）
         id: ledger
         continue-on-error: true
@@ -198,6 +206,7 @@ jobs:
             stock_data/ml_factors_report.md
             stock_data/execution_quality.json
             stock_data/execution_report.md
+            stock_data/exit_sweep.json
             stock_data/experiment_ledger_summary.json
             stock_data/experiment_ledger_report.md
           retention-days: 30

@@ -61,9 +61,15 @@ except Exception:  # pragma: no cover
 
 from smcore.strategy.significance import significance_report, sharpe_ratio  # noqa: E402
 try:  # 读全局 risk_config（含 calibration_significance / regime_robustness 守卫阈值）
-    from smcore.strategy.risk_rules import CONFIG as RISK_CONFIG  # noqa: E402
+    from smcore.strategy.risk_rules import (  # noqa: E402
+        CONFIG as RISK_CONFIG,
+        compute_adaptive_exit_params,
+    )
 except Exception:  # pragma: no cover
     RISK_CONFIG = {}
+
+    def compute_adaptive_exit_params(*a, **k):  # pragma: no cover
+        return {"stop_loss_pct": 0.08, "trailing_stop_pct": 0.05, "hold_days": 10}
 try:  # 市场状态检测（as_of 历史切片，因果安全；新浪主源+本地缓存，离线可用）
     from smcore.strategy.market import regime_as_of as _market_regime_as_of  # noqa: E402
 except Exception:  # pragma: no cover
@@ -74,15 +80,22 @@ MIN_N = 8                 # 总样本不足则冷启动回退等权
 MIN_IMPROVE_PP = 2.0      # 推荐配置须相对当前配置至少多赚 2pp 才视为稳健改进
 WF_HOLD_DAYS = int(os.environ.get("WF_HOLD_DAYS", "10"))  # 回补持有期
 NO_BACKFILL = os.environ.get("WALK_FORWARD_NO_BACKFILL", "0") == "1"
+# 出场参数扫描较重（全信号日 × 网格），默认关闭，仅月度重验/CI opt-in 时纳入 recommend()。
+WF_BEST_EXIT = os.environ.get("WF_BEST_EXIT", "0") == "1"
 
 # (shrinkage × FLOOR) 搜索网格
 _SHRINKAGES = [0.0, 0.2, 0.4, 0.6]
 _FLOORS = [0.0, 1.0, 2.0, 3.0]
 
 # 出场参数搜索网格（P3 扩展：让出场引擎超参也接受样本外扫描，降低对单一配置的过拟合）
-_STOP_LOSS_GRID = [0.06, 0.08, 0.10, 0.12]
-_TRAILING_GRID = [0.04, 0.05, 0.07]
-_HOLD_GRID = [7, 10, 14]
+# 全部可配置：优先读 risk_config.json[exit_sweep]，缺省回退内置默认网格（零硬编码）。
+_STOP_LOSS_GRID_DEFAULT = [0.06, 0.08, 0.10, 0.12]
+_TRAILING_GRID_DEFAULT = [0.04, 0.05, 0.07]
+_HOLD_GRID_DEFAULT = [7, 10, 14]
+_exit_cfg = (RISK_CONFIG or {}).get("exit_sweep", {}) or {}
+_STOP_LOSS_GRID = _exit_cfg.get("stop_loss_pct", _STOP_LOSS_GRID_DEFAULT)
+_TRAILING_GRID = _exit_cfg.get("trailing_stop_pct", _TRAILING_GRID_DEFAULT)
+_HOLD_GRID = _exit_cfg.get("hold_days", _HOLD_GRID_DEFAULT)
 
 
 def _all_daily_action_lists() -> list[Path]:
@@ -548,12 +561,15 @@ def sweep() -> list[dict]:
     return _sweep_table()
 
 
-def sweep_exits(days=None) -> list[dict]:
+def sweep_exits(days=None, save_path=None) -> list[dict]:
     """出场参数敏感性扫描（P3，离线、出场感知）。
 
     固定当前权重配置（adaptive_weights CONFIG），扫描 (止损% × trailing% × 持有期) 网格下
     的样本外累计收益，找出最优出场组合。回补路径改用 simulate_position（出场感知），使扫描
     结果真实反映止损/止盈/移动止盈/持有期满对样本外收益的边际影响。
+
+    网格范围全部可配置（risk_config.json[exit_sweep]）；save_path 给定时把完整排序表
+    落盘为 JSON 产物（供 monitor 归档 + 实验台账复查）。
 
     注：RS_TOL（relativity 筛选阈值）与流动性门槛需重跑策略*筛选*（relativity 依赖联网取数），
     不在离线扫描范围内，列为后续项；本函数只覆盖「持仓期出场参数」这一可离线维度。
@@ -576,7 +592,55 @@ def sweep_exits(days=None) -> list[dict]:
                             "adaptive": round(ad, 2), "equal": round(eq, 2),
                             "diff": round(ad - eq, 2)})
     out.sort(key=lambda x: x["adaptive"], reverse=True)
+    if save_path:
+        try:
+            Path(save_path).write_text(
+                json.dumps({
+                    "generated_at": pd.Timestamp.now().strftime("%Y-%m-%dT%H:%M:%S"),
+                    "n_days": len(days),
+                    "grid": {"stop_loss_pct": _STOP_LOSS_GRID,
+                             "trailing_stop_pct": _TRAILING_GRID,
+                             "hold_days": _HOLD_GRID},
+                    "rows": out,
+                }, ensure_ascii=False, indent=2),
+                encoding="utf-8")
+        except Exception:
+            pass
     return out
+
+
+def _best_exit_params() -> dict | None:
+    """P3：样本外出场参数扫描的最优组合（仅供参考，不直接改写生产配置）。
+
+    小样本(~29 信号日)下避免过拟合，沿用权重纪律：仅「展示」最优出场，不自动采纳；
+    采纳须月度重验跨 holdout 稳健。返回含 better_than_default 比较（与当前自适应基线对比）。
+    """
+    try:
+        rows = sweep_exits()
+        if not rows:
+            return None
+        top = rows[0]
+        default = compute_adaptive_exit_params()
+        def_row = None
+        for r in rows:
+            if (abs(r["stop_loss_pct"] - default["stop_loss_pct"]) < 1e-9
+                    and abs(r["trailing_stop_pct"] - default["trailing_stop_pct"]) < 1e-9
+                    and r["hold_days"] == default["hold_days"]):
+                def_row = r
+                break
+        return {
+            "stop_loss_pct": top["stop_loss_pct"],
+            "trailing_stop_pct": top["trailing_stop_pct"],
+            "hold_days": top["hold_days"],
+            "adaptive_pct": top["adaptive"],
+            "equal_pct": top["equal"],
+            "diff_pct": top["diff"],
+            "better_than_default": (def_row is not None
+                                    and top["adaptive"] > def_row["adaptive"]),
+            "default_row_adaptive_pct": (def_row["adaptive"] if def_row else None),
+        }
+    except Exception:
+        return None
 
 
 def recommend() -> dict:
@@ -665,6 +729,7 @@ def recommend() -> dict:
         "current_report": {k: cur[k] for k in ("adaptive_total_pct", "equal_total_pct",
                                                 "adaptive_win_rate", "equal_win_rate", "tercile")},
         "sweep": full,
+        "best_exit_params": (_best_exit_params() if WF_BEST_EXIT else None),
     }
 
     # 实验台账：env STOCKS_LEDGER_RECORD=1 时把本次重验落一笔审计记录（默认关闭，避免
@@ -719,6 +784,7 @@ def main() -> int:
     ap.add_argument("--sweep-exits", action="store_true", help="额外输出出场参数敏感性扫描表（止损%/trailing%/持有期，出场感知）")
     ap.add_argument("--recommend", action="store_true", help="输出月度重验推荐配置 JSON（含稳健性判定）")
     ap.add_argument("--emit-json", default=None, help="把 recommend/sweep 结果写到该 JSON 路径")
+    ap.add_argument("--exit-sweep-json", default=None, help="把出场参数敏感性扫描表写到该 JSON 路径")
     args = ap.parse_args()
 
     res = run()
@@ -740,6 +806,13 @@ def main() -> int:
         for s in sweep_exits():
             print(f"{s['stop_loss_pct']*100:>7.0f}%{s['trailing_stop_pct']*100:>9.0f}%"
                   f"{s['hold_days']:>8}{s['adaptive']:>+10.2f}{s['equal']:>+10.2f}{s['diff']:>+10.2f}")
+
+    if args.exit_sweep_json:
+        try:
+            sweep_exits(save_path=args.exit_sweep_json)
+            print(f"\n出场参数扫描已写：{args.exit_sweep_json}")
+        except Exception as e:
+            print(f"写出场扫描失败：{e}")
 
     rec = None
     if args.recommend:
