@@ -156,6 +156,14 @@ jobs:
             --emit-json stock_data/risk_model.json \
             --emit-md stock_data/risk_model_report.md
 
+      - name: ML 因子挖掘（walk-forward 堆叠 + 激活闸门，数据门控防过拟合）
+        id: mlfactors
+        continue-on-error: true
+        run: |
+          python scripts/run_ml_factors.py \
+            --emit-json stock_data/ml_factors.json \
+            --emit-md stock_data/ml_factors_report.md
+
       - name: 上传监控产物
         uses: actions/upload-artifact@v4
         if: always()
@@ -169,4 +177,6 @@ jobs:
             stock_data/live_forward_discipline.json
             stock_data/risk_model.json
             stock_data/risk_model_report.md
+            stock_data/ml_factors.json
+            stock_data/ml_factors_report.md
           retention-days: 30

@@ -137,6 +137,16 @@ _BUILTIN_DEFAULTS = {
         "annualization": 252,
         "factors": ["size", "value", "momentum", "volatility", "liquidity"],
     },
+    "ml_factors": {
+        "enabled": True,
+        "min_train_days": 60,
+        "min_folds": 10,
+        "horizon": 10,
+        "alphas": [0.001, 0.01, 0.1, 1.0, 10.0],
+        "min_ic": 0.02,
+        "min_ir": 0.5,
+        "min_positive_frac": 0.6,
+    },
 }
 
 
