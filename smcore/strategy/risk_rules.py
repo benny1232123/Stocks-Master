@@ -130,6 +130,13 @@ _BUILTIN_DEFAULTS = {
         "min_regimes": 2,
         "min_days_per_regime": 3,
     },
+    "barra": {
+        "enabled": True,
+        "window": 60,
+        "min_history": 30,
+        "annualization": 252,
+        "factors": ["size", "value", "momentum", "volatility", "liquidity"],
+    },
 }
 
 

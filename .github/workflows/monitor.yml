@@ -147,6 +147,15 @@ jobs:
           print("已创建样本外纪律告警 issue。")
           PY
 
+      - name: Barra 风格风险模型（组合预测波动 + 因子风险贡献）
+        id: riskmodel
+        continue-on-error: true
+        run: |
+          pip install --quiet --retries 3 numpy 2>/dev/null || true
+          python scripts/run_risk_model.py \
+            --emit-json stock_data/risk_model.json \
+            --emit-md stock_data/risk_model_report.md
+
       - name: 上传监控产物
         uses: actions/upload-artifact@v4
         if: always()
@@ -158,4 +167,6 @@ jobs:
             stock_data/paper_tracker.json
             stock_data/paper_tracker_report.md
             stock_data/live_forward_discipline.json
+            stock_data/risk_model.json
+            stock_data/risk_model_report.md
           retention-days: 30
