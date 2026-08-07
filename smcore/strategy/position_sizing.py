@@ -221,6 +221,53 @@ def _apply_position_sizing(
     return df, n_hit
 
 
+def _apply_portfolio_weights(
+    df,
+    raw_weights: dict[str, float],
+    total_capital: float,
+    max_single_weight_frac: float,
+    apply_vol_tilt: bool = True,
+) -> tuple[pd.DataFrame, int]:
+    """把组合优化层算出的「原始权重」(raw_weights: {code(6位): frac 0..1}) 转成建议仓位% / 金额。
+
+    与 _apply_position_sizing 平行，但输入是「每只票权重」而非「策略权重 / 存活票数」。
+    施加：可选波动率倾斜（复用 vol_target_scale）+ 单名仓位上限 + A 股手数取整。
+    返回 (df, n_hit)：df 已写入「建议仓位%」「建议金额」；n_hit 为被单名上限截断的只数。
+    """
+    if df is None or df.empty:
+        return df, 0
+    _vt = None
+    _vols: dict[str, Optional[float]] = {}
+    try:
+        from .risk_rules import compute_vol_target_params, vol_target_scale
+
+        _vt_cfg = compute_vol_target_params()
+        if _vt_cfg["enabled"]:
+            _vols = _estimate_vol20(df["股票代码"].tolist(), window=_vt_cfg["window"])
+            _vt = (vol_target_scale, _vt_cfg)
+    except Exception:
+        _vt = None
+    new_pct, new_amt = [], []
+    n_hit = 0
+    for _, r in df.iterrows():
+        c = format_stock_code(r["股票代码"])
+        raw = float(raw_weights.get(c, 0.0)) * 100.0
+        p = raw / 100.0
+        if apply_vol_tilt and _vt is not None:
+            scale_fn, cfg = _vt
+            p = p * scale_fn(_vols.get(c), cfg)
+        if p > max_single_weight_frac + 1e-9:
+            n_hit += 1
+        p = min(p, max_single_weight_frac)
+        new_pct.append(round(p * 100, 1))
+        bp = r.get("建议买入价")
+        new_amt.append(round(_lot_round(total_capital * p, bp if bp else 0), 0))
+    df = df.copy()
+    df["建议仓位%"] = new_pct
+    df["建议金额"] = new_amt
+    return df, n_hit
+
+
 def _apply_beta_cap(df, betas: dict[str, float], max_beta: float, min_keep: int = BETA_MIN_KEEP):
     """组合 β 超上限时，逐步剔除当前 β 最高的个股，直到 ≤ max_beta 或只剩 min_keep 只。
 

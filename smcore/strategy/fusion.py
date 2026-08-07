@@ -32,8 +32,13 @@ import pandas as pd
 
 from smcore.strategy.market import compute_market_profile
 from smcore.strategy import sectors as sector_mod
-from smcore.strategy.risk_rules import compute_adaptive_risk_params, compute_factor_scoring_params
+from smcore.strategy.risk_rules import (
+    CONFIG,
+    compute_adaptive_risk_params,
+    compute_factor_scoring_params,
+)
 from .factor_scoring import compute_factor_scores
+from smcore.utils.code import format_stock_code
 
 # ── A 股交易约束 ─────────────────────────────────────────────────────
 LOT_SIZE = 100  # A 股最小交易单位（一手 = 100 股）
@@ -103,11 +108,14 @@ from .picks_loader import (
 from .boll_levels import _compute_boll_levels
 from .position_sizing import (
     _apply_beta_cap,
+    _apply_portfolio_weights,
     _apply_position_sizing,
     _apply_strategy_cap,
     _estimate_betas,
+    _estimate_vol20,
     _portfolio_beta,
 )
+from .portfolio import compute_target_weights
 from .report import (
     _build_report_text,
     _format_source_date_notes,
@@ -440,18 +448,27 @@ def fuse_signals(
     # 而非按策略全池大小（如 CCTV 全池几百只会把每只高确定性票的仓位稀释到 ~0.03%）。
     # 这样自适应权重才能真实 deploy 到被选中的票上，而非被大池子摊没。
     if not df.empty:
-        _STRATS = {"boll", "theme", "relativity", "cctv", "momentum"}
-        _surv = {s: 0 for s in _STRATS}
-        for _, _r in df.iterrows():
-            for _s in str(_r.get("来源策略", "")).replace("/", "，").split("，"):
-                _s = _s.strip().lower()
-                if _s in _surv:
-                    _surv[_s] += 1
-        # 单名仓位上限（小数）：随名单长度自适应，且受天花板约束（零硬编码）
+        # ── P1-1 组合优化层：用融合得分 + 风险估计生成「原始目标权重」，
+        # 替代原「策略权重 ÷ 策略存活票数」启发式。风险中性化四层约束仍由下方施加。
         max_single_eff = max_single_weight_pct if max_single_weight_pct is not None else _risk["max_single_weight_pct"]
         max_single_weight_frac = max_single_eff / 100.0
-        df, single_cap_hit = _apply_position_sizing(
-            df, weights, _surv, total_capital, max_single_weight_frac
+        _pcfg = CONFIG.get("portfolio", {})
+        _method = str(_pcfg.get("method", "score_weighted"))
+        _scores = {format_stock_code(r["股票代码"]): r.get("综合评分") for _, r in df.iterrows()}
+        _vols = _estimate_vol20(
+            [format_stock_code(c) for c in df["股票代码"].tolist()],
+            window=int(_pcfg.get("window", 20)),
+        )
+        _raw = compute_target_weights(
+            df["股票代码"].tolist(), _scores, _vols,
+            method=_method,
+            score_power=float(_pcfg.get("score_power", 1.5)),
+            score_floor=float(_pcfg.get("score_floor", 0.0)),
+            erc_max_iter=int(_pcfg.get("erc_max_iter", 50)),
+        )
+        _vol_tilt = (_method != "risk_parity_erc")  # ERC 已含波动倾斜，避免重复倾斜
+        df, single_cap_hit = _apply_portfolio_weights(
+            df, _raw, total_capital, max_single_weight_frac, apply_vol_tilt=_vol_tilt
         )
 
     # ── ④ 风险中性化 ────────────────────────────────────────────────
@@ -478,8 +495,8 @@ def fuse_signals(
                 )
                 max_single_eff = max_single_weight_pct if max_single_weight_pct is not None else _risk2["max_single_weight_pct"]
                 max_single_weight_frac = max_single_eff / 100.0
-                df, single_cap_hit = _apply_position_sizing(
-                    df, weights, _surv, total_capital, max_single_weight_frac
+                df, single_cap_hit = _apply_portfolio_weights(
+                    df, _raw, total_capital, max_single_weight_frac, apply_vol_tilt=_vol_tilt
                 )
     else:
         weight_hit = False
@@ -525,7 +542,7 @@ def fuse_signals(
         pb = _portfolio_beta(df, betas) if beta_neutral else None
         beta_note = f"；组合β={pb:.2f}（上限{max_beta_eff}，剔除{beta_hit}只高β）" if beta_neutral else ""
         single_note = "（单名上限≤%g%%，已截断%d只）" % (max_single_eff, single_cap_hit) if single_cap_hit else "（单名上限≤%g%%）" % max_single_eff
-        report += f"\n- ⚖️ 风险中性化{wcap_note}{single_note}{beta_note}"
+        report += f"\n- ⚖️ 风险中性化{wcap_note}{single_note}{beta_note}；组合优化={_method}"
     if profile is not None:
         report += f"\n- 🌡️ 市场仪表盘：{profile.summary()}"
 

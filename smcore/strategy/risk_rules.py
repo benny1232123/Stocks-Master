@@ -117,6 +117,14 @@ _BUILTIN_DEFAULTS = {
         "max_st_ratio": 0.02,
         "alert_on_st_candidate": True,
     },
+    "portfolio": {
+        "method": "score_weighted",
+        "score_power": 1.5,
+        "score_floor": 0.0,
+        "erc_max_iter": 50,
+        "window": 20,
+        "risk_parity_fallback": "equal_weight",
+    },
 }
 
 
