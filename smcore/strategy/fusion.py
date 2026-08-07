@@ -28,8 +28,12 @@ import ...` 调用无需改动）。
 """
 from __future__ import annotations
 
+import json
+from datetime import datetime
+
 import pandas as pd
 
+from smcore.config.defaults import STOCK_DATA_DIR
 from smcore.strategy.market import compute_market_profile
 from smcore.strategy import sectors as sector_mod
 from smcore.strategy.risk_rules import (
@@ -224,8 +228,19 @@ def fuse_signals(
         return pd.DataFrame(), "今日无任何策略命中，无可操作清单。"
 
     # 多维市场仪表盘：综合 趋势/波动率/宽度/量能 判定 regime（向后兼容三态）
-    profile = compute_market_profile() if market_gate else None
+    # 样本外纪律（P1-4）：必须钉死到「信号日当时」的市场状态，禁止用「今天」的 regime 泄漏
+    # 未来信息。date_yyyymmdd==今天时 as_of=今天 等价于实时，行为与旧版一致；历史回补/补跑
+    # 旧信号日时则严格只用 <= 该日的索引数据，使生成的 DAL 可被纸盘模拟如实跟随。
+    profile = compute_market_profile(as_of=date_yyyymmdd) if market_gate else None
     regime = profile.regime if profile else "震荡轮动"
+    # 仅在非今日回补时额外算出「今日 regime」用于记录/报告对比（不用于任何决策）
+    is_today = date_yyyymmdd == datetime.now().strftime("%Y%m%d")
+    live_regime = None
+    if market_gate and not is_today:
+        try:
+            live_regime = compute_market_profile().regime
+        except Exception:
+            live_regime = None
     # 动态过滤阈值（RS 容忍度 / 流动性门槛随市浮动）
     rs_tol, min_amt = (RS_TOL, min_signal_amount)
     if dynamic_thresholds:
@@ -563,6 +578,24 @@ def fuse_signals(
             "single_weight_cap_pct": max_single_eff,
         }
         save_regime_snapshot(snapshot)
+    except Exception:
+        pass
+
+    # 样本外纪律（P1-4）落盘元数据：记录该 DAL 生成时所用的「钉死到信号日」regime，
+    # 以及与「今日 regime」的差异，供 live_forward_discipline 校验历史清单未被未来信息污染。
+    try:
+        meta = {
+            "signal_date": date_yyyymmdd,
+            "generated_at": datetime.now().isoformat(timespec="seconds"),
+            "regime": regime,
+            "regime_as_of": date_yyyymmdd,  # 始终钉死到信号日，不使用未来市场状态
+            "live_regime": live_regime,      # 仅用于对比，不参与任何决策
+            "is_today": is_today,
+            "date_pinned": True,            # 标记该 DAL 由 date-pinned regime 生成
+        }
+        mp = STOCK_DATA_DIR / f"Daily-Action-List-{date_yyyymmdd}.meta.json"
+        with open(mp, "w", encoding="utf-8") as f:
+            json.dump(meta, f, ensure_ascii=False, indent=2)
     except Exception:
         pass
     return df, report

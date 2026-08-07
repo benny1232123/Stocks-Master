@@ -111,6 +111,42 @@ jobs:
             --emit-json stock_data/paper_tracker.json \
             --emit-md stock_data/paper_tracker_report.md
 
+      - name: 样本外纪律校验（live-forward discipline）
+        id: discipline
+        continue-on-error: true
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          pip install --quiet --retries 3 akshare requests 2>/dev/null || true
+          python scripts/live_forward_discipline.py \
+            --emit-json stock_data/live_forward_discipline.json
+          python - <<'PY'
+          import json, subprocess
+          try:
+              res = json.load(open("stock_data/live_forward_discipline.json"))
+          except Exception as e:
+              print("读取纪律报告失败：", e); raise SystemExit(0)
+          if res.get("hard_failures", 0) == 0:
+              print("样本外纪律校验通过（警告数=%d）" % res.get("warnings", 0))
+              raise SystemExit(0)
+          title = "⚠️ 样本外纪律校验失败（自动）"
+          try:
+              out = subprocess.run(["gh","issue","list","--state","open","--search",title,
+                                   "--json","number,title"], capture_output=True, text=True, check=True).stdout
+              existing = [x for x in json.loads(out) if x["title"] == title]
+          except Exception:
+              existing = []
+          if existing:
+              print("已存在未关闭的纪律 issue，跳过。"); raise SystemExit(0)
+          lines = [f"生成时间：{res.get('generated_at')}", "", "### 检查明细", ""]
+          for c in res.get("checks", []):
+              lines.append(f"- **{c['id']} {c['name']}**：{c['status']} — {c['detail']}")
+          body = "\n".join(lines)
+          subprocess.run(["gh","issue","create","--title",title,"--body",body,
+                          "--label","monitoring,auto"], check=True)
+          print("已创建样本外纪律告警 issue。")
+          PY
+
       - name: 上传监控产物
         uses: actions/upload-artifact@v4
         if: always()
@@ -121,4 +157,5 @@ jobs:
             stock_data/factor_ic.json
             stock_data/paper_tracker.json
             stock_data/paper_tracker_report.md
+            stock_data/live_forward_discipline.json
           retention-days: 30
