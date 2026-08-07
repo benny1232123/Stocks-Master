@@ -1,2 +1,2 @@
 ﻿code,buy_date,sell_date,buy_price,sell_price,qty,return_pct,exit_reason
-603610,2026-07-03,2026-07-06,19.019,17.722,1500,-6.82,trend_break
+600226,2026-06-25,2026-06-29,11.421,9.698,200,-15.09,stop_hard
