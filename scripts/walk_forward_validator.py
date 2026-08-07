@@ -667,6 +667,18 @@ def recommend() -> dict:
         "sweep": full,
     }
 
+    # 实验台账：env STOCKS_LEDGER_RECORD=1 时把本次重验落一笔审计记录（默认关闭，避免
+    # 干扰主流程 / 测试）。全程 try/except 包裹，失败静默，绝不抛异常。
+    if os.environ.get("STOCKS_LEDGER_RECORD") == "1":
+        try:
+            from smcore.strategy import experiment_ledger
+            experiment_ledger.record_calibration(rec, signal_date=None,
+                                                author="walk_forward_validator")
+        except Exception:
+            pass
+
+    return rec
+
 
 def _print_report(res: dict) -> None:
     print("=" * 64)

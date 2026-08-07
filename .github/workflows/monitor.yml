@@ -172,6 +172,15 @@ jobs:
             --emit-json stock_data/execution_quality.json \
             --emit-md stock_data/execution_report.md
 
+      - name: 实验台账汇总（Experiment Ledger 审计记录）
+        id: ledger
+        continue-on-error: true
+        run: |
+          python scripts/run_experiment_ledger.py \
+            --summary \
+            --emit-json stock_data/experiment_ledger_summary.json \
+            --emit-md stock_data/experiment_ledger_report.md
+
       - name: 上传监控产物
         uses: actions/upload-artifact@v4
         if: always()
@@ -189,4 +198,6 @@ jobs:
             stock_data/ml_factors_report.md
             stock_data/execution_quality.json
             stock_data/execution_report.md
+            stock_data/experiment_ledger_summary.json
+            stock_data/experiment_ledger_report.md
           retention-days: 30

@@ -58,6 +58,17 @@ stock_data/paper.md
 stock_data/paper_tracker.json
 stock_data/paper_tracker_report.md
 stock_data/factor_ic.json
+stock_data/risk_model.json
+stock_data/risk_model_report.md
+stock_data/ml_factors.json
+stock_data/ml_factors_report.md
+stock_data/live_forward_discipline.json
+stock_data/execution_quality.json
+stock_data/execution_report.md
+stock_data/Execution-Report-*.md
+stock_data/execution_plans/
+stock_data/experiment_ledger.jsonl
+stock_data/walk_forward_results.json
 
 # 当前规则重筛历史产物（本地跑出，不入库）
 stock_data/replay_current_rules.json
