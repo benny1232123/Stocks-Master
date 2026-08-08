@@ -164,7 +164,7 @@ def _forward_return_exit_aware(code: str, signal_date: str, hold_days: int = WF_
     if future.empty:
         return None
     buy_date = future.iloc[0]["date"].date()
-    end_date = (buy_date + timedelta(days=hold_days)).date()
+    end_date = buy_date + timedelta(days=hold_days)
     res = simulate_position(
         code, buy_date, end_date,
         stop_loss_pct=stop_loss_pct,
