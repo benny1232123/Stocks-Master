@@ -438,12 +438,28 @@ def _cum(rows: list[dict], key: str) -> float:
     return (acc - 1) * 100
 
 
+def _resolve_floor(floor, zero_negative_edge) -> float:
+    """解析实际生效的 FLOOR（地板）。
+
+    - zero_negative_edge 关闭时地板恒为 0.0（地板机制仅配合「零负 edge」正则化使用）；
+    - 开启时优先用调用方显式传入的 floor，否则回退全局 CONFIG["FLOOR"]。
+    """
+    from smcore.strategy.adaptive_weights import CONFIG
+    if not zero_negative_edge:
+        return 0.0
+    return float(floor) if floor is not None else CONFIG["FLOOR"]
+
+
 def _eff(shrinkage, floor, zero_negative_edge):
+    """解析生效的 (shrinkage, FLOOR)：shrinkage 缺省回退全局 CONFIG；FLOOR 规则见 _resolve_floor。
+
+    注：CONFIG 在此无条件导入（原实现仅在 shrinkage is None 分支内导入，却在下方的 else
+    分支引用，若 shrinkage 非 None 且 zero_negative_edge 为真且 floor 为 None 会触发 NameError）。
+    """
+    from smcore.strategy.adaptive_weights import CONFIG
     if shrinkage is None:
-        from smcore.strategy.adaptive_weights import CONFIG
         shrinkage = CONFIG["shrinkage"]
-    eff_floor = floor if (floor is not None and zero_negative_edge) else (CONFIG["FLOOR"] if zero_negative_edge else 0.0)
-    return shrinkage, eff_floor
+    return shrinkage, _resolve_floor(floor, zero_negative_edge)
 
 
 def _regime_as_of(sd: str) -> str:
@@ -826,6 +842,8 @@ def main() -> int:
     ap.add_argument("--recommend", action="store_true", help="输出月度重验推荐配置 JSON（含稳健性判定）")
     ap.add_argument("--emit-json", default=None, help="把 recommend/sweep 结果写到该 JSON 路径")
     ap.add_argument("--exit-sweep-json", default=None, help="把出场参数敏感性扫描表写到该 JSON 路径")
+    ap.add_argument("--no-write", action="store_true",
+                    help="跳过 walk_forward_results.json 明细落盘（仅供查看/调试，不影响 --emit-json/--exit-sweep-json）")
     args = ap.parse_args()
 
     res = run()
@@ -865,15 +883,16 @@ def main() -> int:
         out_json = json.dumps(rec, ensure_ascii=False, indent=2, default=str)
         print(out_json)
 
-    # 落盘明细供复查
-    out = ROOT / "stock_data" / "walk_forward_results.json"
-    try:
-        with open(out, "w", encoding="utf-8") as f:
-            json.dump({k: v for k, v in res.items() if k != "pairs"}, f,
-                      ensure_ascii=False, indent=2, default=str)
-        print(f"\n明细已写：{out}")
-    except Exception as e:  # pragma: no cover
-        print(f"写明细失败：{e}")
+    # 落盘明细供复查（--no-write 时跳过，避免单为查看报告也产生数据产物污染提交）
+    if not args.no_write:
+        out = ROOT / "stock_data" / "walk_forward_results.json"
+        try:
+            with open(out, "w", encoding="utf-8") as f:
+                json.dump({k: v for k, v in res.items() if k != "pairs"}, f,
+                          ensure_ascii=False, indent=2, default=str)
+            print(f"\n明细已写：{out}")
+        except Exception as e:  # pragma: no cover
+            print(f"写明细失败：{e}")
 
     if args.emit_json:
         if args.recommend:

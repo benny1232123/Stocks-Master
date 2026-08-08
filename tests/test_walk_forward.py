@@ -100,3 +100,15 @@ def test_day_records_cache_reused(monkeypatch):
     # 首次触发底层读取并写入缓存；第二次必须命中缓存，不再读盘
     assert calls["n"] == 1, f"缓存未生效，底层被调用 {calls['n']} 次"
     assert r1 == r2
+
+
+def test_resolve_floor_rules():
+    """_resolve_floor 规则：零负edge关闭恒0；开启优先显式floor，否则回退 CONFIG.FLOOR。"""
+    # 关闭零负 edge → 地板恒 0（无论是否显式给出）
+    assert wf._resolve_floor(3.0, False) == 0.0
+    assert wf._resolve_floor(None, False) == 0.0
+    # 开启且显式 floor → 用显式值
+    assert wf._resolve_floor(2.0, True) == 2.0
+    # 开启且无显式 floor → 回退全局 CONFIG["FLOOR"]（与 _eff 默认一致）
+    default_floor = wf._eff(None, None, True)[1]
+    assert wf._resolve_floor(None, True) == default_floor
