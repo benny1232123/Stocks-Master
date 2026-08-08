@@ -257,15 +257,56 @@ def _backfill_records(sd: str, exit_kwargs=None) -> list[dict]:
     return rows
 
 
+# 模块级缓存：前向收益只依赖 (sd, exit_kwargs)，与 shrinkage/floor 无关；但 sweep()/recommend()
+# 在 16+ 个权重组合下对同一 sd 重复重算（每组合遍历全部信号日），缓存可消除该冗余 I/O 与重算
+# （sweep 约 16×、recommend 约 49×），并缓解本地沙箱反复读 8000+ CSV 导致的内存压力。
+_DAY_RECORDS_CACHE: dict = {}
+
+
+def _day_records_key(exit_kwargs) -> str | None:
+    """把 exit_kwargs 规范成可哈希缓存键；缺省回退 repr。"""
+    if not exit_kwargs:
+        return None
+    try:
+        return json.dumps(exit_kwargs, sort_keys=True, ensure_ascii=False)
+    except (TypeError, ValueError):
+        return repr(sorted(exit_kwargs.items()))
+
+
+def clear_day_records_cache() -> None:
+    """清除 _day_records 缓存（进程内重扫描或测试隔离时使用）。"""
+    _DAY_RECORDS_CACHE.clear()
+
+
 def _day_records(sd: str, exit_kwargs=None) -> list[dict]:
     """返回信号日 sd 的所有 (code, sources, return_pct) 记录。
 
     优先用生产 Multi-Backtest；缺失/空则用本地 k_data 回补（exit_kwargs 透传）。
+
+    结果按 (sd, exit_kwargs) 缓存：前向收益是纯函数（仅依赖历史数据与出场参数），
+    与 shrinkage/floor 无关，但调用方常在权重网格下对同一 sd 重复请求，缓存避免重复读盘与重算。
     """
-    recs = _multi_backtest_records(sd)
-    if recs:
-        return recs
-    return _backfill_records(sd, exit_kwargs=exit_kwargs)
+    key = (sd, _day_records_key(exit_kwargs))
+    # (sd, None) 缓存覆盖：①有生产数据的 sd（结果与 exit 无关）；②默认出口(naive)回补。
+    # 具体出场参数的回补只存 (sd, exit_key)，避免污染默认出口请求。缓存查询置于 prod 探测之前，
+    # 使重复请求不再触发底层读盘（这是 sweep/recommend 性能收益与沙箱 OOM 缓解的关键）。
+    cached = _DAY_RECORDS_CACHE.get((sd, None))
+    if cached is not None:
+        return cached
+    if key != (sd, None):
+        cached = _DAY_RECORDS_CACHE.get(key)
+        if cached is not None:
+            return cached
+    prod = _multi_backtest_records(sd)
+    if prod:
+        _DAY_RECORDS_CACHE[(sd, None)] = prod
+        return prod
+    back = _backfill_records(sd, exit_kwargs=exit_kwargs)
+    _DAY_RECORDS_CACHE[key] = back
+    if exit_kwargs is None:
+        # 默认出口结果额外以 (sd, None) 缓存，加速 sweep()/recommend() 的重复默认请求
+        _DAY_RECORDS_CACHE[(sd, None)] = back
+    return back
 
 
 def _all_signal_days() -> list[str]:

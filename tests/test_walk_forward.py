@@ -69,8 +69,34 @@ def test_sweep_exits_grid_shape():
     # 用少量信号日即可验证网格结构（组合数与天数无关），避免拖慢测试
     days = wf._all_signal_days()[:3]
     grid = wf.sweep_exits(days=days)
-    assert len(grid) == 36  # 4 止损 × 3 trailing × 3 持有期
+    # 期望长度由实际网格常量推导（exit_sweep 配置变更时自动跟随，避免硬编码 36 静默失配）
+    expected = len(wf._STOP_LOSS_GRID) * len(wf._TRAILING_GRID) * len(wf._HOLD_GRID)
+    assert len(grid) == expected
     for g in grid:
         assert {"stop_loss_pct", "trailing_stop_pct", "hold_days",
                 "adaptive", "equal", "diff"} <= set(g)
     assert all(grid[i]["adaptive"] >= grid[i + 1]["adaptive"] for i in range(len(grid) - 1))
+
+
+def test_day_records_cache_reused(monkeypatch):
+    """同一 (sd, exit_kwargs) 重复请求应命中缓存（前向收益为纯函数，不重复读盘/重算）。
+
+    守护 #1 的优化：sweep()/recommend() 在权重网格下对同一 sd 重复请求，缓存须令底层
+    _multi_backtest_records 只被触发一次。
+    """
+    days = wf._all_signal_days()[:1]
+    if not days:
+        pytest.skip("无可用信号日")
+    sd = days[0]
+    calls = {"n": 0}
+    orig = wf._multi_backtest_records
+    def counting(*a, **k):
+        calls["n"] += 1
+        return orig(*a, **k)
+    monkeypatch.setattr(wf, "_multi_backtest_records", counting)
+    wf.clear_day_records_cache()
+    r1 = wf._day_records(sd)
+    r2 = wf._day_records(sd)  # 同 sd、默认 exit_kwargs → 应直接命中缓存
+    # 首次触发底层读取并写入缓存；第二次必须命中缓存，不再读盘
+    assert calls["n"] == 1, f"缓存未生效，底层被调用 {calls['n']} 次"
+    assert r1 == r2
