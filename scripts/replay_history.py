@@ -15,10 +15,21 @@
   - 单策略候选日由 daily_backtest 的 BACKTEST_MIN_STRATEGIES=2 自动跳过。
 
 用法：
+  python scripts/replay_history.py --phase all --cadence weekly
+      # 全量回放+融合+回测(断点续跑：已完成的日自动跳过，失败的日重跑即可)
   python scripts/replay_history.py --phase all --cadence weekly --start 20250808 --end 20260808
   python scripts/replay_history.py --phase replay --dry-run          # 只看将回放哪些日
   python scripts/replay_history.py --phase all --limit 3             # 先冒烟 3 日
   python scripts/replay_history.py --phase backtest                 # 仅补跑回测(续跑)
+  python scripts/replay_history.py --phase replay --retries 3       # 单策略失败重试 3 次(扛 SQLite locked)
+
+排错：
+  - 每个策略子进程的【完整 stdout/stderr】落盘在 .workbuddy/replay_results/logs/<日期>_<策略>.log，
+    任一日 FAIL 先看对应日志即可定位(此前版本只截断一行，真因易丢)。
+  - 中途断网/被杀：直接重跑同一条命令，replay 阶段按 Stock-Selection-*.csv 是否存在跳过已完成日，
+    backtest 阶段按 Multi-Backtest-*.csv 是否存在跳过，天然续跑。
+  - 前置(本机推荐)：先 python scripts/refresh_fundamentals.py 预填 fundamental_cache，
+    否则因子分全年=0(融合退化为纯价量，但口径可再生产、纪律可验证)。
 """
 from __future__ import annotations
 
@@ -81,47 +92,102 @@ def _stock_selection_exists(date: str) -> bool:
     )
 
 
+REPLAY_RETRIES = int(os.environ.get("REPLAY_RETRIES", "3"))  # 单策略瞬断重试次数
+REPLAY_RETRY_GAP = 5  # 重试间隔(秒)，扛 SQLite database is locked 等瞬断
+
+REPLAY_LOG_DIR = RESULT_DIR / "logs"
+REPLAY_LOG_DIR.mkdir(parents=True, exist_ok=True)
+
+
+def _run_subprocess_with_retry(cmd: list, env: dict, log_path: Path,
+                               timeout: int, label: str) -> tuple[int, str]:
+    """运行单个策略子进程；失败自动重试 REPLAY_RETRIES 次。
+
+    完整 stdout/stderr 落盘到 log_path（失败可溯源），仅把末段摘要回填给调用方。
+    返回 (returncode, err_tail)。
+    """
+    last_err = ""
+    for attempt in range(1, REPLAY_RETRIES + 1):
+        try:
+            r = subprocess.run(
+                cmd, env=env, timeout=timeout,
+                capture_output=True, text=True, cwd=str(ROOT),
+            )
+        except subprocess.TimeoutExpired:
+            last_err = f"timeout>{timeout}s"
+            try:
+                log_path.write_text(
+                    f"[{label} attempt {attempt}] TIMEOUT>{timeout}s\n",
+                    encoding="utf-8", errors="ignore",
+                )
+            except Exception:
+                pass
+            if attempt < REPLAY_RETRIES:
+                time.sleep(REPLAY_RETRY_GAP)
+                continue
+            return 124, last_err
+        except Exception as e:  # noqa: BLE001
+            last_err = f"{type(e).__name__}:{e}"
+            if attempt < REPLAY_RETRIES:
+                time.sleep(REPLAY_RETRY_GAP)
+                continue
+            return 1, last_err
+
+        if r.returncode == 0:
+            # 成功也留痕(以便事后核对)，但覆盖为轻量 OK 标记
+            try:
+                log_path.write_text(
+                    f"[{label} attempt {attempt}] OK\n",
+                    encoding="utf-8", errors="ignore",
+                )
+            except Exception:
+                pass
+            return 0, ""
+
+        # 失败：完整落盘，重试
+        last_err = (r.stderr or r.stdout or "")
+        try:
+            log_path.write_text(
+                f"[{label} attempt {attempt}] rc={r.returncode}\n"
+                f"=== STDOUT ===\n{r.stdout or ''}\n=== STDERR ===\n{r.stderr or ''}\n",
+                encoding="utf-8", errors="ignore",
+            )
+        except Exception:
+            pass
+        if attempt < REPLAY_RETRIES:
+            time.sleep(REPLAY_RETRY_GAP)
+            continue
+    return 1, last_err[-400:]
+
+
 def _replay_one(date: str) -> tuple[bool, str]:
-    """子进程隔离回放 5 策略。返回 (ok, msg)。"""
+    """子进程隔离回放 5 策略(带重试 + 完整错误落盘)。返回 (ok, msg)。"""
     log = []
     # 4 个冻结策略：复用 run_strategy_for_date.py 的 datetime 冻结机制
     for strat in STRATS_FROZEN:
         env = dict(os.environ, SIGNAL_DATE=date, MPLBACKEND="Agg")
-        try:
-            r = subprocess.run(
-                [sys.executable, str(ROOT / "scripts" / "run_strategy_for_date.py"), strat],
-                env=env, timeout=REPLAY_TIMEOUT, capture_output=True, text=True,
-                cwd=str(ROOT),
-            )
-            if r.returncode != 0:
-                log.append(f"{strat}:rc={r.returncode}:{_tail(r.stderr or r.stdout)}")
-        except subprocess.TimeoutExpired:
-            return False, f"{strat}:timeout>{REPLAY_TIMEOUT}s"
-        except Exception as e:  # noqa: BLE001
-            return False, f"{strat}:{type(e).__name__}:{e}"
-    # boll：原生 today 参数，子进程隔离
-    try:
-        r = subprocess.run(
-            [sys.executable, "-c",
-             "import sys; sys.path.insert(0, %r); "
-             "from smcore.strategies.boll import run_boll; run_boll(today='%s')"
-             % (str(ROOT), date)],
-            env=dict(os.environ, MPLBACKEND="Agg"),
-            timeout=REPLAY_TIMEOUT, capture_output=True, text=True, cwd=str(ROOT),
+        cmd = [sys.executable, str(ROOT / "scripts" / "run_strategy_for_date.py"), strat]
+        rc, err = _run_subprocess_with_retry(
+            cmd, env, REPLAY_LOG_DIR / f"{date}_{strat}.log", REPLAY_TIMEOUT, strat,
         )
-        if r.returncode != 0:
-            log.append(f"boll:rc={r.returncode}:{_tail(r.stderr or r.stdout)}")
-    except subprocess.TimeoutExpired:
-        return False, "boll:timeout>%ds" % REPLAY_TIMEOUT
-    except Exception as e:  # noqa: BLE001
-        return False, f"boll:{type(e).__name__}:{e}"
+        if rc != 0:
+            log.append(f"{strat}:rc={rc}:{err}")
+    # boll：原生 today 参数，子进程隔离
+    boll_cmd = [
+        sys.executable, "-c",
+        "import sys; sys.path.insert(0, %r); "
+        "from smcore.strategies.boll import run_boll; run_boll(today='%s')"
+        % (str(ROOT), date),
+    ]
+    rc, err = _run_subprocess_with_retry(
+        boll_cmd, dict(os.environ, MPLBACKEND="Agg"),
+        REPLAY_LOG_DIR / f"{date}_boll.log", REPLAY_TIMEOUT, "boll",
+    )
+    if rc != 0:
+        log.append(f"boll:rc={rc}:{err}")
     if log:
         return False, "; ".join(log)
     return True, "5 策略回放完成"
-
-
-def _tail(s: str, n: int = 200) -> str:
-    return (s or "")[-n:].replace("\n", " ").strip()
 
 
 # ───────────────────────────── 融合阶段 ─────────────────────────────
@@ -278,6 +344,7 @@ def run_phase(phase: str, dates: list[str]) -> None:
 
 
 def main() -> int:
+    global REPLAY_RETRIES
     ap = argparse.ArgumentParser(description="历史回放驱动(融合+回测延伸回过去一年)")
     ap.add_argument("--phase", choices=["replay", "fuse", "backtest", "all"],
                     default="all")
@@ -285,8 +352,11 @@ def main() -> int:
     ap.add_argument("--start", default=None, help="YYYYMMDD，默认 end-1年")
     ap.add_argument("--end", default=None, help="YYYYMMDD，默认今天")
     ap.add_argument("--limit", type=int, default=0, help="最多处理前 N 个日(冒烟用)")
+    ap.add_argument("--retries", type=int, default=REPLAY_RETRIES,
+                    help="单策略失败重试次数(默认 %d，扛 SQLite locked 等瞬断)" % REPLAY_RETRIES)
     ap.add_argument("--dry-run", action="store_true", help="只打印日历不执行")
     args = ap.parse_args()
+    REPLAY_RETRIES = args.retries or 0
 
     end = args.end or datetime.now().strftime("%Y%m%d")
     start = args.start or (datetime.now() - pd.DateOffset(years=1)).strftime("%Y%m%d")
