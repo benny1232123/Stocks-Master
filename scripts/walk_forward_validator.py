@@ -705,7 +705,7 @@ def recommend() -> dict:
     robust = (improve_pp >= MIN_IMPROVE_PP and monotonic and stable
               and (not _sig_enabled or sig["significant"]) and regime_robust)
 
-    return {
+    rec = {
         "current": {"shrinkage": CONFIG["shrinkage"], "floor": CONFIG["FLOOR"]},
         "recommended": {"shrinkage": best["shrinkage"], "floor": best["floor"]},
         "improvement_pp": improve_pp,
@@ -720,9 +720,9 @@ def recommend() -> dict:
             "stable_second_half_rank": r_second,
             "stable_ok": stable,
             "regime_robust_enabled": _rr_enabled,
-                "regime_diverse": _regime_diverse,
-                "regime_qualified": _gate["qualified"],
-                "regime_beat_count": _regime_beat,
+            "regime_diverse": _regime_diverse,
+            "regime_qualified": _gate["qualified"],
+            "regime_beat_count": _regime_beat,
             "regime_min_regimes": _rr_min,
             "regime_robust_ok": regime_robust,
         },
