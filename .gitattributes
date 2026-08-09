@@ -1,0 +1,14 @@
+# Windows batch files MUST be CRLF and pure ASCII.
+# cmd.exe misparses LF-only .bat files (block/if structure breaks), and
+# UTF-8 Chinese inside a .bat is mojibake'd under the GBK console codepage,
+# which makes every mangled line get executed as a command.
+*.bat text eol=crlf
+*.cmd text eol=crlf
+*.ps1 text eol=crlf
+
+# Shell scripts must stay LF or bash refuses to run them.
+*.sh  text eol=lf
+
+# Data artifacts: never let git rewrite line endings.
+*.csv -text
+*.db  binary

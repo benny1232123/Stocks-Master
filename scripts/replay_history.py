@@ -86,10 +86,20 @@ def build_calendar(start: str, end: str, cadence: str) -> list[str]:
 
 
 # ───────────────────────────── 回放阶段 ─────────────────────────────
+def _missing_strats(date: str) -> list[str]:
+    """返回该日尚未产出 CSV 的策略名列表；5 策略齐全时返回 []。
+
+    用于「增量补齐」：上一轮部分策略失败留下的残缺日，只补缺失的那几个，
+    不重跑已成功的（避免重复计算，也避免覆盖已有产物）。
+    """
+    return [
+        name for name, f in STRAT_FILE.items()
+        if not (STOCK_DATA_DIR / f.format(date=date)).exists()
+    ]
+
+
 def _stock_selection_exists(date: str) -> bool:
-    return all(
-        (STOCK_DATA_DIR / f.format(date=date)).exists() for f in STRAT_FILE.values()
-    )
+    return not _missing_strats(date)
 
 
 REPLAY_RETRIES = int(os.environ.get("REPLAY_RETRIES", "3"))  # 单策略瞬断重试次数
@@ -160,11 +170,17 @@ def _run_subprocess_with_retry(cmd: list, env: dict, log_path: Path,
     return 1, last_err[-400:]
 
 
-def _replay_one(date: str) -> tuple[bool, str]:
-    """子进程隔离回放 5 策略(带重试 + 完整错误落盘)。返回 (ok, msg)。"""
+def _replay_one(date: str, only: list[str] | None = None) -> tuple[bool, str]:
+    """子进程隔离回放策略(带重试 + 完整错误落盘)。返回 (ok, msg)。
+
+    only=None 表示跑全部 5 策略；传列表则只跑其中缺失的那几个(增量补齐)。
+    """
+    todo = set(only) if only else set(STRAT_FILE)
     log = []
     # 4 个冻结策略：复用 run_strategy_for_date.py 的 datetime 冻结机制
     for strat in STRATS_FROZEN:
+        if strat not in todo:
+            continue
         env = dict(os.environ, SIGNAL_DATE=date, MPLBACKEND="Agg")
         cmd = [sys.executable, str(ROOT / "scripts" / "run_strategy_for_date.py"), strat]
         rc, err = _run_subprocess_with_retry(
@@ -173,21 +189,22 @@ def _replay_one(date: str) -> tuple[bool, str]:
         if rc != 0:
             log.append(f"{strat}:rc={rc}:{err}")
     # boll：原生 today 参数，子进程隔离
-    boll_cmd = [
-        sys.executable, "-c",
-        "import sys; sys.path.insert(0, %r); "
-        "from smcore.strategies.boll import run_boll; run_boll(today='%s')"
-        % (str(ROOT), date),
-    ]
-    rc, err = _run_subprocess_with_retry(
-        boll_cmd, dict(os.environ, MPLBACKEND="Agg"),
-        REPLAY_LOG_DIR / f"{date}_boll.log", REPLAY_TIMEOUT, "boll",
-    )
-    if rc != 0:
-        log.append(f"boll:rc={rc}:{err}")
+    if "boll" in todo:
+        boll_cmd = [
+            sys.executable, "-c",
+            "import sys; sys.path.insert(0, %r); "
+            "from smcore.strategies.boll import run_boll; run_boll(today='%s')"
+            % (str(ROOT), date),
+        ]
+        rc, err = _run_subprocess_with_retry(
+            boll_cmd, dict(os.environ, MPLBACKEND="Agg"),
+            REPLAY_LOG_DIR / f"{date}_boll.log", REPLAY_TIMEOUT, "boll",
+        )
+        if rc != 0:
+            log.append(f"boll:rc={rc}:{err}")
     if log:
         return False, "; ".join(log)
-    return True, "5 策略回放完成"
+    return True, f"{len(todo)} 策略回放完成"
 
 
 # ───────────────────────────── 融合阶段 ─────────────────────────────
@@ -294,18 +311,27 @@ def run_phase(phase: str, dates: list[str]) -> None:
         t0 = time.time()
         ok = skip = fail = 0
         for i, d in enumerate(dates):
-            if _dal_ok(d) or _stock_selection_exists(d):
-                print(f"  [{i+1}/{len(dates)}] {d} -> skip(已融合/已回放)", flush=True)
+            if _dal_ok(d):
+                print(f"  [{i+1}/{len(dates)}] {d} -> skip(已融合)", flush=True)
                 skip += 1
                 continue
-            ok_flag, msg = _replay_one(d)
+            missing = _missing_strats(d)
+            if not missing:
+                print(f"  [{i+1}/{len(dates)}] {d} -> skip(5 策略已齐)", flush=True)
+                skip += 1
+                continue
+            # 增量补齐：只跑缺失策略，已成功的不重算
+            tag = "" if len(missing) == len(STRAT_FILE) else \
+                f" [补齐 {len(missing)}/5: {','.join(missing)}]"
+            ok_flag, msg = _replay_one(d, only=missing)
             if ok_flag:
                 ok += 1
-                _write_result("replay", d, {"status": "ok"})
+                _write_result("replay", d, {"status": "ok", "ran": missing})
             else:
                 fail += 1
-                _write_result("replay", d, {"status": "error", "msg": msg})
-            print(f"  [{i+1}/{len(dates)}] {d} -> {'ok' if ok_flag else 'FAIL'} "
+                _write_result("replay", d,
+                              {"status": "error", "msg": msg, "ran": missing})
+            print(f"  [{i+1}/{len(dates)}] {d}{tag} -> {'ok' if ok_flag else 'FAIL'} "
                   f"{msg[:60]} ({time.time()-t0:.0f}s)", flush=True)
         print(f"[replay] ok={ok} skip={skip} fail={fail} 耗时 {time.time()-t0:.1f}s",
               flush=True)
