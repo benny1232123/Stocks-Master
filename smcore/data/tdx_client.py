@@ -167,10 +167,14 @@ class TdxClient:
             out["date"] = pd.to_datetime(out["date"])
             out = out.dropna(subset=["close"]).sort_values("date").reset_index(drop=True)
 
-            # 复权处理
+            # 复权处理：无法完成复权时必须返回空，让上层回退到 akshare/baostock。
+            # 绝不能静默返回不复权价 —— 那会被写进标记为 qfq 的缓存文件，
+            # 造成序列断层并毒化所有回看指标（历史事故：批量污染 281 只股票）。
             adj = (adjust or "qfq").lower()
             if adj in ("qfq", "hfq"):
                 out = self._apply_adjust(out, market, code6, adj)
+                if out is None:
+                    return pd.DataFrame()
 
             out = out[(out["date"].dt.date >= start) & (out["date"].dt.date <= end)]
             out = out.sort_values("date").reset_index(drop=True)
@@ -181,17 +185,28 @@ class TdxClient:
         except Exception:
             return pd.DataFrame()
 
-    def _apply_adjust(self, df: pd.DataFrame, market: int, code6: str, adj: str) -> pd.DataFrame:
-        """用 xdxr 信息计算前/后复权价。anchored 到最新价（qfq）或首发价（hfq）。"""
+    def _apply_adjust(self, df: pd.DataFrame, market: int, code6: str, adj: str) -> pd.DataFrame | None:
+        """用 xdxr 信息计算前/后复权价。anchored 到最新价（qfq）或首发价（hfq）。
+
+        返回 None 表示「除权信息查询失败、无法判定复权」——调用方必须放弃本次结果
+        并回退到其它数据源，不得把不复权价当作复权价使用。
+        xdxr 查询成功但为空（该股从未除权）是合法情形，此时复权价 == 原始价。
+        """
         try:
             xdxr = self.api.get_xdxr_info(market, code6)
         except Exception:
-            xdxr = []
+            return None
+        if xdxr is None:
+            return None
         if not xdxr:
-            return df
-        # 解析除权事件（仅 category 1=除权除息 / 含分红送配）
+            return df  # 该股无除权记录：复权价与原始价一致
+        # 解析除权事件：仅取 category==1（除权除息）。
+        # 其余 category（如 5=股本变化）复用 fenhong/songzhuangu 等字段名存放
+        # 完全不同量纲的数值，误当分红送配会算出荒谬因子。
         events = []
         for e in xdxr:
+            if e.get("category") != 1:
+                continue
             try:
                 d = date(e["year"], e["month"], e["day"])
             except Exception:

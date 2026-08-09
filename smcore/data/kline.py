@@ -25,6 +25,59 @@ from smcore.utils.code import format_stock_code, to_baostock_code
 K_DATA_CACHE_DIR = STOCK_DATA_DIR / "k_data"
 DAILY_K_COLUMNS = ["date", "open", "high", "low", "close", "volume", "amount"]
 
+# ── 复权基准漂移守卫 ──
+# 前复权价以「最新交易日」为锚：此后一旦发生分红送转，整条历史序列都会被重新缩放。
+# 因此「把新拉的几天直接拼到旧缓存后面」在物理上就是错的 —— 旧段停留在过期基准、
+# 新段用新基准，接缝处出现断层（实测 600900 长江电力接缝单日 +46%，物理不可能）。
+# 断层不只毒化回测成交价，更会静默毒化所有跨接缝的回看指标（MA/布林/动量/相对强度）。
+# 守卫：增量拉取强制与缓存重叠若干日，比对重叠日收盘；偏差超容差即判定基准漂移，
+# 丢弃缓存全量重拉。容差取 0.5%（小于最低分红率，又大于浮点/数据源舍入噪声）。
+KLINE_OVERLAP_DAYS = int(os.getenv("KLINE_OVERLAP_DAYS", "7"))
+KLINE_DRIFT_TOL = float(os.getenv("KLINE_DRIFT_TOL", "0.005"))
+
+# 重叠检测只能发现「接缝处」漂移；若污染位于缓存中段（历史某次追加留下的），
+# 接缝可能完全一致而中段仍是坏的。因此落盘前还要做整段自洽性检查：
+# 相邻交易日跳变一旦超过该板块涨跌停上限，就是非市场行为 —— 只可能是复权错误。
+# 板块涨跌停随交易所规则固定，非策略超参；留环境变量仅为便于测试与规则变更。
+PRICE_LIMIT_MAIN = float(os.getenv("KLINE_LIMIT_MAIN", "10"))      # 主板 60/00/002
+PRICE_LIMIT_GROWTH = float(os.getenv("KLINE_LIMIT_GROWTH", "20"))  # 创业板 300/301、科创 688
+PRICE_LIMIT_BJ = float(os.getenv("KLINE_LIMIT_BJ", "30"))          # 北交所 8/4
+PRICE_LIMIT_MARGIN = float(os.getenv("KLINE_LIMIT_MARGIN", "1.15"))  # 余量，吸收停复牌等边缘情形
+JUMP_SKIP_HEAD_BARS = int(os.getenv("KLINE_JUMP_SKIP_HEAD", "10"))   # 新股上市初期不设涨跌幅限制
+
+
+def price_limit_ratio(code6: str) -> float:
+    """该股单日价格变动的物理上限（比值，如 1.115）。超过即非市场行为。"""
+    c = str(code6)
+    if c.startswith(("300", "301", "688")):
+        pct = PRICE_LIMIT_GROWTH
+    elif c.startswith(("8", "4")):
+        pct = PRICE_LIMIT_BJ
+    else:
+        pct = PRICE_LIMIT_MAIN
+    return 1 + pct * PRICE_LIMIT_MARGIN / 100.0
+
+
+def find_price_breaks(df: pd.DataFrame, code6: str) -> list[dict]:
+    """扫描收盘价序列中的复权断层，返回断层点列表（正常序列返回 []）。"""
+    if df is None or len(df) < 2 or "close" not in df.columns:
+        return []
+    close = pd.to_numeric(df["close"], errors="coerce").reset_index(drop=True)
+    dates = df["date"].reset_index(drop=True) if "date" in df.columns else close.index.to_series()
+    up = price_limit_ratio(code6)
+    ratio = close / close.shift(1)
+    hits = ratio[(ratio > up) | (ratio < 1 / up)]
+    return [
+        {
+            "date": str(dates.iloc[i]),
+            "prev_close": round(float(close.iloc[i - 1]), 4),
+            "close": round(float(close.iloc[i]), 4),
+            "ratio": round(float(ratio.iloc[i]), 4),
+        }
+        for i in hits.index
+        if i >= JUMP_SKIP_HEAD_BARS and pd.notna(ratio.iloc[i])
+    ]
+
 
 def _backend() -> str:
     """返回当前 K 线后端：tdx（最快）> baostock（本地）> akshare（云端兜底）。
@@ -99,7 +152,10 @@ def _normalize(df: pd.DataFrame) -> pd.DataFrame:
             out[col] = pd.NA
         out[col] = pd.to_numeric(out[col], errors="coerce")
     out["date"] = pd.to_datetime(out["date"], errors="coerce")
-    out = out.dropna(subset=["date", "close"]).sort_values("date").reset_index(drop=True)
+    out = out.dropna(subset=["date", "close"]).sort_values("date")
+    # 同一交易日只保留最后一条：concat(缓存, 新拉段) 时重叠日必然重复，
+    # 保留后者（新拉的）才是最新复权基准。此前缺失去重会让重叠日残留两行。
+    out = out.drop_duplicates(subset=["date"], keep="last").reset_index(drop=True)
     if out.empty:
         return _empty_df()
     out["date"] = out["date"].dt.strftime("%Y-%m-%d")
@@ -120,6 +176,29 @@ def _is_fresh(path: Path, max_age_hours: float) -> bool:
     return age <= max_age_hours * 3600
 
 
+def _detect_adjust_drift(cached: pd.DataFrame, fresh: pd.DataFrame) -> float:
+    """比对缓存与新拉数据在重叠交易日上的收盘价，返回最大相对偏差。
+
+    返回 -1.0 表示无重叠、无法判定（调用方按「不阻断」处理）。
+    """
+    if cached is None or cached.empty or fresh is None or fresh.empty:
+        return -1.0
+    new = _normalize(fresh)
+    if new.empty:
+        return -1.0
+    merged = cached[["date", "close"]].merge(
+        new[["date", "close"]], on="date", suffixes=("_old", "_new")
+    )
+    if merged.empty:
+        return -1.0
+    old_c = pd.to_numeric(merged["close_old"], errors="coerce")
+    new_c = pd.to_numeric(merged["close_new"], errors="coerce")
+    ok = (old_c > 0) & (new_c > 0)
+    if not ok.any():
+        return -1.0
+    return float(((new_c[ok] - old_c[ok]).abs() / old_c[ok]).max())
+
+
 def _slice(df: pd.DataFrame, start: date, end: date) -> pd.DataFrame:
     if df.empty:
         return df
@@ -138,6 +217,7 @@ def fetch_daily_k(
     use_cache: bool = True,
     force_refresh: bool = False,
     max_cache_age_hours: float = 24.0,
+    _no_retry: bool = False,
 ) -> pd.DataFrame:
     """获取日 K 线（默认前复权），带文件缓存与增量合并。
 
@@ -183,15 +263,11 @@ def fetch_daily_k(
         # 前导缺口：缓存起点之前的请求区间（极少触发，缓存通常从上市起覆盖）
         if request_start < cache_min:
             segments.append((request_start, min(request_end, cache_min - timedelta(days=1))))
-        # 尾部缺口：缓存终点之后的请求区间（每个交易日新增的部分）
+        # 尾部缺口：缓存终点之后的请求区间（每个交易日新增的部分）。
+        # 起点强制前移 KLINE_OVERLAP_DAYS 与缓存重叠，重叠段用于复权基准漂移检测；
+        # 重叠行会在 _normalize 去重时被新数据覆盖，不会产生重复行。
         if request_end > cache_max:
-            trail_start = cache_max + timedelta(days=1)
-            # 仅当缓存偏旧(>max_cache_age_hours)且请求触及近期时，
-            # 把回刷起点前移少量交易日以修复可能残缺的末尾几根——
-            # 而不是无脑重抓最近 10 个日历日（那样每只股票都重复抓一片已缓存的数据）。
-            if covers and not fresh and request_end >= date.today() - timedelta(days=1):
-                trail_start = min(trail_start, cache_max - timedelta(days=3))
-            segments.append((max(request_start, trail_start), request_end))
+            segments.append((cache_max - timedelta(days=KLINE_OVERLAP_DAYS), request_end))
 
     parts: list[pd.DataFrame] = []
 
@@ -237,9 +313,54 @@ def fetch_daily_k(
 
     if cached.empty and not parts:
         return _empty_df()
+
+    # ── 复权基准守卫 ──
+    # 两层防御，确保落盘数据「单一复权基准、物理自洽」：
+    #  ① 接缝漂移检测：缓存与新段在重叠交易日的收盘偏差 > 容差，说明缓存基准已过期，
+    #     丢弃缓存、从最早日全量重拉（保留历史区间）。
+    #  ② 整段自洽性检查（落盘前）：扫整条 merged 序列，相邻交易日跳变超该板块涨跌停
+    #     即物理不可能（只可能是复权错误）——含缓存中段的历史污染（接缝一致也抓不到）。
+    # 注意：重拉调用传入 force_refresh=True，本守卫的 `not force_refresh` 条件使其不会重入，
+    # 因此不会无限递归；重拉得到的是单一源全量数据，至少内部自洽（真有跳变则告警接受）。
+    if parts and not cached.empty and not force_refresh:
+        drift = _detect_adjust_drift(cached, pd.concat(parts, ignore_index=True))
+        if drift > KLINE_DRIFT_TOL:
+            return fetch_daily_k(
+                code6,
+                min(request_start, cache_min or request_start),
+                request_end,
+                adjust=adjust,
+                use_cache=use_cache,
+                force_refresh=True,
+                max_cache_age_hours=max_cache_age_hours,
+                _no_retry=True,
+            )
+
     merged = _normalize(pd.concat([cached, *parts], ignore_index=True)) if (not cached.empty or parts) else _empty_df()
     if merged.empty and not cached.empty:
         merged = _normalize(cached)
+
+    # ② 整段自洽性检查：任何非市场跳变都触发全量重拉
+    if not merged.empty:
+        breaks = find_price_breaks(merged, code6)
+        if breaks:
+            if (not force_refresh) and (not _no_retry):
+                return fetch_daily_k(
+                    code6,
+                    min(request_start, cache_min or request_start),
+                    request_end,
+                    adjust=adjust,
+                    use_cache=use_cache,
+                    force_refresh=True,
+                    max_cache_age_hours=max_cache_age_hours,
+                    _no_retry=True,
+                )
+            import warnings
+            warnings.warn(
+                f"[kline] {code6} {len(breaks)} 处复权跳变未被自愈，已用单次全量拉取覆盖"
+                f"（可能是真实除权/停复牌导致的合法大跳变）。"
+            )
+
     if use_cache and not merged.empty:
         merged.to_csv(cache, index=False, encoding=CSV_ENCODING)
     return _slice(merged, request_start, request_end) if not merged.empty else _empty_df()
