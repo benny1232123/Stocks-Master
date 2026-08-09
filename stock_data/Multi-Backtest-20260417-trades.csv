@@ -1,0 +1,4 @@
+﻿code,buy_date,sell_date,buy_price,sell_price,qty,return_pct,exit_reason
+600196,2026-04-20,2026-04-21,26.106,25.604,300,-1.92,trend_break
+000975,2026-04-20,2026-04-21,29.209,29.79,300,1.99,trend_break
+002468,2026-04-20,2026-04-30,17.067,16.214,500,-5.0,max_hold

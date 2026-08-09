@@ -1,0 +1,3 @@
+﻿code,buy_date,sell_date,buy_price,sell_price,qty,return_pct,exit_reason
+002226,2025-08-18,2025-08-19,5.237,5.259,2600,0.42,trend_break
+600497,2025-08-18,2025-08-19,5.151,5.141,2700,-0.2,trend_break

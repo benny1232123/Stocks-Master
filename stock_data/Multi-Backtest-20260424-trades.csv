@@ -1,0 +1,4 @@
+﻿code,buy_date,sell_date,buy_price,sell_price,qty,return_pct,exit_reason
+600060,2026-04-27,2026-04-30,24.274,25.574,100,5.36,take_partial
+600060,2026-04-27,2026-05-06,24.274,25.285,200,4.16,take_partial_final
+600166,2026-04-27,2026-05-07,3.704,3.676,300,-0.74,max_hold
