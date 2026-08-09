@@ -86,15 +86,38 @@ def build_calendar(start: str, end: str, cadence: str) -> list[str]:
 
 
 # ───────────────────────────── 回放阶段 ─────────────────────────────
+def _replayed_ok(date: str) -> set[str]:
+    """该日已「成功跑过」的策略集合（累积记录，跨多次续跑合并）。
+
+    某些信号日某策略本身就没有候选（如 boll 布林触发层当日 0 命中），
+    子进程 rc=0 但不落 CSV。若仅按 CSV 存在性判断，这类「合法空结果」会被
+    永远视为缺失，导致每次续跑都反复重算、看起来永远跑不完。
+    """
+    p = RESULT_DIR / "replay" / f"{date}.json"
+    if not p.exists():
+        return set()
+    try:
+        return set(json.loads(p.read_text(encoding="utf-8")).get("ran_ok") or [])
+    except Exception:  # noqa: BLE001
+        return set()
+
+
+def _record_replayed_ok(date: str, strats) -> list[str]:
+    """把本次成功的策略并入该日累积记录，返回合并后的列表。"""
+    return sorted(_replayed_ok(date) | set(strats))
+
+
 def _missing_strats(date: str) -> list[str]:
-    """返回该日尚未产出 CSV 的策略名列表；5 策略齐全时返回 []。
+    """返回该日尚未产出 CSV 且未被成功回放过的策略名列表；齐全时返回 []。
 
     用于「增量补齐」：上一轮部分策略失败留下的残缺日，只补缺失的那几个，
     不重跑已成功的（避免重复计算，也避免覆盖已有产物）。
     """
+    done = _replayed_ok(date)
     return [
         name for name, f in STRAT_FILE.items()
-        if not (STOCK_DATA_DIR / f.format(date=date)).exists()
+        if name not in done
+        and not (STOCK_DATA_DIR / f.format(date=date)).exists()
     ]
 
 
@@ -326,11 +349,17 @@ def run_phase(phase: str, dates: list[str]) -> None:
             ok_flag, msg = _replay_one(d, only=missing)
             if ok_flag:
                 ok += 1
-                _write_result("replay", d, {"status": "ok", "ran": missing})
+                _write_result("replay", d, {
+                    "status": "ok", "ran": missing,
+                    "ran_ok": _record_replayed_ok(d, missing),
+                })
             else:
                 fail += 1
-                _write_result("replay", d,
-                              {"status": "error", "msg": msg, "ran": missing})
+                _write_result("replay", d, {
+                    "status": "error", "msg": msg, "ran": missing,
+                    # 失败日只保留此前累积的成功记录，本次不计入
+                    "ran_ok": sorted(_replayed_ok(d)),
+                })
             print(f"  [{i+1}/{len(dates)}] {d}{tag} -> {'ok' if ok_flag else 'FAIL'} "
                   f"{msg[:60]} ({time.time()-t0:.0f}s)", flush=True)
         print(f"[replay] ok={ok} skip={skip} fail={fail} 耗时 {time.time()-t0:.1f}s",
