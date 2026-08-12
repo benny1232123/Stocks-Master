@@ -1,6 +1,6 @@
-run_date=20260811
+run_date=20260812
 eligible_signal_days=4
 generated=4
-skipped=4
-incomplete_skipped=3
+skipped=3
+incomplete_skipped=4
 range=20260803~20260810
