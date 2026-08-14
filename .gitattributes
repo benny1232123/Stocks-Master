@@ -12,3 +12,15 @@
 # Data artifacts: never let git rewrite line endings.
 *.csv -text
 *.db  binary
+
+# Source code: keep LF in both repo and working tree.
+# Prevents autocrlf-induced spurious "modified" noise when editors write LF
+# (e.g. the agent's tooling writes LF; checkout would otherwise produce CRLF).
+*.py   text eol=lf
+*.js   text eol=lf
+*.jsx  text eol=lf
+*.ts   text eol=lf
+*.tsx  text eol=lf
+*.css  text eol=lf
+*.json text eol=lf
+*.html text eol=lf
