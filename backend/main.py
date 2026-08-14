@@ -348,12 +348,16 @@ def daily_latest_backtest() -> dict:
 
 
 @app.get("/api/backtests/daily-summary")
-def daily_backtest_summary() -> dict:
+def daily_backtest_summary(lookback: int | None = None) -> dict:
     """聚合每日前向回测批次（Multi-Backtest-*-summary.csv），产出总体总结指标。
 
-    只聚合「最近 BACKTEST_SUMMARY_LOOKBACK（默认 20）个信号日」，避免被几十个
-    已走完持有窗口、结果被永久冻结的旧批次稀释均值，使总体指标更灵敏地反映
-    近期策略表现。设为 0 表示不限制（沿用旧的全部聚合行为）。
+    聚合「最近 N 个信号日」，避免被几十个已走完持有窗口、结果被永久冻结的旧批次
+    稀释均值，使总体指标更灵敏地反映近期策略表现。
+
+    窗口 N 的取值（配置驱动，无 magic number）：
+      - 不传 lookback：沿用环境变量 BACKTEST_SUMMARY_LOOKBACK（默认 20）；
+      - 传 >0 的整数：使用该值作为窗口（如 40 看更多信号日）；
+      - 传 0：不限制，聚合全部已完成信号日（沿用旧的全部聚合行为）。
 
     与 daily_backtest.py 的 _filter_incomplete 对齐：
     策略数 < BACKTEST_MIN_STRATEGIES（默认 2）的信号日视为残缺，
@@ -368,7 +372,15 @@ def daily_backtest_summary() -> dict:
     _MIN_STRATEGIES = int(os.environ.get("BACKTEST_MIN_STRATEGIES", "2"))
     # 总体总结只聚合「最近 N 个信号日」，避免被几十个已走完窗口的冻结旧批次稀释，
     # 让均值更灵敏地反映近期策略表现。设为 0 表示不限制（沿用旧的全部聚合行为）。
-    _SUMMARY_LOOKBACK = int(os.environ.get("BACKTEST_SUMMARY_LOOKBACK", "20"))
+    _ENV_LOOKBACK = int(os.environ.get("BACKTEST_SUMMARY_LOOKBACK", "20"))
+    # 查询参数 lookback 覆盖环境变量：>0 取该值，0 表示全部（不截断）。
+    _SUMMARY_LOOKBACK = _ENV_LOOKBACK
+    if lookback is not None:
+        try:
+            _lb = int(lookback)
+            _SUMMARY_LOOKBACK = _lb  # 0 → 全部；>0 → 该窗口
+        except (TypeError, ValueError):
+            _SUMMARY_LOOKBACK = _ENV_LOOKBACK
 
     def _count_active_strategies(date_tag: str) -> int:
         """读取对应日期的 Daily-Action-List，统计「来源策略」列去重后的活跃策略数。"""
@@ -403,6 +415,7 @@ def daily_backtest_summary() -> dict:
 
     # 只保留最近 N 个信号日（rows 已按信号日倒序，故直接截断）。
     # 旧的、已走完 10 天持有窗口的批次结果被永久冻结，纳入均值只会稀释近期表现。
+    # _SUMMARY_LOOKBACK=0 表示不限制（聚合全部）。
     if _SUMMARY_LOOKBACK and len(rows) > _SUMMARY_LOOKBACK:
         rows = rows[:_SUMMARY_LOOKBACK]
 

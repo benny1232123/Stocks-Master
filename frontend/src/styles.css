@@ -1173,11 +1173,15 @@
 }
 .dbt-summary-head {
   display: flex;
-  align-items: baseline;
+  align-items: flex-start;
+  justify-content: space-between;
   gap: 12px;
   margin-bottom: 18px;
   flex-wrap: wrap;
 }
+.dbt-summary-headtext { display: flex; flex-direction: column; gap: 4px; min-width: 0; }
+.dbt-lookback { display: flex; align-items: center; gap: 8px; flex-shrink: 0; }
+.dbt-lookback-label { font-size: 0.72rem; color: hsl(var(--muted)); white-space: nowrap; }
 .dbt-summary-title {
   font-size: 1.05rem;
   font-weight: 700;
@@ -1781,6 +1785,43 @@
   .hero-preview-table { margin-top: 14px; }
   .bt-steps { gap: 6px; }
   .bt-step { padding: 8px 10px; }
+}
+
+/* ═══════════════════════════════════════════
+   MOBILE — 回测页专项适配（phone / 窄屏）
+   ═════════════════════════════════════════ */
+@media (max-width: 640px) {
+  /* 顶栏：右侧 chip 横向滚动，避免被挤掉 */
+  .command { padding: 0 14px; }
+  .command-right { overflow-x: auto; overflow-y: hidden; -webkit-overflow-scrolling: touch; scrollbar-width: none; }
+  .command-right::-webkit-scrollbar { display: none; }
+  .command-wordmark { display: none; }
+
+  /* 总体总结：窄屏 2 列，缩小内边距与字号，单元格不再溢出 */
+  .dbt-summary { padding: 16px 14px; }
+  .dbt-summary-grid { grid-template-columns: repeat(2, 1fr); gap: 10px; }
+  .dbt-summary-cell { padding: 12px 12px 10px; }
+  .dbt-summary-val { font-size: 1.15rem; }
+  .dbt-summary-label { font-size: 0.7rem; }
+  .dbt-summary-hint { font-size: 0.68rem; }
+  .dbt-cell-bestworst { grid-column: span 2; }
+  .dbt-cell-icon-wrap { width: 30px; height: 30px; }
+  .dbt-cell-icon { width: 15px; height: 15px; }
+
+  /* 统计窗口选择器：窄屏整行铺满，标签在上 */
+  .dbt-summary-head { gap: 10px; }
+  .dbt-lookback { width: 100%; justify-content: space-between; }
+
+  /* 信号日日期选择器：输入框满宽，下拉面板满宽铺开 */
+  .date-picker-wrap { display: flex; width: 100%; }
+  .date-picker-input { width: 100%; min-width: 0; justify-content: space-between; }
+  .dp-dropdown { left: 0; right: 0; min-width: 0; }
+  .dp-grid--bt { grid-template-columns: repeat(3, 1fr); }
+}
+
+@media (max-width: 380px) {
+  .dp-grid--bt { grid-template-columns: repeat(2, 1fr); }
+  .dbt-summary-grid { gap: 8px; }
 }
 
 /* 回测持仓 · 退出原因标签 */

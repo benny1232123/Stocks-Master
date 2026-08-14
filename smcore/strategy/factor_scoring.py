@@ -203,8 +203,8 @@ def _merge_fundamentals(codes, as_of_date, raw: dict, prez: set) -> None:
     _z_into(raw, fund, prez, "quality", ["roe", "revenue_growth"])
     # 估值复合：低估值（pe/pb/ps 越低越好）→ 取三者负 z-score 均值
     _value_into(raw, fund, prez)
-    # 资金流复合：主力 20 日净流入截面 z-score
-    _z_into(raw, fund, prez, "fundflow", ["main_inflow_20"])
+    # 资金流复合：20 日成交额均值(amount_20，fundamental 提供的"资金流量价代理")截面 z-score
+    _z_into(raw, fund, prez, "fundflow", ["amount_20"])
 
 
 def _z_into(raw, fund, prez, out_key, src_keys):

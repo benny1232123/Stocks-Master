@@ -677,6 +677,7 @@ function App() {
   const [backtestRun, setBacktestRun] = useState(null)
   const [dailyBacktests, setDailyBacktests] = useState([])
   const [dailySummary, setDailySummary] = useState(null)
+  const [summaryLookback, setSummaryLookback] = useState(20)  // 总体总结聚合窗口：20 / 40 / 0(全部)
   const [selDaily, setSelDaily] = useState(0)
   const [btDateOpen, setBtDateOpen] = useState(false)    // 回测日期选择器是否展开
   const [tradeForm, setTradeForm] = useState({
@@ -762,7 +763,18 @@ function App() {
       }
     } catch { /* 忽略加载失败 */ }
     try {
-      const sresp = await fetch('/api/backtests/daily-summary')
+      const sresp = await fetch(`/api/backtests/daily-summary?lookback=${summaryLookback}`)
+      if (sresp.ok) {
+        const sdata = await sresp.json()
+        setDailySummary(sdata)
+      }
+    } catch { /* 忽略加载失败 */ }
+  }
+
+  // 切换总体总结的聚合窗口（20 / 40 / 全部）后重新拉取总体指标
+  async function reloadDailySummary() {
+    try {
+      const sresp = await fetch(`/api/backtests/daily-summary?lookback=${summaryLookback}`)
       if (sresp.ok) {
         const sdata = await sresp.json()
         setDailySummary(sdata)
@@ -2377,8 +2389,25 @@ function App() {
                 <>
                 <div className="dbt-summary">
                   <div className="dbt-summary-head">
-                    <span className="dbt-summary-title">📊 总体总结</span>
-                    <span className="dbt-summary-sub">近 {dailySummary.count} 个信号日前向回测（平均持有 {dailySummary.avg_hold_days} 天）的整体表现</span>
+                    <div className="dbt-summary-headtext">
+                      <span className="dbt-summary-title">📊 总体总结</span>
+                      <span className="dbt-summary-sub">{summaryLookback > 0 ? `近 ${dailySummary.count} 个` : `全部 ${dailySummary.count} 个`}信号日前向回测（平均持有 {dailySummary.avg_hold_days} 天）的整体表现</span>
+                    </div>
+                    <div className="dbt-lookback" title="聚合窗口：纳入多少个最近信号日计算总体指标。选「全部」可看更长期的样本外表现。">
+                      <span className="dbt-lookback-label">统计窗口</span>
+                      <div className="seg">
+                        {[{ v: 20, l: '近20' }, { v: 40, l: '近40' }, { v: 0, l: '全部' }].map((o) => (
+                          <button
+                            key={o.v}
+                            type="button"
+                            className={`seg-btn${summaryLookback === o.v ? ' seg-active' : ''}`}
+                            onClick={() => { setSummaryLookback(o.v); reloadDailySummary() }}
+                          >
+                            {o.l}
+                          </button>
+                        ))}
+                      </div>
+                    </div>
                   </div>
                   <div className="dbt-summary-grid">
                     {/* ── 1. 平均总收益 ── */}
