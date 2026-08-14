@@ -86,6 +86,9 @@ stock_data/replay_current_rules.md
 .env.*
 .workbuddy/
 
+# Local Cloudflare keepalive deploy dir (contains wrangler.toml with credentials; not source)
+cloudflare-keepalive/
+
 # Misc
 *.log
 *.tmp
