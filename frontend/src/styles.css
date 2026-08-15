@@ -2249,3 +2249,95 @@
 .v-neutral .v-score { color: hsl(38, 75%, 35%); }
 .v-bad { border-left: 3px solid hsl(0, 60%, 45%); }
 .v-bad .v-score { color: hsl(0, 62%, 38%); }
+
+/* ── 个股综合分析面板（技术面 / 基本面 / 资金面 / 综合研判）── */
+.comp-verdict {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  margin: 18px 0 4px;
+  padding: 12px 14px;
+  border-radius: var(--radius);
+  border: 1px solid hsl(var(--border));
+  background: hsl(var(--surface-1));
+}
+.comp-verdict-label {
+  font-size: 0.68rem;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: hsl(var(--muted));
+}
+.comp-verdict-text {
+  font-size: 0.92rem;
+  font-weight: 600;
+  line-height: 1.45;
+  color: hsl(var(--foreground));
+}
+.comp-verdict--good { border-color: hsla(4, 80%, 52%, 0.4); background: hsla(4, 80%, 52%, 0.07); }
+.comp-verdict--good .comp-verdict-label { color: var(--up); }
+.comp-verdict--bad { border-color: hsla(155, 78%, 38%, 0.42); background: hsla(155, 78%, 38%, 0.07); }
+.comp-verdict--bad .comp-verdict-label { color: var(--down); }
+.comp-verdict--neutral { border-color: hsla(229, 87%, 56%, 0.35); background: hsla(229, 87%, 56%, 0.06); }
+.comp-verdict--neutral .comp-verdict-label { color: hsl(var(--primary)); }
+
+.comp-block { margin-top: 18px; }
+.comp-block-head {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  margin-bottom: 10px;
+}
+.comp-block-title {
+  font-size: 0.92rem;
+  font-weight: 700;
+  color: hsl(var(--foreground));
+}
+.comp-block-sub {
+  font-size: 0.72rem;
+  color: hsl(var(--muted));
+}
+.comp-grid {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 10px;
+}
+.comp-cell {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  padding: 10px 12px;
+  border-radius: 10px;
+  background: hsl(var(--surface-1));
+  border: 1px solid hsl(var(--border));
+}
+.comp-label {
+  font-size: 0.7rem;
+  color: hsl(var(--muted));
+}
+.comp-val {
+  font-size: 1.05rem;
+  font-weight: 700;
+  font-family: var(--font-mono);
+  color: hsl(var(--foreground));
+  font-variant-numeric: tabular-nums;
+}
+.comp-hint {
+  font-size: 0.72rem;
+  color: hsl(var(--muted-foreground));
+  line-height: 1.4;
+}
+.comp-empty {
+  margin-top: 14px;
+  padding: 14px 16px;
+  border-radius: var(--radius);
+  background: hsl(var(--surface-1));
+  border: 1px dashed hsl(var(--border));
+  color: hsl(var(--muted));
+  font-size: 0.85rem;
+  line-height: 1.5;
+}
+
+@media (max-width: 640px) {
+  .comp-grid { grid-template-columns: repeat(2, 1fr); }
+}

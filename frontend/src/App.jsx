@@ -1555,6 +1555,10 @@ function App() {
                       <span className={cn('signal-badge', sigClass)} style={{ whiteSpace: 'nowrap' }}>{analysisSignal?.signal ?? '暂无信号'}</span>
                     </div>
 
+                    <div className="comp-block-head" style={{ marginTop: 10 }}>
+                      <span className="comp-block-title">📈 技术面</span>
+                      <span className="comp-block-sub">RSI · MACD · KDJ · 均线 · 布林带</span>
+                    </div>
                     {/* ── 多指标解读面板 ── */}
                     {(() => {
                         const L = analysisLatest ?? {}
@@ -1909,6 +1913,117 @@ function App() {
                           </>
                         )
                       })()}
+
+                      {/* ── 综合面：基本面 + 资金面 + 综合研判 ── */}
+                      {analysis?.fundamentals ? (() => {
+                        const F = analysis.fundamentals
+                        const pe = F.pe != null ? Number(F.pe) : null
+                        const pb = F.pb != null ? Number(F.pb) : null
+                        const mcap = F.mkt_cap != null ? Number(F.mkt_cap) : null
+                        const roe = F.roe != null ? Number(F.roe) : null
+                        const gm = F.gross_margin != null ? Number(F.gross_margin) : null
+                        const rg = F.revenue_growth != null ? Number(F.revenue_growth) : null
+                        const to = F.turnover != null ? Number(F.turnover) : null
+                        const amt = F.amount_20 != null ? Number(F.amount_20) : null
+
+                        const valTxt = pe == null
+                          ? (pb != null ? `PB ${pb.toFixed(2)}` : '估值数据缺失')
+                          : pe < 0 ? `PE ${pe.toFixed(1)}（当前亏损，参考 PB/PS）`
+                          : pe < 15 ? `PE ${pe.toFixed(1)} 偏低，估值有吸引力`
+                          : pe < 30 ? `PE ${pe.toFixed(1)} 中性合理`
+                          : pe < 50 ? `PE ${pe.toFixed(1)} 偏高，需业绩高增支撑`
+                          : `PE ${pe.toFixed(1)} 高估值，警惕泡沫`
+
+                        const qualTxt = roe == null
+                          ? (gm != null ? `毛利率 ${(gm * 100).toFixed(1)}%` : '质量数据缺失')
+                          : roe > 0.15 ? `ROE ${(roe * 100).toFixed(1)}% 优秀，盈利能力强`
+                          : roe > 0.08 ? `ROE ${(roe * 100).toFixed(1)}% 良好`
+                          : roe > 0 ? `ROE ${(roe * 100).toFixed(1)}% 偏弱`
+                          : `ROE 为负，盈利能力堪忧`
+
+                        const dailyAmt = amt != null ? amt / 20 / 1e8 : null
+                        const capTxt = dailyAmt == null
+                          ? (to != null ? `换手率 ${to.toFixed(2)}%` : '资金数据缺失')
+                          : dailyAmt > 5 ? `近20日日均成交 ${dailyAmt.toFixed(1)} 亿，流动性充裕`
+                          : dailyAmt > 1 ? `近20日日均成交 ${dailyAmt.toFixed(1)} 亿，流动性中等`
+                          : `近20日日均成交 ${dailyAmt.toFixed(1)} 亿，成交偏清淡`
+
+                        // 综合研判：技术信号 + 基本面质量 + 资金活跃度
+                        const techBull = /买|多|看多/i.test(analysisSignal?.signal ?? '')
+                        const techBear = /卖|空|看空/i.test(analysisSignal?.signal ?? '')
+                        const fundBull = roe != null && roe > 0.1 && (pe == null || pe < 40)
+                        const capActive = dailyAmt != null && dailyAmt > 1
+                        let verdict, vcls
+                        if (techBull && fundBull && capActive) { verdict = '综合偏多：技术信号看多 + 基本面优质 + 资金活跃'; vcls = 'good' }
+                        else if (techBear && !fundBull) { verdict = '综合偏空：技术转弱 + 基本面承压'; vcls = 'bad' }
+                        else if (techBull && !fundBull) { verdict = '技术偏多但基本面一般，注意估值与业绩匹配'; vcls = 'neutral' }
+                        else if (!techBull && fundBull && capActive) { verdict = '基本面扎实、资金活跃，技术面震荡可逢低关注'; vcls = 'neutral' }
+                        else { verdict = '多空因素交织，建议结合仓位控制观望'; vcls = 'neutral' }
+
+                        return (
+                          <>
+                            <div className={`comp-verdict comp-verdict--${vcls}`}>
+                              <span className="comp-verdict-label">综合研判</span>
+                              <span className="comp-verdict-text">{verdict}</span>
+                            </div>
+
+                            <div className="comp-block">
+                              <div className="comp-block-head">
+                                <span className="comp-block-title">📊 基本面</span>
+                                <span className="comp-block-sub">估值 · 质量 · 成长 · 规模</span>
+                              </div>
+                              <div className="comp-grid">
+                                <div className="comp-cell">
+                                  <span className="comp-label">市盈率 PE</span>
+                                  <span className="comp-val">{pe != null ? pe.toFixed(1) : '--'}</span>
+                                  <span className="comp-hint">{valTxt}</span>
+                                </div>
+                                <div className="comp-cell">
+                                  <span className="comp-label">市净率 PB</span>
+                                  <span className="comp-val">{pb != null ? pb.toFixed(2) : '--'}</span>
+                                </div>
+                                <div className="comp-cell">
+                                  <span className="comp-label">总市值</span>
+                                  <span className="comp-val">{mcap != null ? `${mcap.toFixed(0)}亿` : '--'}</span>
+                                </div>
+                                <div className="comp-cell">
+                                  <span className="comp-label">ROE</span>
+                                  <span className="comp-val">{roe != null ? `${(roe * 100).toFixed(1)}%` : '--'}</span>
+                                  <span className="comp-hint">{qualTxt}</span>
+                                </div>
+                                <div className="comp-cell">
+                                  <span className="comp-label">毛利率</span>
+                                  <span className="comp-val">{gm != null ? `${(gm * 100).toFixed(1)}%` : '--'}</span>
+                                </div>
+                                <div className="comp-cell">
+                                  <span className="comp-label">营收增长</span>
+                                  <span className="comp-val">{rg != null ? `${(rg * 100).toFixed(1)}%` : '--'}</span>
+                                </div>
+                              </div>
+                            </div>
+
+                            <div className="comp-block">
+                              <div className="comp-block-head">
+                                <span className="comp-block-title">💰 资金面</span>
+                                <span className="comp-block-sub">成交活跃度 · 换手</span>
+                              </div>
+                              <div className="comp-grid">
+                                <div className="comp-cell">
+                                  <span className="comp-label">20日成交额</span>
+                                  <span className="comp-val">{amt != null ? `${(amt / 1e8).toFixed(1)}亿` : '--'}</span>
+                                  <span className="comp-hint">{capTxt}</span>
+                                </div>
+                                <div className="comp-cell">
+                                  <span className="comp-label">换手率</span>
+                                  <span className="comp-val">{to != null ? `${to.toFixed(2)}%` : '--'}</span>
+                                </div>
+                              </div>
+                            </div>
+                          </>
+                        )
+                      })() : (
+                        <div className="comp-empty">暂无基本面 / 资金面数据（本地缓存未覆盖该标的）</div>
+                      )}
                     </>
                   ) : <div className="empty-state">选择或输入股票代码后点击「加载分析」</div>}
                 </SectionCard>
