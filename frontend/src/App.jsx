@@ -771,10 +771,13 @@ function App() {
     } catch { /* 忽略加载失败 */ }
   }
 
-  // 切换总体总结的聚合窗口（20 / 40 / 全部）后重新拉取总体指标
-  async function reloadDailySummary() {
+  // 切换总体总结的聚合窗口（20 / 40 / 全部）后重新拉取总体指标。
+  // 接收显式 lookback：onClick 里 setSummaryLookback 是异步生效，若直接读闭包里的
+  // summaryLookback 会拿到旧值，导致数据比选中的按钮慢一拍。
+  async function reloadDailySummary(lookback = summaryLookback) {
+    const lb = lookback ?? summaryLookback
     try {
-      const sresp = await fetch(`/api/backtests/daily-summary?lookback=${summaryLookback}`)
+      const sresp = await fetch(`/api/backtests/daily-summary?lookback=${lb}`)
       if (sresp.ok) {
         const sdata = await sresp.json()
         setDailySummary(sdata)
@@ -2401,7 +2404,7 @@ function App() {
                             key={o.v}
                             type="button"
                             className={`seg-btn${summaryLookback === o.v ? ' seg-active' : ''}`}
-                            onClick={() => { setSummaryLookback(o.v); reloadDailySummary() }}
+                            onClick={() => { setSummaryLookback(o.v); reloadDailySummary(o.v) }}
                           >
                             {o.l}
                           </button>
