@@ -677,7 +677,8 @@ function App() {
   const [backtestRun, setBacktestRun] = useState(null)
   const [dailyBacktests, setDailyBacktests] = useState([])
   const [dailySummary, setDailySummary] = useState(null)
-  const [summaryLookback, setSummaryLookback] = useState(20)  // 总体总结聚合窗口：20 / 40 / 0(全部)
+  const [summaryLookback, setSummaryLookback] = useState(20)  // 总体总结聚合窗口：20 / 40 / 250(近一年)
+  const [summaryLoading, setSummaryLoading] = useState(false)   // 切换窗口时的加载状态
   const [selDaily, setSelDaily] = useState(0)
   const [btDateOpen, setBtDateOpen] = useState(false)    // 回测日期选择器是否展开
   const [tradeForm, setTradeForm] = useState({
@@ -771,11 +772,12 @@ function App() {
     } catch { /* 忽略加载失败 */ }
   }
 
-  // 切换总体总结的聚合窗口（20 / 40 / 全部）后重新拉取总体指标。
+  // 切换总体总结的聚合窗口（20 / 40 / 近一年）后重新拉取总体指标。
   // 接收显式 lookback：onClick 里 setSummaryLookback 是异步生效，若直接读闭包里的
   // summaryLookback 会拿到旧值，导致数据比选中的按钮慢一拍。
   async function reloadDailySummary(lookback = summaryLookback) {
     const lb = lookback ?? summaryLookback
+    setSummaryLoading(true)
     try {
       const sresp = await fetch(`/api/backtests/daily-summary?lookback=${lb}`)
       if (sresp.ok) {
@@ -783,6 +785,7 @@ function App() {
         setDailySummary(sdata)
       }
     } catch { /* 忽略加载失败 */ }
+    finally { setSummaryLoading(false) }
   }
 
   async function startFusion() {
@@ -2394,12 +2397,12 @@ function App() {
                   <div className="dbt-summary-head">
                     <div className="dbt-summary-headtext">
                       <span className="dbt-summary-title">📊 总体总结</span>
-                      <span className="dbt-summary-sub">{summaryLookback > 0 ? `近 ${dailySummary.count} 个` : `全部 ${dailySummary.count} 个`}信号日前向回测（平均持有 {dailySummary.avg_hold_days} 天）的整体表现</span>
+                      <span className="dbt-summary-sub">近 {dailySummary?.count ?? 0} 个信号日前向回测（平均持有 {dailySummary?.avg_hold_days ?? '-'} 天）的整体表现</span>
                     </div>
-                    <div className="dbt-lookback" title="聚合窗口：纳入多少个最近信号日计算总体指标。选「全部」可看更长期的样本外表现。">
+                    <div className="dbt-lookback" title="聚合窗口：纳入多少个最近信号日计算总体指标。选「近一年」可看长期样本外表现。">
                       <span className="dbt-lookback-label">统计窗口</span>
                       <div className="seg">
-                        {[{ v: 20, l: '近20' }, { v: 40, l: '近40' }, { v: 0, l: '全部' }].map((o) => (
+                        {[{ v: 20, l: '近20' }, { v: 40, l: '近40' }, { v: 250, l: '近一年' }].map((o) => (
                           <button
                             key={o.v}
                             type="button"
@@ -2532,6 +2535,12 @@ function App() {
                       <div className="dbt-summary-hint dbt-bw-hint">整体稳健度参考</div>
                     </div>
                   </div>
+                  {summaryLoading && (
+                    <div className="dbt-loading-overlay" aria-hidden="true">
+                      <div className="dbt-loading-spinner" />
+                      <span className="dbt-loading-text">计算中…</span>
+                    </div>
+                  )}
                 </div>
                 {(dailySummary.excluded_trades ?? 0) > 0 ? (
                   <div className="excluded-note">⚠️ 总体统计已自动剔除 {dailySummary.excluded_trades} 笔异常成交（同日买卖 T+1 违例 / 止盈退出却亏损，均为旧引擎历史脏数据）；胜率与交易笔数基于干净成交重新计算。</div>
