@@ -56,7 +56,7 @@
 @layer base {
   * { box-sizing: border-box; }
 
-  html, body, #root { min-height: 100%; }
+  html, body, #root { min-height: 100%; overflow-x: clip; }
 
   body {
     margin: 0;
@@ -437,7 +437,7 @@
 }
 
 /* ── 日报预览表（最新日报卡片内，完整展示所有行）── */
-.daily-preview { overflow-x: auto; }
+.daily-preview { overflow-x: auto; -webkit-overflow-scrolling: touch; }
 .dp-head {
   display: inline-grid;
   min-width: 100%;
@@ -1773,18 +1773,56 @@
   .bt-step-arrow { text-align: center; transform: rotate(90deg); }
 }
 @media (max-width: 720px) {
-  .rail { width: 60px; }
-  .command { left: 60px; padding: 0 18px; }
-  .content { margin-left: 60px; padding: 84px 18px 48px; }
+  /* ── 移动端：左侧 rail 改为底部导航栏（图标 + 文字标签，触屏可见可点）── */
+  .rail {
+    top: auto; bottom: 0; left: 0; right: 0;
+    width: auto; min-height: 0; height: auto;
+    flex-direction: row; align-items: stretch; justify-content: space-around;
+    padding: 6px 6px;
+    border-right: none; border-top: 1px solid hsl(var(--border));
+    background: hsla(220, 20%, 97%, 0.96);
+    backdrop-filter: saturate(180%) blur(10px);
+    z-index: 70;
+  }
+  .rail-mark { display: none; }
+  .rail-nav { flex-direction: row; flex: 1; justify-content: space-around; gap: 2px; }
+  .rail-item {
+    display: flex; flex-direction: column; gap: 2px;
+    width: auto; height: auto; flex: 1;
+    padding: 4px 2px; border-radius: 10px;
+  }
+  .rail-item svg { width: 22px; height: 22px; }
+  .rail-tip {
+    position: static; opacity: 1; transform: none; pointer-events: none;
+    font-size: 0.6rem; letter-spacing: 0; text-transform: none; white-space: nowrap;
+    padding: 0; background: none; border-radius: 0; color: hsl(var(--muted));
+  }
+  .rail-item.active .rail-tip { color: hsl(var(--primary)); font-weight: 700; }
+  .rail-item.active::before {
+    left: 50%; right: auto; top: -1px; bottom: auto;
+    width: 24px; height: 3px; transform: translateX(-50%);
+    border-radius: 0 0 3px 3px;
+  }
+
+  .command { left: 0; }
+  .content { margin-left: 0; padding: 76px 14px 88px; }
+
   .stat-grid { grid-template-columns: 1fr; }
   .selection-form, .trade-form { grid-template-columns: 1fr; }
   .analysis-form { flex-direction: column; }
-  .rank-row { grid-template-columns: 24px 76px 1fr 52px; }
-  .rank-name { display: none; }
-  .hpt-head, .hpt-row { grid-template-columns: 80px 1fr 60px; gap: 8px; padding: 6px 6px; }
+
+  /* 排名榜：保留股票名（之前在窄屏被隐藏），隐藏装饰性进度条 */
+  .rank-row { grid-template-columns: 22px 60px 1fr 60px; }
+  .rank-name { display: block; font-size: 0.74rem; }
+  .rank-bar { display: none; }
+
+  .hpt-head, .hpt-row { grid-template-columns: 74px 1fr 52px; gap: 6px; padding: 6px 6px; }
   .hero-preview-table { margin-top: 14px; }
   .bt-steps { gap: 6px; }
   .bt-step { padding: 8px 10px; }
+
+  /* 宏观经济卡片：窄屏两列 */
+  .macro-grid-3 { grid-template-columns: repeat(2, 1fr); }
 }
 
 /* ═══════════════════════════════════════════
@@ -1817,6 +1855,30 @@
   .date-picker-input { width: 100%; min-width: 0; justify-content: space-between; }
   .dp-dropdown { left: 0; right: 0; min-width: 0; }
   .dp-grid--bt { grid-template-columns: repeat(3, 1fr); }
+
+  /* ── 窄屏堆叠 / 换行，避免挤压溢出 ── */
+  .page-header h2 { font-size: 1.4rem; }
+  .hero-title { font-size: 1.7rem; }
+  .hero-figure .num { font-size: 2.2rem; }
+
+  /* 日报卡片：左(信息) / 右(评分价格) 改为上下堆叠 */
+  .daily-summary { grid-template-columns: 1fr; gap: 10px; }
+  .daily-summary-right { justify-content: flex-start; flex-wrap: wrap; gap: 10px 16px; }
+  .daily-details { padding: 12px 14px 16px 16px; }
+
+  /* 榜单行：名称与指标换行铺满 */
+  .top-row { flex-wrap: wrap; }
+  .top-right { width: 100%; flex-direction: row; align-items: center; justify-content: space-between; }
+
+  /* 分区头 / 报告头：窄屏允许换行 */
+  .section-head { flex-wrap: wrap; gap: 6px; }
+  .report-head { flex-wrap: wrap; gap: 10px; align-items: flex-start; }
+
+  /* 宏观经济卡片：极窄屏单列 */
+  .macro-grid-3 { grid-template-columns: 1fr; }
+
+  /* 加大触屏点击区 */
+  .dp-item { padding: 11px 8px; }
 }
 
 @media (max-width: 380px) {
