@@ -155,6 +155,14 @@ def _fetch_spot_online(codes: Optional[list] = None) -> Optional[pd.DataFrame]:
     df["代码"] = df["代码"].astype(str).str.zfill(6)
     CACHE_DIR.mkdir(parents=True, exist_ok=True)
     try:
+        # 合并进已有快照：单只补取时不覆盖全市场估值（修复原覆盖写盘隐患）
+        if SPOT_FILE.exists():
+            try:
+                old = pd.read_csv(SPOT_FILE, dtype={"代码": str})
+                old["代码"] = old["代码"].astype(str).str.zfill(6)
+                df = pd.concat([old, df], ignore_index=True).drop_duplicates(subset=["代码"], keep="last")
+            except Exception:
+                pass
         df.to_csv(SPOT_FILE, index=False, encoding="utf-8-sig")
     except Exception:
         pass
@@ -162,11 +170,24 @@ def _fetch_spot_online(codes: Optional[list] = None) -> Optional[pd.DataFrame]:
 
 
 def get_valuation(code: str, *, force: bool = False) -> Optional[dict]:
-    """返回 {pe, pb, mkt_cap}；缺失/异常返回 None。ps 腾讯无→不再提供。"""
+    """返回 {pe, pb, mkt_cap}；缺失/异常返回 None。ps 腾讯无→不再提供。
+
+    快照存在但本票未覆盖时，单只补取腾讯估值并合并写盘（不破坏其他票）。
+    """
     code6 = _norm_code(code)
-    df = _load_spot_cache() if not force else _fetch_spot_online([code6])
-    if df is None and not force:
+    df = _load_spot_cache() if not force else None
+    if df is None:
         df = _fetch_spot_online([code6])
+    else:
+        present = False
+        try:
+            present = code6 in set(df["代码"].astype(str).str.zfill(6).tolist())
+        except Exception:
+            present = False
+        if not present:
+            fresh = _fetch_spot_online([code6])
+            if fresh is not None:
+                df = fresh
     if df is None or "代码" not in df.columns:
         return None
     row = df[df["代码"] == code6]

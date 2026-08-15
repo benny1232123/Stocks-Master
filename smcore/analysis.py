@@ -1,9 +1,8 @@
 """Shared helpers for single-stock technical analysis."""
 from __future__ import annotations
 
-import json
+import threading
 from datetime import date, timedelta
-from pathlib import Path
 from typing import Any
 
 import numpy as np
@@ -11,24 +10,6 @@ import pandas as pd
 
 from smcore.data.kline import fetch_daily_k
 from smcore.indicators.boll import calc_bollinger, evaluate_boll_signal
-
-
-def _load_fund_cache(code: str) -> dict:
-    """读取本地基本面缓存 stock_data/fundamental_cache/{code}.json（无网络依赖）。
-
-    字段：roe / gross_margin / revenue_growth / pe / pb / mkt_cap / turnover / amount_20。
-    缺失或读取失败返回 {}。
-    """
-    digits = "".join(ch for ch in str(code) if ch.isdigit())[-6:]
-    if not digits:
-        return {}
-    p = Path(__file__).resolve().parents[1] / "stock_data" / "fundamental_cache" / f"{digits}.json"
-    if not p.exists():
-        return {}
-    try:
-        return json.loads(p.read_text(encoding="utf-8"))
-    except Exception:
-        return {}
 
 
 def calc_ma(close: pd.Series, periods: list[int] | None = None) -> pd.DataFrame:
@@ -147,24 +128,36 @@ def build_stock_analysis(code: str, window: int = 20, k: float = 1.645, days_bac
                 J=kdj_df.get("J"),
             ).replace({pd.NA: None, np.nan: None}).to_dict(orient="records")
         },
-        # ── 基本面 / 资金面（本地缓存，无网络依赖）──
+        # ── 基本面 / 资金面（缓存优先，未命中实时补取并写回缓存）──
         "fundamentals": _build_fundamentals(code),
     }
     return payload
 
 
-def _build_fundamentals(code: str) -> dict | None:
-    """汇总个股基本面 + 资金面快照，供前端做综合分析。无缓存返回 None。"""
-    fund = _load_fund_cache(code)
-    if not fund:
+def _build_fundamentals(code: str, timeout: float = 12.0) -> dict | None:
+    """汇总个股基本面 + 资金面快照，供前端做综合分析。
+
+    优先读本地缓存；未命中时通过 smcore.strategy.fundamental.fetch_fundamental
+    实时联网补取（腾讯估值 + baostock 质量/成长/换手）并写回缓存。
+    全程在后台线程执行 + 超时保护，避免慢网络拖垮技术面分析响应；
+    超时/失败返回 None（前端显示「暂无基本面数据」提示，不影响技术面）。
+    """
+    try:
+        from smcore.strategy.fundamental import fetch_fundamental
+    except Exception:
         return None
-    return {
-        "pe": fund.get("pe"),
-        "pb": fund.get("pb"),
-        "mkt_cap": fund.get("mkt_cap"),
-        "roe": fund.get("roe"),
-        "gross_margin": fund.get("gross_margin"),
-        "revenue_growth": fund.get("revenue_growth"),
-        "turnover": fund.get("turnover"),
-        "amount_20": fund.get("amount_20"),
-    }
+
+    result: dict | None = None
+
+    def _run() -> None:
+        nonlocal result
+        try:
+            result = fetch_fundamental(code)
+        except Exception:
+            result = None
+
+    t = threading.Thread(target=_run, daemon=True)
+    t.start()
+    t.join(timeout)
+    # 超时则放弃本次补取（技术面已就绪返回）；残留线程会在后台完成并写缓存，供下次命中
+    return result
