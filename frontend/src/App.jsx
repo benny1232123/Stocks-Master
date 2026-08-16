@@ -821,30 +821,32 @@ function ComprehensivePanel({ analysis }) {
             <div className='comp-cell'>
               <span className='comp-label'>市盈率 PE</span>
               <span className='comp-val'>{pe != null ? pe.toFixed(1) : '--'}</span>
-              <span className='comp-hint'>{pe == null ? (pb != null ? `PB ${pb.toFixed(2)}` : '估值缺失') : pe < 0 ? '亏损' : pe < 15 ? '偏低·有吸引力' : pe < 25 ? '中性合理' : pe < 35 ? '偏高' : '高估值'}</span>
+              <span className='comp-hint'>{pe == null ? (pb != null ? `PB ${pb.toFixed(2)}` : '估值数据暂缺') : pe < 0 ? '亏损' : pe < 15 ? '偏低·有吸引力' : pe < 25 ? '中性合理' : pe < 35 ? '偏高' : '高估值'}</span>
             </div>
             <div className='comp-cell'>
               <span className='comp-label'>市净率 PB</span>
               <span className='comp-val'>{pb != null ? pb.toFixed(2) : '--'}</span>
+              <span className='comp-hint'>{pb == null ? '数据暂缺' : pb < 1 ? '破净·低估值' : pb < 3 ? '偏低' : pb < 6 ? '合理' : pb < 10 ? '偏高' : '高PB'}</span>
             </div>
             <div className='comp-cell'>
               <span className='comp-label'>总市值</span>
               <span className='comp-val'>{mcap != null ? `${mcap.toFixed(0)}亿` : '--'}</span>
+              <span className='comp-hint'>{mcap == null ? '数据暂缺' : mcap > 2000 ? '大盘股' : mcap > 500 ? '中盘股' : mcap > 100 ? '中小盘' : '小盘股'}</span>
             </div>
             <div className='comp-cell'>
               <span className='comp-label'>ROE</span>
               <span className='comp-val'>{roe != null ? `${(roe * 100).toFixed(1)}%` : '--'}</span>
-              <div className='mini-bar'><div className='mini-bar-fill' style={{ width: pct(roe != null ? roe * 300 : 0) }} /></div>
+              <span className='comp-hint'>{roe == null ? '数据暂缺' : roe > 0.15 ? '优秀' : roe > 0.10 ? '良好' : roe > 0.05 ? '一般' : '偏低'}</span>
             </div>
             <div className='comp-cell'>
               <span className='comp-label'>毛利率</span>
               <span className='comp-val'>{gm != null ? `${(gm * 100).toFixed(1)}%` : '--'}</span>
-              <div className='mini-bar'><div className='mini-bar-fill' style={{ width: pct(gm != null ? gm * 150 : 0) }} /></div>
+              <span className='comp-hint'>{gm == null ? '数据暂缺（财报未覆盖）' : gm > 0.40 ? '高毛利' : gm > 0.25 ? '中等' : gm > 0.10 ? '较低' : '低毛利'}</span>
             </div>
             <div className='comp-cell'>
               <span className='comp-label'>营收增长</span>
               <span className='comp-val'>{rg != null ? `${(rg * 100).toFixed(1)}%` : '--'}</span>
-              <div className='mini-bar'><div className='mini-bar-fill' style={{ width: pct(rg != null ? rg * 200 : 0) }} /></div>
+              <span className='comp-hint'>{rg == null ? '数据暂缺（财报未覆盖）' : rg > 0.20 ? '高增长' : rg > 0.10 ? '稳健增长' : rg > 0 ? '微增' : rg === 0 ? '持平' : '负增长'}</span>
             </div>
           </div>
         ) : <div className='comp-empty'>暂无基本面缓存（未覆盖该标的）</div>}
@@ -865,7 +867,7 @@ function ComprehensivePanel({ analysis }) {
             <div className='comp-cell'>
               <span className='comp-label'>换手率</span>
               <span className='comp-val'>{to != null ? `${to.toFixed(2)}%` : '--'}</span>
-              <div className='mini-bar'><div className='mini-bar-fill' style={{ width: pct(to != null ? to * 20 : 0) }} /></div>
+              <span className='comp-hint'>{to == null ? '数据暂缺' : to > 5 ? '高度活跃' : to > 2 ? '活跃' : to > 0.5 ? '一般' : '低迷'}</span>
             </div>
           </div>
         ) : <div className='comp-empty'>暂无资金面缓存（未覆盖该标的）</div>}
