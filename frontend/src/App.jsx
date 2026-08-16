@@ -656,6 +656,224 @@ function FilterSeg({ value, onChange }) {
   )
 }
 
+function ComprehensivePanel({ analysis }) {
+  const L = analysis?.latest ?? {}
+  const M = analysis?.metrics ?? {}
+  const F = analysis?.fundamentals
+  const hasF = !!F
+
+  // 技术面原始指标
+  const rsi = L.rsi != null ? Number(L.rsi) : null
+  const dif = L.dif != null ? Number(L.dif) : null
+  const dea = L.dea != null ? Number(L.dea) : null
+  const macdH = L.macd_hist != null ? Number(L.macd_hist) : null
+  const kV = L.k_val != null ? Number(L.k_val) : null
+  const dV = L.d_val != null ? Number(L.d_val) : null
+  const jV = L.j_val != null ? Number(L.j_val) : null
+  const close = L.close != null ? Number(L.close) : null
+  const lower = L.lower != null ? Number(L.lower) : null
+  const upper = L.upper != null ? Number(L.upper) : null
+  const ma5 = L.ma5 != null ? Number(L.ma5) : null
+  const ma10 = L.ma10 != null ? Number(L.ma10) : null
+  const ma20 = L.ma20 != null ? Number(L.ma20) : null
+  const ma60 = L.ma60 != null ? Number(L.ma60) : null
+  const distLo = M.dist_to_lower_pct != null ? Number(M.dist_to_lower_pct) : null
+  const distHi = M.dist_to_upper_pct != null ? Number(M.dist_to_upper_pct) : null
+
+  // 技术面多空评分（自洽，不依赖外层闭包）
+  const techDetail = []
+  let techS = 0
+  if (rsi != null) {
+    if (rsi > 80) { techS -= 2; techDetail.push(['RSI', '严重超买', 'bear']) }
+    else if (rsi > 70) { techS -= 1; techDetail.push(['RSI', '高位', 'bear']) }
+    else if (rsi < 20) { techS += 2; techDetail.push(['RSI', '严重超卖', 'bull']) }
+    else if (rsi < 30) { techS += 1; techDetail.push(['RSI', '超卖', 'bull']) }
+    else if (rsi > 55) { techS += 1; techDetail.push(['RSI', '偏强', 'bull']) }
+    else if (rsi < 45) { techS -= 1; techDetail.push(['RSI', '偏弱', 'bear']) }
+    else techDetail.push(['RSI', '中性', 'neutral'])
+  }
+  if (dif != null && dea != null) {
+    if (dif > dea && macdH > 0) { techS += 2; techDetail.push(['MACD', '金叉红柱', 'bull']) }
+    else if (dif > dea && macdH <= 0) { techDetail.push(['MACD', '动能减弱', 'neutral']) }
+    else if (dif < dea && macdH < 0) { techS -= 2; techDetail.push(['MACD', '死叉绿柱', 'bear']) }
+    else if (dif < dea && macdH >= 0) { techDetail.push(['MACD', '柱收窄', 'neutral']) }
+    else techDetail.push(['MACD', '缠绕', 'neutral'])
+  }
+  if (kV != null && dV != null) {
+    if (jV != null && jV > 100) { techS -= 2; techDetail.push(['KDJ', '极端超买', 'bear']) }
+    else if (jV != null && jV < 0) { techS += 2; techDetail.push(['KDJ', '极端超卖', 'bull']) }
+    else if (kV > dV) { techS += 1; techDetail.push(['KDJ', '金叉', 'bull']) }
+    else if (kV < dV) { techS -= 1; techDetail.push(['KDJ', '死叉', 'bear']) }
+    else techDetail.push(['KDJ', '中性', 'neutral'])
+  }
+  if (ma5 != null && ma10 != null && ma20 != null) {
+    if (ma5 > ma10 && ma10 > ma20) { techS += 2; techDetail.push(['均线', '多头排列', 'bull']) }
+    else if (ma5 < ma10 && ma10 < ma20) { techS -= 2; techDetail.push(['均线', '空头排列', 'bear']) }
+    else if (ma5 > ma20) { techS += 1; techDetail.push(['均线', '短期偏强', 'bull']) }
+    else if (ma5 < ma20) { techS -= 1; techDetail.push(['均线', '短期偏弱', 'bear']) }
+    else techDetail.push(['均线', '中性', 'neutral'])
+  }
+  if (close != null && lower != null) {
+    if (close < lower) { techS += 1; techDetail.push(['布林', '破下轨', 'bull']) }
+    else if (distLo != null && distLo < 2) { techS += 1; techDetail.push(['布林', '近下轨', 'bull']) }
+    else if (distHi != null && distHi > -2) { techS -= 1; techDetail.push(['布林', '近上轨', 'bear']) }
+    else if (distLo != null && distLo < 5) { techDetail.push(['布林', '近下轨', 'neutral']) }
+    else if (distHi != null && distHi > -5) { techDetail.push(['布林', '近上轨', 'neutral']) }
+    else techDetail.push(['布林', '中部', 'neutral'])
+  }
+  const techScore = Math.max(0, Math.min(100, Math.round(50 + techS * 6)))
+  const techCls = techScore >= 70 ? 'good' : techScore <= 30 ? 'bad' : 'neutral'
+  const techCount = { bull: techDetail.filter(x => x[2] === 'bull').length, bear: techDetail.filter(x => x[2] === 'bear').length }
+
+  // 基本面
+  const pe = F?.pe != null ? Number(F.pe) : null
+  const pb = F?.pb != null ? Number(F.pb) : null
+  const mcap = F?.mkt_cap != null ? Number(F.mkt_cap) : null
+  const roe = F?.roe != null ? Number(F.roe) : null
+  const gm = F?.gross_margin != null ? Number(F.gross_margin) : null
+  const rg = F?.revenue_growth != null ? Number(F.revenue_growth) : null
+  const to = F?.turnover != null ? Number(F.turnover) : null
+  const amt = F?.amount_20 != null ? Number(F.amount_20) : null
+
+  const peScore = pe == null ? 50 : pe < 0 ? 38 : pe < 15 ? 90 : pe < 25 ? 76 : pe < 35 ? 62 : pe < 50 ? 46 : 32
+  const pbScore = pb == null ? 50 : pb < 1 ? 90 : pb < 3 ? 76 : pb < 6 ? 62 : pb < 10 ? 46 : 32
+  const roeScore = roe == null ? 50 : roe > 0.2 ? 92 : roe > 0.15 ? 82 : roe > 0.1 ? 66 : roe > 0 ? 50 : 28
+  const gmScore = gm == null ? 50 : gm > 0.5 ? 92 : gm > 0.4 ? 82 : gm > 0.3 ? 66 : gm > 0.2 ? 54 : 42
+  const rgScore = rg == null ? 50 : rg > 0.3 ? 92 : rg > 0.2 ? 82 : rg > 0.1 ? 66 : rg > 0 ? 54 : 32
+  const fundScore = Math.round((peScore + pbScore + roeScore + gmScore + rgScore) / 5)
+  const fundCls = fundScore >= 65 ? 'good' : fundScore < 45 ? 'bad' : 'neutral'
+
+  // 资金面
+  const dailyAmt = amt != null ? amt / 20 / 1e8 : null
+  const liqScore = dailyAmt == null ? 50 : dailyAmt > 5 ? 92 : dailyAmt > 2 ? 76 : dailyAmt > 1 ? 62 : dailyAmt > 0.3 ? 48 : 32
+  const toScore = to == null ? 50 : to > 5 ? 90 : to > 2 ? 78 : to > 1 ? 64 : to > 0.3 ? 52 : to < 0.1 ? 34 : 46
+  const capScore = Math.round((liqScore + toScore) / 2)
+  const capCls = capScore >= 65 ? 'good' : capScore < 45 ? 'bad' : 'neutral'
+
+  // 综合总评分
+  const total = hasF ? Math.round(techScore * 0.4 + fundScore * 0.35 + capScore * 0.25) : techScore
+  const rating = total >= 70 ? '推荐关注' : total >= 58 ? '偏积极' : total >= 45 ? '中性观望' : total >= 35 ? '偏谨慎' : '回避'
+  const ratingCls = total >= 58 ? 'good' : total >= 45 ? 'neutral' : 'bad'
+
+  let verdictTxt
+  if (!hasF) verdictTxt = '当前标的暂无基本面 / 资金面缓存，研判仅基于技术面；如需完整分析，建议补充该标的覆盖后重试。'
+  else if (techCls === 'good' && fundScore >= 60 && capScore >= 55) verdictTxt = '三维共振偏多：技术走强、基本面扎实、资金活跃，可积极关注，逢回踩加仓。'
+  else if (techCls === 'bad' && fundScore < 55) verdictTxt = '技术与基本面双弱，风险偏高，建议回避或减仓。'
+  else if (techCls === 'good' && fundScore < 55) verdictTxt = '技术面偏多但基本面一般，注意估值与业绩匹配，控制仓位。'
+  else if (techCls !== 'good' && fundScore >= 65 && capScore >= 55) verdictTxt = '基本面优质、资金认可，技术震荡时可逢低布局。'
+  else verdictTxt = '多空因素交织，建议结合仓位管理观望，等待更明确信号。'
+
+  const dims = [
+    { name: '技术面', score: techScore, cls: techCls, tip: techCls === 'good' ? '偏多' : techCls === 'bad' ? '偏空' : '中性' },
+    { name: '基本面', score: fundScore, cls: fundCls, tip: hasF ? (fundCls === 'good' ? '优质' : fundCls === 'bad' ? '偏弱' : '中性') : '缺失' },
+    { name: '资金面', score: capScore, cls: capCls, tip: hasF ? (capCls === 'good' ? '活跃' : capCls === 'bad' ? '清淡' : '中性') : '缺失' },
+  ]
+
+  const pct = (v) => `${Math.max(0, Math.min(100, v))}%`
+
+  return (
+    <>
+      <div className={`comp-total comp-total--${ratingCls}`}>
+        <div className='comp-total-score'>
+          <span className='cts-num'>{total}</span>
+          <span className='cts-max'>/100</span>
+        </div>
+        <div className='comp-total-meta'>
+          <span className={cn('comp-total-badge', `ctb-${ratingCls}`)}>{rating}</span>
+          <span className='comp-total-desc'>{verdictTxt}</span>
+        </div>
+      </div>
+
+      <div className='comp-dims'>
+        {dims.map((d) => (
+          <div key={d.name} className={`comp-dim comp-dim--${d.cls}`}>
+            <div className='comp-dim-head'>
+              <span className='comp-dim-name'>{d.name}</span>
+              <span className='comp-dim-val'>{d.score}</span>
+            </div>
+            <div className='comp-dim-bar'>
+              <div className='comp-dim-fill' style={{ width: pct(d.score) }} />
+            </div>
+            <span className='comp-dim-tip'>{d.tip}</span>
+          </div>
+        ))}
+      </div>
+
+      <div className='comp-block'>
+        <div className='comp-block-head'>
+          <span className='comp-block-title'>🔍 技术面信号</span>
+          <span className='comp-block-sub'>多 {techCount.bull} / 空 {techCount.bear}</span>
+        </div>
+        <div className='comp-sig-row'>
+          {techDetail.length ? techDetail.map(([nm, txt, side]) => (
+            <span key={nm} className={cn('comp-sig', `cs-${side}`)}>{nm}·{txt}</span>
+          )) : <span className='comp-sig-empty'>指标数据不足</span>}
+        </div>
+      </div>
+
+      <div className='comp-block'>
+        <div className='comp-block-head'>
+          <span className='comp-block-title'>📊 基本面</span>
+          <span className='comp-block-sub'>估值 · 质量 · 成长 · 规模</span>
+        </div>
+        {hasF ? (
+          <div className='comp-grid'>
+            <div className='comp-cell'>
+              <span className='comp-label'>市盈率 PE</span>
+              <span className='comp-val'>{pe != null ? pe.toFixed(1) : '--'}</span>
+              <span className='comp-hint'>{pe == null ? (pb != null ? `PB ${pb.toFixed(2)}` : '估值缺失') : pe < 0 ? '亏损' : pe < 15 ? '偏低·有吸引力' : pe < 25 ? '中性合理' : pe < 35 ? '偏高' : '高估值'}</span>
+            </div>
+            <div className='comp-cell'>
+              <span className='comp-label'>市净率 PB</span>
+              <span className='comp-val'>{pb != null ? pb.toFixed(2) : '--'}</span>
+            </div>
+            <div className='comp-cell'>
+              <span className='comp-label'>总市值</span>
+              <span className='comp-val'>{mcap != null ? `${mcap.toFixed(0)}亿` : '--'}</span>
+            </div>
+            <div className='comp-cell'>
+              <span className='comp-label'>ROE</span>
+              <span className='comp-val'>{roe != null ? `${(roe * 100).toFixed(1)}%` : '--'}</span>
+              <div className='mini-bar'><div className='mini-bar-fill' style={{ width: pct(roe != null ? roe * 300 : 0) }} /></div>
+            </div>
+            <div className='comp-cell'>
+              <span className='comp-label'>毛利率</span>
+              <span className='comp-val'>{gm != null ? `${(gm * 100).toFixed(1)}%` : '--'}</span>
+              <div className='mini-bar'><div className='mini-bar-fill' style={{ width: pct(gm != null ? gm * 150 : 0) }} /></div>
+            </div>
+            <div className='comp-cell'>
+              <span className='comp-label'>营收增长</span>
+              <span className='comp-val'>{rg != null ? `${(rg * 100).toFixed(1)}%` : '--'}</span>
+              <div className='mini-bar'><div className='mini-bar-fill' style={{ width: pct(rg != null ? rg * 200 : 0) }} /></div>
+            </div>
+          </div>
+        ) : <div className='comp-empty'>暂无基本面缓存（未覆盖该标的）</div>}
+      </div>
+
+      <div className='comp-block'>
+        <div className='comp-block-head'>
+          <span className='comp-block-title'>💰 资金面</span>
+          <span className='comp-block-sub'>成交活跃度 · 换手</span>
+        </div>
+        {hasF ? (
+          <div className='comp-grid comp-grid-2'>
+            <div className='comp-cell'>
+              <span className='comp-label'>20日成交额</span>
+              <span className='comp-val'>{amt != null ? `${(amt / 1e8).toFixed(1)}亿` : '--'}</span>
+              <span className='comp-hint'>{dailyAmt == null ? (to != null ? `换手 ${to.toFixed(2)}%` : '资金缺失') : dailyAmt > 5 ? '流动性充裕' : dailyAmt > 1 ? '流动性中等' : '成交偏清淡'}</span>
+            </div>
+            <div className='comp-cell'>
+              <span className='comp-label'>换手率</span>
+              <span className='comp-val'>{to != null ? `${to.toFixed(2)}%` : '--'}</span>
+              <div className='mini-bar'><div className='mini-bar-fill' style={{ width: pct(to != null ? to * 20 : 0) }} /></div>
+            </div>
+          </div>
+        ) : <div className='comp-empty'>暂无资金面缓存（未覆盖该标的）</div>}
+      </div>
+    </>
+  )
+}
+
 function App() {
   const [activeView, setActiveView] = useState('overview')
   const [dashboard, setDashboard] = useState(null)
@@ -1915,115 +2133,7 @@ function App() {
                       })()}
 
                       {/* ── 综合面：基本面 + 资金面 + 综合研判 ── */}
-                      {analysis?.fundamentals ? (() => {
-                        const F = analysis.fundamentals
-                        const pe = F.pe != null ? Number(F.pe) : null
-                        const pb = F.pb != null ? Number(F.pb) : null
-                        const mcap = F.mkt_cap != null ? Number(F.mkt_cap) : null
-                        const roe = F.roe != null ? Number(F.roe) : null
-                        const gm = F.gross_margin != null ? Number(F.gross_margin) : null
-                        const rg = F.revenue_growth != null ? Number(F.revenue_growth) : null
-                        const to = F.turnover != null ? Number(F.turnover) : null
-                        const amt = F.amount_20 != null ? Number(F.amount_20) : null
-
-                        const valTxt = pe == null
-                          ? (pb != null ? `PB ${pb.toFixed(2)}` : '估值数据缺失')
-                          : pe < 0 ? `PE ${pe.toFixed(1)}（当前亏损，参考 PB/PS）`
-                          : pe < 15 ? `PE ${pe.toFixed(1)} 偏低，估值有吸引力`
-                          : pe < 30 ? `PE ${pe.toFixed(1)} 中性合理`
-                          : pe < 50 ? `PE ${pe.toFixed(1)} 偏高，需业绩高增支撑`
-                          : `PE ${pe.toFixed(1)} 高估值，警惕泡沫`
-
-                        const qualTxt = roe == null
-                          ? (gm != null ? `毛利率 ${(gm * 100).toFixed(1)}%` : '质量数据缺失')
-                          : roe > 0.15 ? `ROE ${(roe * 100).toFixed(1)}% 优秀，盈利能力强`
-                          : roe > 0.08 ? `ROE ${(roe * 100).toFixed(1)}% 良好`
-                          : roe > 0 ? `ROE ${(roe * 100).toFixed(1)}% 偏弱`
-                          : `ROE 为负，盈利能力堪忧`
-
-                        const dailyAmt = amt != null ? amt / 20 / 1e8 : null
-                        const capTxt = dailyAmt == null
-                          ? (to != null ? `换手率 ${to.toFixed(2)}%` : '资金数据缺失')
-                          : dailyAmt > 5 ? `近20日日均成交 ${dailyAmt.toFixed(1)} 亿，流动性充裕`
-                          : dailyAmt > 1 ? `近20日日均成交 ${dailyAmt.toFixed(1)} 亿，流动性中等`
-                          : `近20日日均成交 ${dailyAmt.toFixed(1)} 亿，成交偏清淡`
-
-                        // 综合研判：技术信号 + 基本面质量 + 资金活跃度
-                        const techBull = /买|多|看多/i.test(analysisSignal?.signal ?? '')
-                        const techBear = /卖|空|看空/i.test(analysisSignal?.signal ?? '')
-                        const fundBull = roe != null && roe > 0.1 && (pe == null || pe < 40)
-                        const capActive = dailyAmt != null && dailyAmt > 1
-                        let verdict, vcls
-                        if (techBull && fundBull && capActive) { verdict = '综合偏多：技术信号看多 + 基本面优质 + 资金活跃'; vcls = 'good' }
-                        else if (techBear && !fundBull) { verdict = '综合偏空：技术转弱 + 基本面承压'; vcls = 'bad' }
-                        else if (techBull && !fundBull) { verdict = '技术偏多但基本面一般，注意估值与业绩匹配'; vcls = 'neutral' }
-                        else if (!techBull && fundBull && capActive) { verdict = '基本面扎实、资金活跃，技术面震荡可逢低关注'; vcls = 'neutral' }
-                        else { verdict = '多空因素交织，建议结合仓位控制观望'; vcls = 'neutral' }
-
-                        return (
-                          <>
-                            <div className={`comp-verdict comp-verdict--${vcls}`}>
-                              <span className="comp-verdict-label">综合研判</span>
-                              <span className="comp-verdict-text">{verdict}</span>
-                            </div>
-
-                            <div className="comp-block">
-                              <div className="comp-block-head">
-                                <span className="comp-block-title">📊 基本面</span>
-                                <span className="comp-block-sub">估值 · 质量 · 成长 · 规模</span>
-                              </div>
-                              <div className="comp-grid">
-                                <div className="comp-cell">
-                                  <span className="comp-label">市盈率 PE</span>
-                                  <span className="comp-val">{pe != null ? pe.toFixed(1) : '--'}</span>
-                                  <span className="comp-hint">{valTxt}</span>
-                                </div>
-                                <div className="comp-cell">
-                                  <span className="comp-label">市净率 PB</span>
-                                  <span className="comp-val">{pb != null ? pb.toFixed(2) : '--'}</span>
-                                </div>
-                                <div className="comp-cell">
-                                  <span className="comp-label">总市值</span>
-                                  <span className="comp-val">{mcap != null ? `${mcap.toFixed(0)}亿` : '--'}</span>
-                                </div>
-                                <div className="comp-cell">
-                                  <span className="comp-label">ROE</span>
-                                  <span className="comp-val">{roe != null ? `${(roe * 100).toFixed(1)}%` : '--'}</span>
-                                  <span className="comp-hint">{qualTxt}</span>
-                                </div>
-                                <div className="comp-cell">
-                                  <span className="comp-label">毛利率</span>
-                                  <span className="comp-val">{gm != null ? `${(gm * 100).toFixed(1)}%` : '--'}</span>
-                                </div>
-                                <div className="comp-cell">
-                                  <span className="comp-label">营收增长</span>
-                                  <span className="comp-val">{rg != null ? `${(rg * 100).toFixed(1)}%` : '--'}</span>
-                                </div>
-                              </div>
-                            </div>
-
-                            <div className="comp-block">
-                              <div className="comp-block-head">
-                                <span className="comp-block-title">💰 资金面</span>
-                                <span className="comp-block-sub">成交活跃度 · 换手</span>
-                              </div>
-                              <div className="comp-grid">
-                                <div className="comp-cell">
-                                  <span className="comp-label">20日成交额</span>
-                                  <span className="comp-val">{amt != null ? `${(amt / 1e8).toFixed(1)}亿` : '--'}</span>
-                                  <span className="comp-hint">{capTxt}</span>
-                                </div>
-                                <div className="comp-cell">
-                                  <span className="comp-label">换手率</span>
-                                  <span className="comp-val">{to != null ? `${to.toFixed(2)}%` : '--'}</span>
-                                </div>
-                              </div>
-                            </div>
-                          </>
-                        )
-                      })() : (
-                        <div className="comp-empty">暂无基本面 / 资金面数据（本地缓存未覆盖该标的）</div>
-                      )}
+                                            <ComprehensivePanel analysis={analysis} />
                     </>
                   ) : <div className="empty-state">选择或输入股票代码后点击「加载分析」</div>}
                 </SectionCard>
