@@ -1,3 +1,4 @@
 ﻿code,buy_date,sell_date,buy_price,sell_price,qty,return_pct,exit_reason
 600664,2026-08-11,2026-08-12,7.768,8.801,100,13.3,take_partial
 600664,2026-08-11,2026-08-12,7.768,8.801,200,13.3,take_pct
+601156,2026-08-11,2026-08-17,17.868,18.911,100,5.84,take_partial
