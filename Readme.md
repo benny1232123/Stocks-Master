@@ -433,3 +433,11 @@ A：GitHub Actions 私有仓库 + COS 免费额度内，约 0 元/月。Render �
 
 - `SETUP_GUIDE.md` —— 从零完整配置（注：其 Secrets 表待补充 `SUPABASE_*`）
 - `DEPLOY_RENDER.md` —— Render Free 部署（当前主方案）
+
+---
+
+## 推荐 / Partner
+
+本项目是 [OrcaRouter](https://www.orcarouter.ai/ref/ref_3a6eb528793d4b9194322) 开源合作伙伴计划成员（AI API 网关 · Zero-token-markup · 200+ 模型统一 endpoint）。
+
+[![Powered by OrcaRouter](https://img.shields.io/badge/Powered%20by-OrcaRouter-FF6A00?style=flat&logo=openai)](https://www.orcarouter.ai/ref/ref_3a6eb528793d4b9194322)
