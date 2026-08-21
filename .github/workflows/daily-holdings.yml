@@ -1,0 +1,74 @@
+name: 每日持仓分析推送
+
+on:
+  schedule:
+    # 北京时间 18:30（收盘后数据已定稿）= UTC 10:30，工作日 1-5
+    - cron: "30 10 * * 1-5"
+  workflow_dispatch:
+    inputs:
+      signal_date:
+        description: '信号日 YYYYMMDD（留空 = 今天）。用于补跑某天持仓分析。'
+        required: false
+        default: ''
+        type: string
+
+jobs:
+  holdings-analysis:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    permissions:
+      contents: read
+    env:
+      TDX_ENABLED: "0"
+    steps:
+      - name: 计算信号日 $TODAY
+        id: today
+        run: |
+          if [ -n "${{ github.event.inputs.signal_date }}" ]; then
+            TODAY="${{ github.event.inputs.signal_date }}"
+          else
+            TODAY=$(date +%Y%m%d)
+          fi
+          echo "today=$TODAY" >> $GITHUB_OUTPUT
+          echo "[holdings] 信号日: $TODAY"
+
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: 安装依赖
+        run: |
+          pip install --upgrade pip
+          pip install --retries 3 numpy pandas akshare baostock supabase
+
+      - name: 生成持仓个股分析并推送
+        env:
+          TODAY: ${{ steps.today.outputs.today }}
+          KLINE_BACKEND: akshare
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_KEY: ${{ secrets.SUPABASE_KEY }}
+          TRADES_BACKEND: auto
+          SMTP_HOST: ${{ secrets.SMTP_HOST }}
+          SMTP_PORT: ${{ secrets.SMTP_PORT }}
+          SMTP_USER: ${{ secrets.SMTP_USER }}
+          SMTP_PASS: ${{ secrets.SMTP_PASS }}
+          SMTP_TO: ${{ secrets.SMTP_TO }}
+        run: |
+          python scripts/notify_holdings_analysis.py
+          echo "### 持仓分析产出" >> $GITHUB_STEP_SUMMARY
+          F="stock_data/holdings_analysis_${{ steps.today.outputs.today }}.md"
+          if [ -f "$F" ]; then
+            echo "✅ 已生成: $F" >> $GITHUB_STEP_SUMMARY
+          else
+            echo "::warning::未生成报告文件 $F" >> $GITHUB_STEP_SUMMARY
+          fi
+
+      - name: 上传分析报告
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: holdings-analysis-${{ steps.today.outputs.today }}
+          path: stock_data/holdings_analysis_*.md
+          retention-days: 30
