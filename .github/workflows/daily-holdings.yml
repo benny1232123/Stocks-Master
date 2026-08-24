@@ -41,7 +41,7 @@ jobs:
       - name: 安装依赖
         run: |
           pip install --upgrade pip
-          pip install --retries 3 numpy pandas akshare baostock supabase
+          pip install --retries 3 numpy pandas akshare baostock supabase requests
 
       - name: 生成持仓个股分析并推送
         env:
@@ -55,12 +55,13 @@ jobs:
           SMTP_USER: ${{ secrets.SMTP_USER }}
           SMTP_PASS: ${{ secrets.SMTP_PASS }}
           SMTP_TO: ${{ secrets.SMTP_TO }}
+          PUSHPLUS_TOKEN: ${{ secrets.PUSHPLUS_TOKEN }}
         run: |
           python scripts/notify_holdings_analysis.py
           echo "### 持仓分析产出" >> $GITHUB_STEP_SUMMARY
-          F="stock_data/holdings_analysis_${{ steps.today.outputs.today }}.md"
+          F="stock_data/holdings_analysis_${{ steps.today.outputs.today }}.html"
           if [ -f "$F" ]; then
-            echo "✅ 已生成: $F" >> $GITHUB_STEP_SUMMARY
+            echo "✅ 已生成美观 HTML 报告: $F" >> $GITHUB_STEP_SUMMARY
           else
             echo "::warning::未生成报告文件 $F" >> $GITHUB_STEP_SUMMARY
           fi
@@ -70,5 +71,7 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: holdings-analysis-${{ steps.today.outputs.today }}
-          path: stock_data/holdings_analysis_*.md
+          path: |
+            stock_data/holdings_analysis_*.md
+            stock_data/holdings_analysis_*.html
           retention-days: 30
