@@ -87,13 +87,20 @@ def _backend() -> str:
     否则 baostock，再否则 akshare。
     """
     backend = os.getenv("KLINE_BACKEND", "").strip().lower()
-    if backend in ("tdx", "baostock", "akshare"):
+    if backend in ("tdx", "baostock", "akshare", "hithink"):
         return backend
-    # 自动检测：通达信可用则优先（比 baostock/akshare 快且稳）
+    # 自动检测优先级：tdx(本地直连,毫秒级) > hithink(官方云API,有Key且联网) > baostock > akshare
+    # GitHub Actions 等海外/无终端环境 tdx 不可用，hithink 有 Key 时自动成为云端最快首选。
     try:
         from smcore.data.tdx_client import available as tdx_available
         if tdx_available():
             return "tdx"
+    except Exception:
+        pass
+    try:
+        from smcore.data import hithink as _hk
+        if _hk.available():
+            return "hithink"
     except Exception:
         pass
     try:
@@ -278,6 +285,8 @@ def fetch_daily_k(
             return _fetch_via_tdx(code6, seg_start, seg_end, adjust)
         if backend == "akshare":
             return _fetch_via_akshare(code6, seg_start, seg_end, adjust)
+        if backend == "hithink":
+            return _fetch_via_hithink(code6, seg_start, seg_end, adjust)
         # baostock
         import baostock as bs
         from smcore.data.session import session
@@ -376,6 +385,23 @@ def _fetch_via_tdx(code6: str, start: date, end: date, adjust: str) -> pd.DataFr
         if df is None or df.empty:
             return pd.DataFrame()
         return df[DAILY_K_COLUMNS]
+    except Exception:
+        return pd.DataFrame()
+
+
+# ── 同花顺官方 Financial-API 后端（云端，需 HITHINK_FINANCE_API_KEY）──
+
+def _fetch_via_hithink(code6: str, start: date, end: date, adjust: str) -> pd.DataFrame:
+    """通过同花顺官方 Financial-API 获取历史日 K（云端，需 API Key）。
+
+    复用 hithink.fetch_historical_k，返回 kline.py 规范列，由 _normalize 统一。
+    Key 缺失或失败返回空（fail-soft，交给回退链）。
+    """
+    try:
+        from smcore.data import hithink as _hk
+        if not _hk.available():
+            return pd.DataFrame()
+        return _hk.fetch_historical_k(code6, start, end, adjust)
     except Exception:
         return pd.DataFrame()
 

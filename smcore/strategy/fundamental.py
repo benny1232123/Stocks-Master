@@ -359,6 +359,22 @@ def fetch_fundamentals_batch(codes, as_of=None, *, force: bool = False) -> dict:
     return out
 
 
+def fetch_fundamental_hithink(code: str, report: str = "") -> Optional[dict]:
+    """同花顺官方五类财务指标（growth/profitability/solvency/operation/cash-flow）。
+
+    定位：作为 fundamental 的**可选第四源**（现有三源：腾讯估值 + baostock 质量/成长/换手）。
+    report: "yyyy-1"~"yyyy-4"（如 "2025-4"）；空则跳过（需显式期号，避免误用过期报告）。
+    返回 {index_id: value} 或 None。fail-soft：需 HITHINK_FINANCE_API_KEY + 联网。
+    注意：同花顺估值(PE/PB/PS/PC)端点尚未在契约中暴露，现有估值仍走腾讯 qt.gtimg.cn。
+    """
+    from smcore.data import hithink as _hk
+
+    if not _hk.available() or not report:
+        return None
+    ind = _hk.fetch_indicators(code, report)
+    return ind or None
+
+
 def refresh_all(codes, as_of=None) -> int:
     """强制刷新缓存（scripts/refresh_fundamentals.py 调用）。返回成功填充的票数。"""
     n = 0

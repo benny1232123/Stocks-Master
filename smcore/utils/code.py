@@ -43,3 +43,26 @@ def to_ak_index_symbol(code) -> str:
     if text.isdigit() and len(text) == 6:
         return ("sh" + text) if text.startswith("0") else ("sz" + text)
     return text
+
+
+def to_thscode(code) -> str:
+    """同花顺 thscode 格式：600519.SH / 000001.SZ / 8xxxxx.BJ。
+
+    交易所判定：6 开头→SH（含 688 科创）；8/4 开头→BJ（北交所）；
+    其余 0/2/3 开头→SZ。
+    """
+    code6 = format_stock_code(code)
+    if not code6:
+        return ""
+    if code6.startswith(("8", "4")):
+        return f"{code6}.BJ"
+    if code6.startswith("6"):
+        return f"{code6}.SH"
+    return f"{code6}.SZ"
+
+
+def from_thscode(thscode) -> str:
+    """thscode(600519.SH) → 6 位代码；非法返回空串。"""
+    if not thscode:
+        return ""
+    return format_stock_code(str(thscode).split(".")[0])

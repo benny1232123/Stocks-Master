@@ -22,6 +22,9 @@ jobs:
       # GitHub 海外 Runner 连不上国内券商 Tdx 服务器，关闭直连避免 ~24s 试探浪费，
       # 走下方加固的 akshare 兜底。国内自托管 Runner 请覆盖为 "1" 或 "auto" 启用 Tdx 提速。
       TDX_ENABLED: "0"
+      # 同花顺官方 Financial-API：有 Key 时云端最快首选（实测 ~76ms/请求，远快于 akshare ~442ms）。
+      # 缺失/不可用时会由 kline.py 回退链自动降级到 akshare/baostock，不会静默失败。
+      HITHINK_FINANCE_API_KEY: ${{ secrets.HITHINK_FINANCE_API_KEY }}
     steps:
       - name: 计算信号日 $TODAY
         id: today
@@ -60,7 +63,7 @@ jobs:
         continue-on-error: true
         timeout-minutes: 25
         env:
-          KLINE_BACKEND: akshare
+          KLINE_BACKEND: hithink
           ENABLE_VISUALIZATION: "0"
           SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
           SUPABASE_KEY: ${{ secrets.SUPABASE_KEY }}
@@ -85,7 +88,7 @@ jobs:
         continue-on-error: true
         timeout-minutes: 20
         env:
-          KLINE_BACKEND: akshare
+          KLINE_BACKEND: hithink
           SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
           SUPABASE_KEY: ${{ secrets.SUPABASE_KEY }}
         run: |
@@ -109,7 +112,7 @@ jobs:
         continue-on-error: true
         timeout-minutes: 25
         env:
-          KLINE_BACKEND: akshare
+          KLINE_BACKEND: hithink
           SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
           SUPABASE_KEY: ${{ secrets.SUPABASE_KEY }}
         run: |
@@ -132,7 +135,7 @@ jobs:
         continue-on-error: true
         timeout-minutes: 20
         env:
-          KLINE_BACKEND: akshare
+          KLINE_BACKEND: hithink
           RELATIVITY_MAX_WORKERS: "1"
           RELATIVITY_SLEEP_SECONDS: "0.3"
           SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
@@ -158,7 +161,7 @@ jobs:
         continue-on-error: true
         timeout-minutes: 25
         env:
-          KLINE_BACKEND: akshare
+          KLINE_BACKEND: hithink
           SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
           SUPABASE_KEY: ${{ secrets.SUPABASE_KEY }}
         run: |
@@ -178,7 +181,7 @@ jobs:
 
       - name: 生成操作清单 + 上传 COS
         env:
-          KLINE_BACKEND: akshare
+          KLINE_BACKEND: hithink
           COS_SECRET_ID: ${{ secrets.COS_SECRET_ID }}
           COS_SECRET_KEY: ${{ secrets.COS_SECRET_KEY }}
           COS_BUCKET: ${{ secrets.COS_BUCKET }}
@@ -224,14 +227,14 @@ jobs:
       - name: 预热看板数据
         continue-on-error: true
         env:
-          KLINE_BACKEND: akshare
+          KLINE_BACKEND: hithink
         run: python scripts/prewarm_dashboard.py
 
       - name: 每日清单前向信号回测
         continue-on-error: true
         timeout-minutes: 55
         env:
-          KLINE_BACKEND: akshare
+          KLINE_BACKEND: hithink
           HOLD_DAYS: "10"
           LOOKBACK_DAYS: "14"          # 从30降到14：海外akshare慢，已完成的历史结果会自动跳过
           PREPULL_INTERVAL: "0.3"      # 串行预拉每只间隔0.3s，保护akshare接口不被打崩（不用多线程）

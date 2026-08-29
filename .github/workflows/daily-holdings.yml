@@ -20,6 +20,8 @@ jobs:
       contents: read
     env:
       TDX_ENABLED: "0"
+      # 同花顺官方 Financial-API：有 Key 时云端最快首选；缺失时 kline.py 回退链降级到 akshare/baostock。
+      HITHINK_FINANCE_API_KEY: ${{ secrets.HITHINK_FINANCE_API_KEY }}
     steps:
       - name: 计算信号日 $TODAY
         id: today
@@ -46,7 +48,7 @@ jobs:
       - name: 生成持仓个股分析并推送
         env:
           TODAY: ${{ steps.today.outputs.today }}
-          KLINE_BACKEND: akshare
+          KLINE_BACKEND: hithink
           SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
           SUPABASE_KEY: ${{ secrets.SUPABASE_KEY }}
           TRADES_BACKEND: auto
