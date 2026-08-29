@@ -156,8 +156,18 @@
       body: opts.body ? JSON.stringify(opts.body) : undefined
     }).then(function (r) {
       if (r.status === 401) { logout(); throw new Error('登录已过期，请重新登录'); }
-      return r.json().catch(function () { return {}; }).then(function (data) {
-        if (!r.ok) { throw new Error(data.detail || ('请求失败 (' + r.status + ')')); }
+      // 兼容 JSON 与非 JSON 错误体：非 JSON（如网关 502/504 的 HTML）也给出可读信息
+      return r.text().then(function (text) {
+        var data = {};
+        if (text) {
+          try { data = JSON.parse(text); } catch (e) { data = { raw: text }; }
+        }
+        if (!r.ok) {
+          var detail = data.detail || data.error || data.message || '';
+          if (detail) { throw new Error(detail); }
+          var rawHint = data.raw && data.raw.length < 200 ? '：' + data.raw.trim() : '';
+          throw new Error('请求失败（HTTP ' + r.status + '）' + rawHint);
+        }
         return data;
       });
     });
@@ -381,7 +391,8 @@
   }
 
   // ---------- 编辑持仓 ----------
-  function makeInlineCells(tr, priceIdx, qtyIdx, tradeId) {
+  // dateIdx 可选：传入则把该列换成日期输入框（修复历史空日期记录）
+  function makeInlineCells(tr, priceIdx, qtyIdx, tradeId, dateIdx) {
     var cells = tr.children;
     var priceCell = cells[priceIdx], qtyCell = cells[qtyIdx], actCell = cells[cells.length - 1];
 
@@ -396,20 +407,33 @@
     priceCell.appendChild(priceInput);
     qtyCell.appendChild(qtyInput);
 
+    var dateInput = null;
+    if (dateIdx !== undefined && dateIdx !== null && cells[dateIdx]) {
+      var dateCell = cells[dateIdx];
+      var raw = dateCell.textContent.trim();
+      dateInput = document.createElement('input');
+      dateInput.type = 'date';
+      // 兼容 '2026-08-29' 与 '2026/08/29' 两种显示
+      var m = raw.match(/(\d{4})[-\/](\d{1,2})[-\/](\d{1,2})/);
+      dateInput.value = m ? m[1] + '-' + String(m[2]).padStart(2, '0') + '-' + String(m[3]).padStart(2, '0') : raw;
+      dateCell.textContent = '';
+      dateCell.appendChild(dateInput);
+    }
+
     actCell.textContent = '';
     var saveBtn = el('button', 'primary small', '保存');
     saveBtn.onclick = function () {
-      saveTradeEdit(tradeId, priceInput.value, qtyInput.value);
+      saveTradeEdit(tradeId, priceInput.value, qtyInput.value, dateInput ? dateInput.value : '');
     };
     var cancelBtn = el('button', 'small', '取消');
     cancelBtn.onclick = function () { loadHoldings(); };
     actCell.appendChild(saveBtn);
     actCell.appendChild(cancelBtn);
     priceInput.focus();
-    return { priceInput: priceInput, qtyInput: qtyInput };
+    return { priceInput: priceInput, qtyInput: qtyInput, dateInput: dateInput };
   }
 
-  // 持仓表行编辑：成本价、数量 在第 4、3 列
+  // 持仓表行编辑：买入日期(2)、数量(3)、成本价(4)
   function startEditPositionRow(tr, d, code, qty, cost) {
     var buys = (d.trades || []).filter(function (t) {
       return t.side === 'buy' && String(t.code) === String(code);
@@ -419,18 +443,19 @@
       showMsg(code + ' 有多笔买入（' + buys.length + ' 笔），请到下方「交易流水」逐笔修改', 'warn');
       return;
     }
-    makeInlineCells(tr, 4, 3, buys[0].id);
+    makeInlineCells(tr, 4, 3, buys[0].id, 2);   // 日期列 index 2
   }
 
-  // 流水表行编辑：价格、数量 在第 5、6 列（0 基）
+  // 流水表行编辑：日期(0)、价格(4)、数量(5)（0 基）
   function startEditTradeRow(tr, trade) {
-    makeInlineCells(tr, 4, 5, trade.id);
+    makeInlineCells(tr, 4, 5, trade.id, 0);
   }
 
-  function saveTradeEdit(id, price, qty) {
+  function saveTradeEdit(id, price, qty, date) {
     var body = {};
     if (price !== '' && price !== null && price !== undefined) { body.price = price; }
     if (qty !== '' && qty !== null && qty !== undefined) { body.qty = qty; }
+    if (date !== '' && date !== null && date !== undefined) { body.date = date; }
     if (!Object.keys(body).length) { showMsg('没有要保存的修改', 'err'); return; }
     clearMsg();
     api('/api/admin/trades/' + encodeURIComponent(id), { method: 'PUT', body: body })

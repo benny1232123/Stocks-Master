@@ -124,6 +124,26 @@ _akshare_full_cache: list[tuple[str, str]] | None = None
 _akshare_full_lock = threading.Lock()
 
 
+def _load_from_akshare_full_with_timeout(timeout: float = 12.0) -> list[tuple[str, str]]:
+    """akshare 全表加载加**超时守卫**（独立线程 + join）。
+
+    原因：akshare 联网拉全表可能 30s+，在 Render 上会拖垮请求（网关 504，
+    前端表现为「请求失败」）。超时直接放弃，返回空列表交给兜底链。
+    """
+    result: list[tuple[str, str]] = []
+
+    def runner() -> None:
+        try:
+            result.extend(_load_from_akshare_full())
+        except Exception:
+            pass
+
+    t = threading.Thread(target=runner, daemon=True)
+    t.start()
+    t.join(timeout)
+    return result
+
+
 def _ensure_akshare_full() -> list[tuple[str, str]]:
     """懒加载 akshare 全表并缓存（每个进程一次），用于单名兜底。"""
     global _akshare_full_cache
@@ -132,7 +152,7 @@ def _ensure_akshare_full() -> list[tuple[str, str]]:
     with _akshare_full_lock:
         if _akshare_full_cache is not None:
             return _akshare_full_cache
-        _akshare_full_cache = _load_from_akshare_full()
+        _akshare_full_cache = _load_from_akshare_full_with_timeout()
         return _akshare_full_cache
 
 

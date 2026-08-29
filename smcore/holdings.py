@@ -107,6 +107,20 @@ def compute_fifo_positions(trades: list[dict[str, Any]]) -> tuple[pd.DataFrame, 
     df["date"] = pd.to_datetime(df["date"], errors="coerce")
     df = df.dropna(subset=["price", "qty", "code"])
 
+    # ── 日期守卫（2026-08-29 线上事故修复）──
+    # 空/非法日期会被 to_datetime 转成 NaT；NaT.strftime 会抛
+    # "NaTType does not support strftime"，导致整个持仓页 500。
+    # 这些脏记录无法参与 FIFO 配对（没有时间顺序），**跳过而不是崩溃**，
+    # 让它们留在流水里，用户可在 /admin 编辑补齐日期。
+    na_dates = int(df["date"].isna().sum())
+    if na_dates:
+        import logging
+
+        logging.getLogger("smcore.holdings").warning(
+            "FIFO 跳过 %d 条日期无效/为空的交易（可在 /admin 编辑补齐日期）", na_dates
+        )
+        df = df.dropna(subset=["date"])
+
     positions: list[dict[str, Any]] = []
     closed_trades: list[dict[str, Any]] = []
 

@@ -111,14 +111,28 @@ def _partial_to_db(updates: dict[str, Any]) -> dict[str, Any]:
 
 
 def _to_db_trade(trade: dict[str, Any]) -> dict[str, Any]:
-    side = str(trade.get("side", "buy")).lower()
+    """应用内 trade → Supabase 行。
+
+    ⚠️ 必须同时兼容两种键名：
+    - **应用格式**（前端 POST /api/trades 等）：``date`` / ``qty`` / ``side=buy|sell``
+    - **快照格式**（:func:`smcore.holdings_snapshot.build_snapshot_trades` 产出）：
+      ``trade_date`` / ``quantity`` / ``side=BUY|SELL``
+
+    历史教训（2026-08-29）：原实现只认应用格式，快照导入经 Supabase 落库时
+    ``trade_date`` 写成空串、``quantity`` 写成 0 —— 用户持仓全部变成 0 股。
+    """
+    side_raw = str(trade.get("side", "buy")).lower()
+    date_val = trade.get("date") if trade.get("date") is not None else trade.get("trade_date")
+    qty_val = trade.get("qty")
+    if qty_val is None:
+        qty_val = trade.get("quantity")
     return {
-        "trade_date": str(trade.get("date") or ""),
+        "trade_date": str(date_val or ""),
         "code": format_stock_code(str(trade.get("code", ""))) or str(trade.get("code", "")).strip(),
         "name": str(trade.get("name") or ""),
-        "side": "BUY" if side == "buy" else "SELL",
+        "side": "BUY" if side_raw == "buy" else "SELL",
         "price": float(trade.get("price") or 0),
-        "quantity": float(trade.get("qty") or 0),
+        "quantity": float(qty_val or 0),
         "fee": float(trade.get("fee") or 0),
         "notes": str(trade.get("notes") or ""),
     }
