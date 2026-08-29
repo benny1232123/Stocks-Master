@@ -21,6 +21,10 @@ import {
 import { Button } from './components/ui/button'
 import { cn } from './lib/utils'
 
+// 本地时区日期字符串 YYYY-MM-DD（toISOString 是 UTC，CST 早 8 点前会错成前一天）
+const localDateStr = (d = new Date()) =>
+  `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`
+
 const TABS = [
   { id: 'overview', label: '概览', icon: LayoutDashboard },
   { id: 'selection', label: '宏观经济', icon: Globe2 },
@@ -95,7 +99,7 @@ function DailyExpandableList({ rows, onCodeClick }) {
 
     // 1) 超卖深度：价格越贴近/跌破下轨，反弹赔率越好
     let oversold = 50
-    if (!isNaN(buy) && !isNaN(lower) && lower > 0) {
+    if (hasNum(buy) && hasNum(lower) && lower > 0) {
       const dist = (buy - lower) / lower * 100
       if (dist <= 0) oversold = 100
       else if (dist <= 5) oversold = 100 - dist * 4        // 100 → 80
@@ -104,7 +108,7 @@ function DailyExpandableList({ rows, onCodeClick }) {
     }
     // 2) 盈亏比：止盈空间 / 止损空间
     let rr = 50
-    if (!isNaN(buy) && !isNaN(lower) && !isNaN(tp) && lower > 0 && tp > lower) {
+    if (hasNum(buy) && hasNum(lower) && hasNum(tp) && lower > 0 && tp > lower) {
       const denom = buy - lower
       if (denom > 0) {
         const ratio = (tp - buy) / denom
@@ -113,7 +117,7 @@ function DailyExpandableList({ rows, onCodeClick }) {
     }
     // 3) 趋势强度：现价相对 MA20（站上均线上方更稳）
     let trend = 50
-    if (!isNaN(latest) && !isNaN(ma20) && ma20 > 0) {
+    if (hasNum(latest) && hasNum(ma20) && ma20 > 0) {
       const p = (latest - ma20) / ma20 * 100
       trend = p >= 0 ? clamp(70 + p * 2, 70, 92) : clamp(50 + p * 2, 30, 70)
     }
@@ -164,7 +168,7 @@ function DailyExpandableList({ rows, onCodeClick }) {
         const sc = getStratColor(primaryStrat)
         const [sbRows, sbComposite] = scoreBreakdown(row)
         const sbCls = sbComposite >= 80 ? 'sb-excellent' : sbComposite >= 60 ? 'sb-good' : sbComposite >= 40 ? 'sb-mid' : 'sb-weak'
-        const pnlPct = (!isNaN(latestP) && !isNaN(buyPrice) && buyPrice > 0) ? ((latestP / buyPrice - 1) * 100) : NaN
+        const pnlPct = (hasNum(latestP) && hasNum(buyPrice) && buyPrice > 0) ? ((latestP / buyPrice - 1) * 100) : NaN
         const isOpen = expanded.has(i)
 
         // 排名奖牌
@@ -216,7 +220,7 @@ function DailyExpandableList({ rows, onCodeClick }) {
                 </div>
 
                 {/* 止损距离 */}
-                {!isNaN(latestP) && !isNaN(stopP) && stopP > 0 && (
+                {hasNum(latestP) && hasNum(stopP) && stopP > 0 && (
                   <span className={cn('stop-dist', ((latestP - stopP) / stopP * 100) < 5 ? 'stop-close' : '')}>
                     距止损 {((latestP - stopP) / stopP * 100).toFixed(1)}%
                   </span>
@@ -235,25 +239,25 @@ function DailyExpandableList({ rows, onCodeClick }) {
                 <div className="dd-cell"><span>MA20</span><strong>{ma20V != null && !isNaN(ma20V) ? ma20V.toFixed(2) : '--'}</strong></div>
                 {/* 智能解读行 */}
                 <div className="daily-insight">
-                  {!isNaN(latestP) && !isNaN(buyPrice) && buyPrice > 0 ? (
+                  {hasNum(latestP) && hasNum(buyPrice) && buyPrice > 0 ? (
                     <span className={cn('di-tag', latestP >= buyPrice ? 'di-profit' : 'di-loss')}>
                       相对买入价 {latestP >= buyPrice ? `+${((latestP/buyPrice-1)*100).toFixed(2)}% 盈` : `${((latestP/buyPrice-1)*100).toFixed(2)}% 亏`}
                     </span>
                   ) : null}
-                  {!isNaN(latestP) && !isNaN(stopP) && stopP > 0 ? (
+                  {hasNum(latestP) && hasNum(stopP) && stopP > 0 ? (
                     <span className={cn('di-tag', (latestP - stopP) / stopP * 100 < 3 ? 'di-danger' : '')}>
                       距止损 {((latestP - stopP) / stopP * 100).toFixed(2)}%
                     </span>
                   ) : null}
-                  {!isNaN(latestP) && !isNaN(tpP) && tpP > 0 ? (
-                    <span className="di-tag">距止盈 +${((tpP - latestP) / latestP * 100).toFixed(2)}%</span>
+                  {hasNum(latestP) && latestP > 0 && hasNum(tpP) && tpP > 0 ? (
+                    <span className="di-tag">距止盈 +{((tpP - latestP) / latestP * 100).toFixed(2)}%</span>
                   ) : null}
-                  {!isNaN(stopP) && !isNaN(tpP) && stopP > 0 && tpP > 0 ? (
-                    <span className="di-tag">盈亏比 {(tpP / stopP - 1).toFixed(2)}:1</span>
+                  {hasNum(buyPrice) && hasNum(stopP) && hasNum(tpP) && buyPrice > stopP && tpP > buyPrice ? (
+                    <span className="di-tag">盈亏比 {((tpP - buyPrice) / (buyPrice - stopP)).toFixed(2)}:1</span>
                   ) : null}
                   {/* 综合风险评级 */}
                   {(() => {
-                    const toStop = (!isNaN(latestP) && !isNaN(stopP) && stopP > 0) ? (latestP - stopP) / stopP * 100 : null
+                    const toStop = (hasNum(latestP) && hasNum(stopP) && stopP > 0) ? (latestP - stopP) / stopP * 100 : null
                     if (toStop != null && toStop < 2) return <span className="di-risk di-danger">🔴 极高风险 — 接近止损位</span>
                     if (toStop != null && toStop < 5) return <span className="di-risk di-warn">⚠️ 高风险 — 止损较近</span>
                     if (toStop != null && toStop < 10) return <span className="di-risk di-caution">🟡 中等风险</span>
@@ -422,13 +426,14 @@ function _renderMacroVerdict(macro) {
     scores.total += s; scores.details.push({ name: '景气', s, label, val: `PMI ${v.toFixed(1)}` })
   }
 
-  // ── 物价：CPI 温和 0~2%(+1)；>3% 通胀(-1)；<0 通缩(-1)
+  // ── 物价：CPI 温和 0~2%(+1)；2~3% 温和偏高(0)；>3% 通胀(-1)；<0 通缩(-1)
   if (macro['CPI同比'] != null) {
     const v = Number(macro['CPI同比'])
     let s = 0, label = ''
     if (v >= 0 && v <= 2) { s = 1; label = '物价温和' }
+    else if (v > 2 && v <= 3) { s = 0; label = '通胀温和偏高' }
     else if (v > 3) { s = -1; label = '通胀偏高' }
-    else { s = -1; label = '通缩/低通胀' }
+    else { s = -1; label = '通缩' }
     scores.total += s; scores.details.push({ name: '物价', s, label, val: `CPI ${v >= 0 ? '+' : ''}${v.toFixed(1)}%` })
   }
 
@@ -902,7 +907,7 @@ function App() {
   const [selDaily, setSelDaily] = useState(0)
   const [btDateOpen, setBtDateOpen] = useState(false)    // 回测日期选择器是否展开
   const [tradeForm, setTradeForm] = useState({
-    date: new Date().toISOString().slice(0, 10),
+    date: localDateStr(),
     code: '', name: '', side: 'buy', price: 0, qty: 100, fee: 0, notes: '',
   })
   const [error, setError] = useState('')
@@ -922,8 +927,8 @@ function App() {
   const [scanProgress, setScanProgress] = useState({ current: 0, total: 0 })
 
   // 手动多策略回测表单
-  const _today = new Date().toISOString().slice(0, 10)
-  const _yearAgo = new Date(Date.now() - 365 * 86400000).toISOString().slice(0, 10)
+  const _today = localDateStr()
+  const _yearAgo = localDateStr(new Date(Date.now() - 365 * 86400000))
   const [multiCodes, setMultiCodes] = useState('600519,000858')
   const [multiStart, setMultiStart] = useState(_yearAgo)
   const [multiEnd, setMultiEnd] = useState(_today)
@@ -1012,7 +1017,7 @@ function App() {
     setScanPhase('fusion')
     setScanLogs((prev) => [...prev, 'Boll 扫描完成，开始策略融合...'])
     try {
-      const today = new Date().toISOString().slice(0, 10).replace(/-/g, '')
+      const today = localDateStr().replace(/-/g, '')
       const resp = await fetch('/api/selection/fusion', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -1405,7 +1410,7 @@ function App() {
                   <span className="num">{actionPreview.length || 0}</span>
                   <span className="unit">行信号</span>
                   {latestActionList ? (
-                    <span className="hero-badge">{new Date(latestActionList.modified ?? Date.now()).toLocaleDateString('zh-CN')}</span>
+                    <span className="hero-badge">{latestActionList.modified_at ? new Date(latestActionList.modified_at * 1000).toLocaleDateString('zh-CN') : ''}</span>
                   ) : null}
                 </div>
                 {/* 日报预览行 —— 直接展示在 Hero 内 */}
@@ -1630,7 +1635,7 @@ function App() {
                       fmt: 'price',
                       note: macroSnapshot['日元/人民币_inverted'] != null
                         ? `1 CNY ≈ ${Number(macroSnapshot['日元/人民币_inverted']).toFixed(2)} JPY`
-                        : (macroSnapshot['日元/人民币'] != null ? `1 CNY ≈ ${(100 / Number(macroSnapshot['日元/人民币'])).toFixed(2)} JPY（直观展示）` : '1 CNY = ? JPY'),
+                        : (macroSnapshot['日元/人民币'] != null ? `1 CNY ≈ ${(1 / Number(macroSnapshot['日元/人民币'])).toFixed(2)} JPY（直观展示）` : '1 CNY = ? JPY'),
                       src: macroSnapshot['日元/人民币_src'],
                     },
                     {
@@ -2162,8 +2167,8 @@ function App() {
               // 重点推荐 Top5（按综合评分）
               const top = [...rows].sort((a, b) => (num(b, '综合评分') || 0) - (num(a, '综合评分') || 0)).slice(0, 5)
               const fileDate = (fullDaily.latest?.name ?? '').replace('Daily-Action-List-', '').replace('.csv', '')
-              const genTime = fullDaily.latest?.modified
-                ? new Date(fullDaily.latest.modified * 1000).toLocaleString('zh-CN')
+              const genTime = fullDaily.latest?.modified_at
+                ? new Date(fullDaily.latest.modified_at * 1000).toLocaleString('zh-CN')
                 : ''
 
               return (

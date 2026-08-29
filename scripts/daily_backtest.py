@@ -274,13 +274,16 @@ def _backtest_one(path: Path, sd: date, hold_days: int, market_profile=None, por
     cash_pct = 0.0
     dd_breaker_dd = 0.0
     dd_breaker_extra = 0
-    # 市场仪表盘由 main() 一次性计算并传入，避免每个信号日重复抓指数 K 线拖慢回测
-    _prof = market_profile
-    if _prof is None and (_vol_stop_on or _vol_pos_on):
-        try:
-            _prof = compute_market_profile()
-        except Exception:
-            _prof = None
+    # 市场仪表盘按「信号日 as-of」计算（因果安全）：旧版把「今天」的波动率分位/regime
+    # 套用到窗口内全部历史信号日——既引入未来函数，又使同一信号日每天重跑结果漂移。
+    # compute_market_profile 对指数全量序列做进程内缓存，逐信号日切片开销可忽略；
+    # 出场参数自适应（compute_adaptive_exit_params）同样只用该 as-of profile。
+    # market_profile 形参保留仅为兼容旧调用方签名，不再使用（忽略传入值）。
+    _prof = None
+    try:
+        _prof = compute_market_profile(as_of=sd)
+    except Exception:
+        _prof = None
     if _prof is not None:
             # 总仓位随市场波动率缩放（高波动留现金，真正降低组合暴露）：
             # 自适应 = S 型波动率分位现金 + 趋势 regime 调整（替代硬编码 VOL_POS_SCALE_MAP）
@@ -317,7 +320,7 @@ def _backtest_one(path: Path, sd: date, hold_days: int, market_profile=None, por
 
     size_by = os.environ.get("BACKTEST_SIZE_BY", "权重" if "权重" in df.columns else "综合评分") or None
 
-    _exit = compute_adaptive_exit_params(market_profile, regime=getattr(market_profile, "regime", None))
+    _exit = compute_adaptive_exit_params(_prof, regime=getattr(_prof, "regime", None))
     result = run_forward_signal_backtest(
         sub,
         hold_days=hold_days,
@@ -518,12 +521,8 @@ def main() -> int:
 
     kline_mod.fetch_daily_k = _cached_fetch
 
-    # 市场仪表盘只算一次（所有信号日共用），避免每个信号日重复抓指数 K 线
-    market_profile = None
-    try:
-        market_profile = compute_market_profile()
-    except Exception as e:
-        print(f"[warn] 计算市场仪表盘失败，波动率自适应将回退默认：{e}")
+    # 市场仪表盘不再在 main() 预计算：旧版此处用「今天」的 profile 统一传给所有
+    # 历史信号日（未来函数）。现改为 _backtest_one 内部按信号日 as_of 各自计算。
 
     # ── 阶段 0.6：重建组合权益曲线（回撤熔断用）──
     # 从磁盘所有 Multi-Backtest-*-equity.csv 按日历日叠加出组合滚动回撤；
@@ -626,7 +625,7 @@ def main() -> int:
               flush=True)
         try:
             res = _backtest_one(
-                path, sd, actual_hold, market_profile=market_profile,
+                path, sd, actual_hold,
                 portfolio_curve=portfolio_curve, dd_thr=_dd_thr, dd_cap=_dd_cap, dd_deep=_dd_deep,
             )
         except Exception as e:

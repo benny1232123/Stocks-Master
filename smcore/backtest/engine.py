@@ -381,11 +381,14 @@ def run_forward_signal_backtest(
         return float(sub.iloc[-n:].mean())
 
     def _ann_vol(code: str, d: date, window: int) -> Optional[float]:
-        """个股近 window 日年化波动率（截至 d，含 d）。数据不足返回 None。"""
+        """个股近 window 日年化波动率（截至买入日前一交易日，不含 d）。
+
+        买入发生在 d 日开盘，vol 必须只用 d 之前的数据计算，否则引入当日收盘的未来函数。
+        """
         p = price_cache.get(code)
         if p is None or p.empty:
             return None
-        sub = p.loc[p.index.date <= d, "close"]
+        sub = p.loc[p.index.date < d, "close"]
         if len(sub) < window + 1:
             return None
         rets = sub.iloc[-(window + 1):].pct_change().dropna()
@@ -455,31 +458,40 @@ def run_forward_signal_backtest(
             # 用 (scaled_w / sum_scaled) 重新分配同一笔可用资金 → 总暴露不变、内部向低波动倾斜，
             # 在不放大回撤的前提下提升收益/回撤比。scale 缺失→1.0 中性。
             _scaled = []
-            _total_scaled = 0.0
             for (sd, c, w, row_stop, _st) in buyable:
                 sc = 1.0
                 if vt_enabled:
                     sc = vol_target_scale(_ann_vol(c, d, _vt_cfg["window"]), _vt_cfg)
-                _sw = w * sc
-                _scaled.append((sd, c, w, row_stop, _st, _sw))
-                _total_scaled += _sw
+                _scaled.append((sd, c, w, row_stop, _st, w * sc))
+            # 按（波动率缩放后的）置信度权重降序分配：权重高者优先拿满一手。
+            # 旧逻辑按名单顺序均分 cash×capital_scale，单票资金常不足一手（100 股），
+            # 只有低价股能凑够手数 → 组合被「股价低」这个未设计条件静默过滤。
+            # 现改为权重优先 + 保底一手 + 现金不足跳过，消除低价股偏差。
+            _scaled.sort(key=lambda t: t[5], reverse=True)
+            _total_scaled = sum(t[5] for t in _scaled)
             _total_scaled = _total_scaled or 1.0
+            _cs = max(0.0, min(1.0, capital_scale))
+            _budget = cash * _cs
             for sd, c, w, row_stop, _st, scaled_w in _scaled:
                 buy_price = _px(c, d, "open")
                 if buy_price is None:
+                    _total_scaled -= scaled_w
                     continue
                 buy_price *= (1 + slippage)
-                # 按（波动率缩放后的）置信度权重分配资金；
-                # capital_scale<1 时留现金（高波动降仓），真正减少组合暴露而非等比缩放
-                per = cash * (scaled_w / _total_scaled) * max(0.0, min(1.0, capital_scale))
+                per = _budget * (scaled_w / _total_scaled) if _total_scaled > 0 else 0.0
                 qty = int(per / buy_price / 100) * 100
                 if qty < 100:
-                    continue
+                    qty = 100  # 保底一手：资金不足一手时按权重优先给满，而非静默跳过
                 cost = buy_price * qty
                 fee = _buy_cost(cost)
-                if cost + fee > cash:
+                # 预算约束只看成本（佣金等费用由现金承担）：per 已取整到一手，
+                # 若把 fee 也卡进预算，恰好等于预算的分配会因几毛钱手续费被整单跳过
+                if cost + fee > cash or cost > _budget:
+                    _total_scaled -= scaled_w
                     continue
                 cash -= cost + fee
+                _budget = max(_budget - cost - fee, 0.0)
+                _total_scaled = max(_total_scaled - scaled_w, 0.0)
                 stop, take = level_map.get((sd, c), (None, None))
                 # 逐行止损比例：波动率自适应（个股 vol20 定）回退全局 stop_loss_pct
                 eff_stop = row_stop if row_stop is not None else stop_loss_pct

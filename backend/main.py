@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import os
+import re
 import sys
 import threading
 import time
@@ -191,6 +192,9 @@ def daily_action_list_full(date: str = None) -> dict:
     可选 ?date=YYYYMMDD 指定某天；缺省返回最新一天。"""
     target = None
     if date:
+        # 只接受纯数字日期（YYYYMMDD），杜绝 ../ 路径穿越读取 stock_data 之外的任意文件
+        if not re.fullmatch(r"\d{8}", str(date)):
+            raise HTTPException(status_code=400, detail="date 必须是 YYYYMMDD 格式")
         p = STOCK_DATA_DIR / f"Daily-Action-List-{date}.csv"
         if p.exists():
             target = ArtifactFile(name=p.name, path=str(p.relative_to(ROOT)), modified_at=p.stat().st_mtime)

@@ -10,6 +10,7 @@ import json
 import logging
 import os
 import tempfile
+import threading
 from abc import ABC, abstractmethod
 from pathlib import Path
 from typing import Any
@@ -20,6 +21,10 @@ from smcore.utils.code import format_stock_code
 logger = logging.getLogger("smcore.storage.trades_repo")
 
 TRADES_FILE = STOCK_DATA_DIR / "trades.json"
+
+# 进程级写锁：JSON 后端的读—改—写序列（append/update/delete）必须整体持锁，
+# 否则并发请求最后写回者胜，丢更新。FastAPI 同步 handler 跑在线程池上，锁必要。
+_JSON_WRITE_LOCK = threading.RLock()
 
 SUPABASE_SCHEMA_SQL = """\
 -- Run in Supabase SQL Editor
@@ -197,52 +202,57 @@ class JsonTradeBackend(TradeBackend):
 
     def delete_by_id(self, trade_id: Any) -> bool:
         """按列表下标删除单条（仅对当前文件快照有效）。"""
-        trades = self.load_all()
         try:
             idx = int(trade_id)
         except (TypeError, ValueError):
             return False
-        if idx < 0 or idx >= len(trades):
-            return False
-        remaining = [t for i, t in enumerate(trades) if i != idx]
-        for t in remaining:  # 剔除 id 字段，保持落盘格式干净
-            t.pop("id", None)
-        self.replace_all(remaining)
-        return True
+        # 读—改—写整个文件必须持锁，否则并发 POST/DELETE 互相覆盖丢更新
+        with _JSON_WRITE_LOCK:
+            trades = self.load_all()
+            if idx < 0 or idx >= len(trades):
+                return False
+            remaining = [t for i, t in enumerate(trades) if i != idx]
+            for t in remaining:  # 剔除 id 字段，保持落盘格式干净
+                t.pop("id", None)
+            self.replace_all(remaining)
+            return True
 
     def append_many(self, trades: list[dict[str, Any]]) -> int:
         """JSON 后端：读—拼接—整体写回。"""
         if not trades:
             return 0
-        existing = self.load_all()
-        for t in existing:
-            t.pop("id", None)
-        merged = existing + [_to_app_trade(t) for t in trades]
-        for t in merged:
-            t.pop("id", None)
-        self.replace_all(merged)
-        return len(trades)
+        with _JSON_WRITE_LOCK:
+            existing = self.load_all()
+            for t in existing:
+                t.pop("id", None)
+            merged = existing + [_to_app_trade(t) for t in trades]
+            for t in merged:
+                t.pop("id", None)
+            self.replace_all(merged)
+            return len(trades)
 
     def update_by_id(self, trade_id: Any, updates: dict[str, Any]) -> bool:
         """按下标局部更新（JSON 后端用列表下标当 id）。"""
-        trades = self.load_all()
         try:
             idx = int(trade_id)
         except (TypeError, ValueError):
             return False
-        if idx < 0 or idx >= len(trades):
-            return False
-        for key, value in (updates or {}).items():
-            trades[idx][key] = value
-        for t in trades:
-            t.pop("id", None)
-        self.replace_all(trades)
-        return True
+        with _JSON_WRITE_LOCK:
+            trades = self.load_all()
+            if idx < 0 or idx >= len(trades):
+                return False
+            for key, value in (updates or {}).items():
+                trades[idx][key] = value
+            for t in trades:
+                t.pop("id", None)
+            self.replace_all(trades)
+            return True
 
     def append(self, trade: dict[str, Any]) -> None:
-        trades = self.load_all()
-        trades.append(_to_app_trade(trade))
-        self.replace_all(trades)
+        with _JSON_WRITE_LOCK:
+            trades = self.load_all()
+            trades.append(_to_app_trade(trade))
+            self.replace_all(trades)
 
     def replace_all(self, trades: list[dict[str, Any]]) -> None:
         TRADES_FILE.parent.mkdir(parents=True, exist_ok=True)
@@ -450,10 +460,14 @@ class TradeRepository:
 
 
 _repo: TradeRepository | None = None
+_repo_lock = threading.Lock()
 
 
 def get_trade_repository() -> TradeRepository:
     global _repo
     if _repo is None:
-        _repo = TradeRepository()
+        # 双重检查：并发首请求各自建实例会重复跑 JSON→Supabase 迁移
+        with _repo_lock:
+            if _repo is None:
+                _repo = TradeRepository()
     return _repo
