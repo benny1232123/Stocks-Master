@@ -236,7 +236,7 @@ jobs:
         env:
           KLINE_BACKEND: hithink
           HOLD_DAYS: "10"
-          LOOKBACK_DAYS: "14"          # 从30降到14：海外akshare慢，已完成的历史结果会自动跳过
+          LOOKBACK_DAYS: "30"          # hithink 接入后(~5.8x 快)恢复更大回测窗口；原 akshare 慢时曾从30降到14。已完成的历史结果自动跳过。
           PREPULL_INTERVAL: "0.3"      # 串行预拉每只间隔0.3s，保护akshare接口不被打崩（不用多线程）
           SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
           SUPABASE_KEY: ${{ secrets.SUPABASE_KEY }}
