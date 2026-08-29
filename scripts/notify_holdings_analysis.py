@@ -12,7 +12,6 @@
 - SUPABASE_URL/KEY    : 持仓数据源（auto 模式，与 daily-pick 共用 secrets）
 - TRADES_BACKEND      : json | supabase | auto（默认 auto）
 - SMTP_HOST/PORT/USER/PASS/TO : 邮件推送（缺任意 → 跳过邮件）
-- PUSHPLUS_TOKEN      : PushPlus 微信推送（缺 → 跳过 PushPlus）
 
 退出码：0 = 正常（含空持仓）；1 = 致命错误（持仓读取失败等）。
 """
@@ -339,42 +338,6 @@ def build_html_report(today: str, backend: str, summary_line: str, sections_html
 </div></body></html>"""
 
 
-def send_pushplus(subject: str, content_html: str, log_lines: list | None = None) -> bool:
-    """通过 PushPlus（pushplus.plus）推送 HTML 到微信。未配置 token 则跳过。"""
-    token = os.getenv("PUSHPLUS_TOKEN", "").strip()
-    if not token:
-        if log_lines is not None:
-            log_lines.append("PUSHPLUS_TOKEN 未配置，跳过 PushPlus 推送")
-        return False
-    try:
-        import requests
-    except ImportError:
-        if log_lines is not None:
-            log_lines.append("未安装 requests，无法使用 PushPlus（请 pip install requests）")
-        return False
-    try:
-        resp = requests.post(
-            "https://www.pushplus.plus/send",
-            json={"token": token, "title": subject, "content": content_html, "template": "html"},
-            timeout=15,
-        )
-        try:
-            data = resp.json()
-        except Exception:
-            data = {}
-        if data.get("code") == 200:
-            if log_lines is not None:
-                log_lines.append("PushPlus 推送成功")
-            return True
-        if log_lines is not None:
-            log_lines.append(f"PushPlus 推送失败: code={data.get('code')} msg={data.get('msg')}")
-        return False
-    except Exception as exc:
-        if log_lines is not None:
-            log_lines.append(f"PushPlus 推送异常: {exc}")
-        return False
-
-
 def main() -> int:
     today = _today_str()
     log_lines: list[str] = []
@@ -447,17 +410,12 @@ def main() -> int:
     print("\n".join(log_lines))
     print(f"[OK] 报告已落盘:\n  - {md_path}\n  - {html_path}")
 
-    # 3) 多通道推送（邮件 + PushPlus；任一配置即推送，都不配则仅落盘）
+    # 3) 邮件推送（配置 SMTP 即推送，否则仅落盘）
     subject = f"【持仓日报】{today} · 持仓个股分析"
-    sent: list[str] = []
     if send_email(subject, md, log_lines=log_lines):
-        sent.append("邮件")
-    if send_pushplus(subject, html, log_lines=log_lines):
-        sent.append("PushPlus")
-    if sent:
-        print(f"[OK] 已推送: {' / '.join(sent)}")
+        print("[OK] 已通过邮件推送")
     else:
-        print("[INFO] 未配置 SMTP / PushPlus，仅落盘报告（不推送）")
+        print("[INFO] 未配置 SMTP，仅落盘报告（不推送）")
 
     return 0
 
