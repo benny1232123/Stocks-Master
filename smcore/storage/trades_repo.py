@@ -6,6 +6,7 @@ Environment variables:
 """
 from __future__ import annotations
 
+import json
 import logging
 import os
 import tempfile
@@ -50,10 +51,16 @@ def _normalize_supabase_url(url: str) -> str:
     return url
 
 
-def _to_app_trade(row: dict[str, Any]) -> dict[str, Any]:
+def _to_app_trade(row: dict[str, Any], fallback_id: Any = None) -> dict[str, Any]:
+    """把后端行（Supabase / JSON）转成应用内部 trade 结构。
+
+    ``id`` 用于管理端「删除单条」。Supabase 自带自增 id；JSON 没有，
+    由调用方传入列表下标作为稳定标识（加载—修改—整体写回，下标在单次会话内有效）。
+    """
     side_raw = str(row.get("side", "buy")).upper()
     qty = row.get("qty", row.get("quantity", 0))
     return {
+        "id": row.get("id", fallback_id),
         "date": str(row.get("date") or row.get("trade_date") or ""),
         "code": format_stock_code(str(row.get("code", ""))) or str(row.get("code", "")).strip(),
         "name": str(row.get("name") or ""),
@@ -97,6 +104,16 @@ class TradeBackend(ABC):
     def replace_all(self, trades: list[dict[str, Any]]) -> None:
         raise NotImplementedError
 
+    @abstractmethod
+    def delete_by_id(self, trade_id: Any) -> bool:
+        """按 id 删除单条；删除成功返回 True，id 不存在返回 False。"""
+        raise NotImplementedError
+
+    @abstractmethod
+    def append_many(self, trades: list[dict[str, Any]]) -> int:
+        """批量追加（一次往返写多条），返回成功写入条数。"""
+        raise NotImplementedError
+
 
 class JsonTradeBackend(TradeBackend):
     @property
@@ -111,10 +128,43 @@ class JsonTradeBackend(TradeBackend):
                 data = json.load(file_handle)
             if not isinstance(data, list):
                 return []
-            return [_to_app_trade(item) for item in data if isinstance(item, dict)]
+            # JSON 无自增 id，用列表下标充当稳定标识，供管理端删除单条
+            return [
+                _to_app_trade(item, idx)
+                for idx, item in enumerate(data)
+                if isinstance(item, dict)
+            ]
         except Exception as exc:
             logger.warning("读取 trades.json 失败: %s", exc)
             return []
+
+    def delete_by_id(self, trade_id: Any) -> bool:
+        """按列表下标删除单条（仅对当前文件快照有效）。"""
+        trades = self.load_all()
+        try:
+            idx = int(trade_id)
+        except (TypeError, ValueError):
+            return False
+        if idx < 0 or idx >= len(trades):
+            return False
+        remaining = [t for i, t in enumerate(trades) if i != idx]
+        for t in remaining:  # 剔除 id 字段，保持落盘格式干净
+            t.pop("id", None)
+        self.replace_all(remaining)
+        return True
+
+    def append_many(self, trades: list[dict[str, Any]]) -> int:
+        """JSON 后端：读—拼接—整体写回。"""
+        if not trades:
+            return 0
+        existing = self.load_all()
+        for t in existing:
+            t.pop("id", None)
+        merged = existing + [_to_app_trade(t) for t in trades]
+        for t in merged:
+            t.pop("id", None)
+        self.replace_all(merged)
+        return len(trades)
 
     def append(self, trade: dict[str, Any]) -> None:
         trades = self.load_all()
@@ -188,6 +238,23 @@ class SupabaseTradeBackend(TradeBackend):
             return
         rows = [_to_db_trade(item) for item in trades]
         self._client.table("trades").insert(rows).execute()
+
+    def delete_by_id(self, trade_id: Any) -> bool:
+        """按自增 id 删除单条。"""
+        try:
+            tid = int(trade_id)
+        except (TypeError, ValueError):
+            return False
+        resp = self._client.table("trades").delete().eq("id", tid).execute()
+        return bool(resp.data)
+
+    def append_many(self, trades: list[dict[str, Any]]) -> int:
+        """Supabase 后端：单次 insert 写多条。"""
+        if not trades:
+            return 0
+        rows = [_to_db_trade(t) for t in trades]
+        resp = self._client.table("trades").insert(rows).execute()
+        return len(resp.data or [])
 
 
 class TradeRepository:
@@ -268,6 +335,24 @@ class TradeRepository:
         except Exception as exc:
             logger.warning("%s 覆盖写入失败，回退 trades.json: %s", self._backend.name, exc)
             self._fallback.replace_all(trades)
+
+    def delete_by_id(self, trade_id: Any) -> bool:
+        """按 id 删除单条。Supabase 后端失败时不回退 JSON（避免误删本地数据）。"""
+        try:
+            return bool(self._backend.delete_by_id(trade_id))
+        except Exception as exc:
+            logger.warning("%s 删除单条失败: %s", self._backend.name, exc)
+            return False
+
+    def append_many(self, trades: list[dict[str, Any]]) -> int:
+        """批量追加；云端失败时回退本地 JSON，保证录入不丢。"""
+        if not trades:
+            return 0
+        try:
+            return int(self._backend.append_many(trades))
+        except Exception as exc:
+            logger.warning("%s 批量写入失败，回退 trades.json: %s", self._backend.name, exc)
+            return int(self._fallback.append_many(trades))
 
 
 _repo: TradeRepository | None = None

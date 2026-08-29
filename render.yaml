@@ -18,3 +18,11 @@ services:
         sync: false
       - key: SUPABASE_KEY
         sync: false
+      # ── 持仓管理 /admin ──
+      # ADMIN_PASSWORD：管理端登录密码。未设置则 /admin 与 /api/admin/* 整体禁用（安全默认）。
+      # API_AUTH_TOKEN：保护 /api/trades 等普通写接口。未设置时这些接口完全无鉴权。
+      # 两者均为密钥，sync: false → 不写入仓库，需在 Render Dashboard 手动填值。
+      - key: ADMIN_PASSWORD
+        sync: false
+      - key: API_AUTH_TOKEN
+        sync: false

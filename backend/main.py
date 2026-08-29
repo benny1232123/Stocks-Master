@@ -37,6 +37,7 @@ import hmac
 
 from backend.trade_sanitize import _is_corrupt_trade
 from backend.api_auth import _check_api_key
+from backend.admin_api import router as admin_router
 
 # ── 可选 API 鉴权 ──
 # 仅当环境变量 API_AUTH_TOKEN 非空时生效：所有「写操作 / 高开销」POST 端点
@@ -70,6 +71,10 @@ if FRONTEND_DIST.exists():
     assets_dir = FRONTEND_DIST / "assets"
     if assets_dir.exists():
         app.mount("/assets", StaticFiles(directory=assets_dir), name="assets")
+
+# ── 持仓管理（/admin 页面 + /api/admin/* 接口）──
+# 需设置 ADMIN_PASSWORD 才启用；未设置时接口一律 403（安全默认）。
+app.include_router(admin_router)
 
 
 _tasks_lock = threading.Lock()
@@ -759,6 +764,18 @@ def selection_fusion(payload: dict) -> dict:
 
     threading.Thread(target=_run, daemon=True).start()
     return {"task_id": task_id}
+
+
+@app.get("/admin", include_in_schema=False)
+def admin_page():
+    """持仓管理单页（自包含 HTML，无需前端构建）。
+
+    必须定义在下面的 /{path:path} catch-all 之前，否则会被 SPA 兜底吞掉。
+    """
+    page = Path(__file__).resolve().parent / "admin_static" / "admin.html"
+    if page.exists():
+        return FileResponse(page)
+    return JSONResponse({"error": "admin page not found"}, status_code=404)
 
 
 @app.get("/{path:path}")

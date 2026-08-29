@@ -1,0 +1,460 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>持仓管理 · Stocks-Master</title>
+<style>
+  :root{
+    --bg:#f6f7f9; --card:#fff; --border:#e5e7eb; --text:#1f2937; --muted:#6b7280;
+    --accent:#2563eb; --accent-soft:#eff6ff; --up:#dc2626; --down:#16a34a;
+    --danger:#dc2626; --warn:#b45309; --warn-bg:#fffbeb;
+  }
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--bg);color:var(--text);
+       font-family:-apple-system,BlinkMacSystemFont,"Segoe UI","PingFang SC","Microsoft YaHei",sans-serif;
+       font-size:14px;line-height:1.6}
+  .wrap{max-width:1000px;margin:0 auto;padding:24px 16px 64px}
+  h1{font-size:20px;margin:0}
+  h2{font-size:15px;margin:0 0 12px}
+  .top{display:flex;align-items:center;justify-content:space-between;gap:12px;margin-bottom:20px;flex-wrap:wrap}
+  .meta{color:var(--muted);font-size:12px}
+  .card{background:var(--card);border:1px solid var(--border);border-radius:12px;padding:18px;margin-bottom:16px}
+  .hint{color:var(--muted);font-size:12px;margin:0 0 12px}
+  label{display:block;font-size:12px;color:var(--muted);margin-bottom:4px}
+  input,select,textarea{width:100%;padding:8px 10px;border:1px solid var(--border);border-radius:8px;
+       font-size:14px;font-family:inherit;background:var(--card);color:var(--text)}
+  input:focus,textarea:focus,select:focus{outline:2px solid var(--accent-soft);border-color:var(--accent)}
+  textarea{resize:vertical;min-height:120px;font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace}
+  button{padding:8px 16px;border-radius:8px;border:1px solid var(--border);background:var(--card);
+       color:var(--text);font-size:14px;cursor:pointer;font-family:inherit}
+  button:hover{background:#f3f4f6}
+  button.primary{background:var(--accent);border-color:var(--accent);color:#fff}
+  button.primary:hover{background:#1d4ed8}
+  button.danger{background:var(--danger);border-color:var(--danger);color:#fff}
+  button.danger:hover{background:#b91c1c}
+  button:disabled{opacity:.5;cursor:not-allowed}
+  .row{display:grid;grid-template-columns:repeat(auto-fit,minmax(120px,1fr));gap:10px;margin-bottom:10px}
+  .actions{display:flex;gap:8px;flex-wrap:wrap;margin-top:12px}
+  table{width:100%;border-collapse:collapse;font-size:13px}
+  th,td{padding:8px 10px;text-align:left;border-bottom:1px solid var(--border);white-space:nowrap}
+  th{color:var(--muted);font-weight:500;font-size:12px}
+  td.num,th.num{text-align:right;font-variant-numeric:tabular-nums}
+  .up{color:var(--up)} .down{color:var(--down)} .muted{color:var(--muted)}
+  .empty{color:var(--muted);text-align:center;padding:24px 0}
+  .msg{padding:10px 12px;border-radius:8px;margin-bottom:12px;font-size:13px;display:none}
+  .msg.err{display:block;background:#fef2f2;color:#991b1b;border:1px solid #fecaca}
+  .msg.ok{display:block;background:#f0fdf4;color:#166534;border:1px solid #bbf7d0}
+  .msg.warn{display:block;background:var(--warn-bg);color:var(--warn);border:1px solid #fde68a}
+  .stat{display:flex;gap:20px;flex-wrap:wrap;margin-bottom:14px}
+  .stat div{font-size:12px;color:var(--muted)}
+  .stat b{display:block;font-size:18px;color:var(--text);font-variant-numeric:tabular-nums}
+  .center{max-width:360px;margin:80px auto}
+  .del{padding:2px 8px;font-size:12px;color:var(--danger);border-color:#fecaca}
+  .del:hover{background:#fef2f2}
+  code{background:#f3f4f6;padding:1px 5px;border-radius:4px;font-size:12px}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <div class="top">
+    <div>
+      <h1>📊 持仓管理</h1>
+      <div class="meta" id="subtitle">Stocks-Master · 实盘持仓录入</div>
+    </div>
+    <button id="logout" style="display:none">退出登录</button>
+  </div>
+
+  <div class="msg" id="msg"></div>
+
+  <!-- 登录 / 未启用 -->
+  <div id="loginView" class="card center" style="display:none">
+    <h2>管理员登录</h2>
+    <div id="loginTip"></div>
+    <div id="loginForm">
+      <label for="pw">管理密码（ADMIN_PASSWORD）</label>
+      <input id="pw" type="password" placeholder="请输入管理密码" autocomplete="current-password">
+      <div class="actions"><button class="primary" id="loginBtn">登录</button></div>
+    </div>
+  </div>
+
+  <!-- 主界面 -->
+  <div id="mainView" style="display:none">
+
+    <div class="card">
+      <h2>当前持仓</h2>
+      <div class="stat" id="stats"></div>
+      <div id="posTable"></div>
+    </div>
+
+    <div class="card">
+      <h2>⚡ 快速录入（只需代码 + 数量）</h2>
+      <p class="hint">
+        忘了买入时间和成本价也能录。每行一只，代码和数量用空格或逗号隔开，名称可省略：<br>
+        <code>600519 100 贵州茅台</code> ・ <code>000001,1000</code><br>
+        日期默认今天；成本价自动取该股最新收盘价<b>占位</b>。
+        每日个股分析报告只按代码出技术面与基本面，<b>不含成本与盈亏</b>，所以占位不影响日报内容。
+      </p>
+      <textarea id="bulk" placeholder="600519 100 贵州茅台&#10;000001 1000 平安银行&#10;600036 500"></textarea>
+      <div class="actions">
+        <button class="primary" id="bulkBtn">导入持仓</button>
+        <button id="bulkReplaceBtn">导入并覆盖（先清空）</button>
+      </div>
+    </div>
+
+    <div class="card">
+      <h2>完整录入（知道成交明细时）</h2>
+      <div class="row">
+        <div><label>日期</label><input id="f_date" type="date"></div>
+        <div><label>代码</label><input id="f_code" placeholder="600519"></div>
+        <div><label>名称</label><input id="f_name" placeholder="贵州茅台"></div>
+        <div><label>方向</label><select id="f_side"><option value="buy">买入</option><option value="sell">卖出</option></select></div>
+        <div><label>价格</label><input id="f_price" type="number" step="0.01" min="0" placeholder="0.00"></div>
+        <div><label>数量</label><input id="f_qty" type="number" step="1" min="1" placeholder="100"></div>
+        <div><label>手续费</label><input id="f_fee" type="number" step="0.01" min="0" placeholder="0"></div>
+      </div>
+      <div class="row"><div><label>备注</label><input id="f_notes" placeholder="可选"></div></div>
+      <div class="actions"><button id="addBtn">保存交易</button></div>
+    </div>
+
+    <div class="card">
+      <h2>交易流水</h2>
+      <div id="tradeTable"></div>
+      <div class="actions">
+        <button class="danger" id="clearBtn">清空全部交易</button>
+      </div>
+    </div>
+
+  </div>
+</div>
+
+<script>
+(function () {
+  'use strict';
+  var TOKEN_KEY = 'sm_admin_token';
+  var token = sessionStorage.getItem(TOKEN_KEY) || '';
+
+  var $ = function (id) { return document.getElementById(id); };
+
+  function showMsg(text, kind) {
+    var el = $('msg');
+    el.className = 'msg ' + (kind || '');
+    el.textContent = text || '';
+    el.style.display = text ? 'block' : 'none';
+  }
+  function clearMsg() { showMsg(''); }
+
+  function api(path, opts) {
+    opts = opts || {};
+    var headers = opts.headers || {};
+    if (token) { headers['X-Admin-Token'] = token; }
+    if (opts.body && !headers['Content-Type']) { headers['Content-Type'] = 'application/json'; }
+    return fetch(path, {
+      method: opts.method || 'GET',
+      headers: headers,
+      body: opts.body ? JSON.stringify(opts.body) : undefined
+    }).then(function (r) {
+      if (r.status === 401) { logout(); throw new Error('登录已过期，请重新登录'); }
+      return r.json().catch(function () { return {}; }).then(function (data) {
+        if (!r.ok) { throw new Error(data.detail || ('请求失败 (' + r.status + ')')); }
+        return data;
+      });
+    });
+  }
+
+  function el(tag, cls, text) {
+    var n = document.createElement(tag);
+    if (cls) { n.className = cls; }
+    if (text !== undefined && text !== null) { n.textContent = String(text); }
+    return n;
+  }
+
+  function fmtNum(v, digits) {
+    if (v === null || v === undefined || v === '') { return '—'; }
+    var n = Number(v);
+    if (isNaN(n)) { return '—'; }
+    return n.toFixed(digits === undefined ? 2 : digits);
+  }
+
+  // ---------- 渲染 ----------
+  function renderStats(d) {
+    var box = $('stats');
+    box.textContent = '';
+    var pnl = d.pnl_summary || {};
+    var items = [
+      ['持仓只数', (d.positions || []).length],
+      ['流水条数', d.trades_count || 0],
+      ['成本合计', fmtNum(pnl.holding_cost, 0)],
+      ['市值', fmtNum(pnl.holding_value, 0)]
+    ];
+    var total = pnl.total_pnl;
+    if (total !== null && total !== undefined) {
+      var pct = pnl.holding_cost ? (total / pnl.holding_cost * 100) : 0;
+      items.push(['浮动盈亏', (total >= 0 ? '+' : '') + fmtNum(total, 0) + ' (' + (pct >= 0 ? '+' : '') + pct.toFixed(2) + '%)']);
+    }
+    items.forEach(function (it) {
+      var d1 = el('div');
+      d1.appendChild(el('b', null, it[1]));
+      d1.appendChild(document.createTextNode(it[0]));
+      box.appendChild(d1);
+    });
+    $('subtitle').textContent = '数据源：' + (d.backend || '—') + ' ｜ 持仓分析报告会读取这里的数据';
+  }
+
+  function renderPositions(d) {
+    var box = $('posTable');
+    box.textContent = '';
+    var rows = (d.realtime_positions && d.realtime_positions.length)
+      ? d.realtime_positions
+      : (d.positions || []).map(function (p) {
+          return { '代码': p['代码'], '买入日期': p['买入日期'], '数量': p['数量'],
+                   '成本价': p['成本价'], '现价': null, '浮动盈亏': null, '收益率%': null };
+        });
+
+    if (!rows.length) {
+      box.appendChild(el('div', 'empty', '暂无持仓。用上面的「快速录入」填代码 + 数量即可。'));
+      return;
+    }
+
+    var t = el('table');
+    var thead = el('thead'), htr = el('tr');
+    ['代码', '名称', '买入日期', '数量', '成本价', '现价', '浮动盈亏', '收益率%'].forEach(function (h, i) {
+      var th = el('th', i >= 3 ? 'num' : null, h);
+      htr.appendChild(th);
+    });
+    thead.appendChild(htr); t.appendChild(thead);
+
+    var tb = el('tbody');
+    rows.forEach(function (p) {
+      var tr = el('tr');
+      tr.appendChild(el('td', null, p['代码']));
+      var nameCell = el('td', 'muted', p['名称'] || '—');
+      tr.appendChild(nameCell);
+      tr.appendChild(el('td', 'muted', p['买入日期'] || '—'));
+      tr.appendChild(el('td', 'num', fmtNum(p['数量'], 0)));
+      tr.appendChild(el('td', 'num', fmtNum(p['成本价'])));
+
+      var px = p['现价'];
+      tr.appendChild(el('td', 'num', fmtNum(px)));
+
+      var pl = p['浮动盈亏'], pct = p['收益率%'];
+      var cls = (pl === null || pl === undefined) ? 'muted' : (pl >= 0 ? 'up' : 'down');
+      tr.appendChild(el('td', 'num ' + cls, pl === null || pl === undefined ? '—' : (pl >= 0 ? '+' : '') + fmtNum(pl)));
+      tr.appendChild(el('td', 'num ' + cls, pct === null || pct === undefined ? '—' : (pct >= 0 ? '+' : '') + fmtNum(pct) + '%'));
+      tb.appendChild(tr);
+    });
+    t.appendChild(tb);
+    box.appendChild(t);
+  }
+
+  function renderTrades(d) {
+    var box = $('tradeTable');
+    box.textContent = '';
+    var rows = d.trades || [];
+    if (!rows.length) {
+      box.appendChild(el('div', 'empty', '暂无交易记录'));
+      return;
+    }
+    var t = el('table');
+    var thead = el('thead'), htr = el('tr');
+    ['日期', '代码', '名称', '方向', '价格', '数量', '手续费', '备注', ''].forEach(function (h, i) {
+      htr.appendChild(el('th', (i >= 4 && i <= 6) ? 'num' : null, h));
+    });
+    thead.appendChild(htr); t.appendChild(thead);
+
+    var tb = el('tbody');
+    rows.forEach(function (tr_) {
+      var tr = el('tr');
+      tr.appendChild(el('td', 'muted', tr_.date));
+      tr.appendChild(el('td', null, tr_.code));
+      tr.appendChild(el('td', 'muted', tr_.name || '—'));
+      var sideTd = el('td', tr_.side === 'buy' ? 'up' : 'down', tr_.side === 'buy' ? '买入' : '卖出');
+      tr.appendChild(sideTd);
+      tr.appendChild(el('td', 'num', fmtNum(tr_.price)));
+      tr.appendChild(el('td', 'num', fmtNum(tr_.qty, 0)));
+      tr.appendChild(el('td', 'num', fmtNum(tr_.fee)));
+      tr.appendChild(el('td', 'muted', tr_.notes || '—'));
+
+      var td = el('td');
+      var btn = el('button', 'del', '删除');
+      btn.onclick = function () { removeTrade(tr_.id); };
+      td.appendChild(btn);
+      tr.appendChild(td);
+      tb.appendChild(tr);
+    });
+    t.appendChild(tb);
+    box.appendChild(t);
+  }
+
+  // ---------- 动作 ----------
+  function loadHoldings() {
+    return api('/api/admin/holdings').then(function (d) {
+      renderStats(d);
+      renderPositions(d);
+      renderTrades(d);
+    });
+  }
+
+  function parseBulk(text) {
+    var out = [];
+    text.split(/\r?\n/).forEach(function (line) {
+      line = line.trim();
+      if (!line || line.charAt(0) === '#') { return; }
+      // 支持 "代码 数量 名称" 或 "代码,数量,名称"
+      var parts = line.split(/[\s,，\t]+/).filter(function (s) { return s.length; });
+      if (parts.length < 2) { return; }
+      out.push({ code: parts[0], qty: parts[1], name: parts.slice(2).join(' ') || '' });
+    });
+    return out;
+  }
+
+  function submitBulk(replace) {
+    var items = parseBulk($('bulk').value);
+    if (!items.length) { showMsg('请先填写，每行一只：代码 数量 [名称]', 'err'); return; }
+    clearMsg();
+    api('/api/admin/holdings/snapshot', { method: 'POST', body: { items: items, replace: !!replace } })
+      .then(function (d) {
+        var parts = ['已导入 ' + (d.inserted || 0) + ' 条'];
+        if (d.skipped && d.skipped.length) {
+          parts.push('跳过 ' + d.skipped.length + ' 条：' +
+            d.skipped.map(function (s) { return '第' + s.row + '行 ' + s.code + '（' + s.reason + '）'; }).join('；'));
+        }
+        showMsg(parts.join(' ｜ '), d.skipped && d.skipped.length ? 'warn' : 'ok');
+        $('bulk').value = '';
+        return loadHoldings();
+      })
+      .catch(function (e) { showMsg(e.message, 'err'); });
+  }
+
+  function addTrade() {
+    var body = {
+      date: $('f_date').value || '',
+      code: $('f_code').value.trim(),
+      name: $('f_name').value.trim(),
+      side: $('f_side').value,
+      price: $('f_price').value,
+      qty: $('f_qty').value,
+      fee: $('f_fee').value || 0,
+      notes: $('f_notes').value.trim()
+    };
+    if (!body.code) { showMsg('股票代码不能为空', 'err'); return; }
+    if (!body.price || !body.qty) { showMsg('价格和数量必填', 'err'); return; }
+    clearMsg();
+    api('/api/admin/trades', { method: 'POST', body: body })
+      .then(function () {
+        showMsg('已保存', 'ok');
+        ['f_code', 'f_name', 'f_price', 'f_qty', 'f_fee', 'f_notes'].forEach(function (id) { $(id).value = ''; });
+        return loadHoldings();
+      })
+      .catch(function (e) { showMsg(e.message, 'err'); });
+  }
+
+  function removeTrade(id) {
+    if (!window.confirm('确定删除这条交易？')) { return; }
+    clearMsg();
+    api('/api/admin/trades/' + encodeURIComponent(id), { method: 'DELETE' })
+      .then(function () { showMsg('已删除', 'ok'); return loadHoldings(); })
+      .catch(function (e) { showMsg(e.message, 'err'); });
+  }
+
+  function clearAll() {
+    if (!window.confirm('确定清空全部交易记录？此操作不可撤销。')) { return; }
+    if (!window.confirm('再确认一次：真的要清空吗？')) { return; }
+    clearMsg();
+    api('/api/admin/trades', { method: 'DELETE' })
+      .then(function () { showMsg('已清空', 'ok'); return loadHoldings(); })
+      .catch(function (e) { showMsg(e.message, 'err'); });
+  }
+
+  // ---------- 登录 ----------
+  function showLogin(status) {
+    $('mainView').style.display = 'none';
+    $('logout').style.display = 'none';
+    $('loginView').style.display = 'block';
+    var tip = $('loginTip');
+    tip.textContent = '';
+    if (status && !status.enabled) {
+      var w = el('div', 'msg warn',
+        '管理端未启用：请先在部署环境变量设置 ADMIN_PASSWORD，然后重新部署。');
+      w.style.display = 'block';
+      tip.appendChild(w);
+      $('loginForm').style.display = 'none';
+      return;
+    }
+    $('loginForm').style.display = 'block';
+    if (status && !status.api_auth_token_set) {
+      var w2 = el('div', 'msg warn',
+        '提示：API_AUTH_TOKEN 未设置，普通写接口（/api/trades）目前无鉴权。建议一并配置。');
+      w2.style.display = 'block';
+      tip.appendChild(w2);
+    }
+    setTimeout(function () { $('pw').focus(); }, 50);
+  }
+
+  function showMain() {
+    $('loginView').style.display = 'none';
+    $('mainView').style.display = 'block';
+    $('logout').style.display = 'inline-block';
+    loadHoldings().catch(function (e) { showMsg(e.message, 'err'); });
+  }
+
+  function logout() {
+    token = '';
+    sessionStorage.removeItem(TOKEN_KEY);
+    showLogin();
+  }
+
+  function doLogin() {
+    var pw = $('pw').value;
+    if (!pw) { showMsg('请输入密码', 'err'); return; }
+    clearMsg();
+    fetch('/api/admin/login', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ password: pw })
+    })
+      .then(function (r) {
+        return r.json().catch(function () { return {}; }).then(function (d) {
+          if (!r.ok) { throw new Error(d.detail || '登录失败'); }
+          return d;
+        });
+      })
+      .then(function (d) {
+        token = d.token;
+        sessionStorage.setItem(TOKEN_KEY, token);
+        $('pw').value = '';
+        showMain();
+      })
+      .catch(function (e) { showMsg(e.message, 'err'); });
+  }
+
+  // ---------- 绑定 ----------
+  $('loginBtn').onclick = doLogin;
+  $('pw').addEventListener('keydown', function (e) { if (e.key === 'Enter') { doLogin(); } });
+  $('logout').onclick = logout;
+  $('bulkBtn').onclick = function () { submitBulk(false); };
+  $('bulkReplaceBtn').onclick = function () { submitBulk(true); };
+  $('addBtn').onclick = addTrade;
+  $('clearBtn').onclick = clearAll;
+
+  var today = new Date().toISOString().slice(0, 10);
+  $('f_date').value = today;
+
+  // 启动：先看状态，有令牌就直接进
+  fetch('/api/admin/status')
+    .then(function (r) { return r.json(); })
+    .then(function (st) {
+      if (!st.enabled) { showLogin(st); return; }
+      if (token) {
+        api('/api/admin/holdings')
+          .then(function (d) { showMain(); })
+          .catch(function () { showLogin(st); });
+      } else {
+        showLogin(st);
+      }
+    })
+    .catch(function () { showLogin({ enabled: true }); });
+})();
+</script>
+</body>
+</html>
