@@ -227,6 +227,23 @@ def compute_sector_momentum(
         if vals:
             medians[ind] = statistics.median(vals)
 
+    # 同花顺行业指数动量增强（fail-soft，需 HITHINK_FINANCE_API_KEY + 联网）：
+    # 用市场级板块指数近 window 日收益覆盖「候选股聚合」动量（更稳健，不依赖候选覆盖度）。
+    # 仅对能匹配到同花顺行业指数的 SW 行业生效；未匹配行业保留候选聚合值（行为不变）。
+    try:
+        from smcore.data import hithink as _hk
+        if _hk.available():
+            from smcore.data.hithink_special import sector_momentum_map, _match_ths_sector
+            # 只拉候选实际覆盖的行业（白名单），避免全市场 ~320 个指数历史K
+            ths = sector_momentum_map("industry", window=20, names=list(medians.keys())) or {}
+            if ths:
+                for ind in list(medians.keys()):
+                    m = _match_ths_sector(ind, ths)
+                    if m is not None:
+                        medians[ind] = ths[m]
+    except Exception:
+        pass
+
     # 板块动量加成幅度：随板块截面离散度自适应（离散越大→对强势板块倾斜越强），
     # 替代写死的 SECTOR_MOMENTUM_BONUS=6.0；risk_rules 不可达时回退该常量。
     try:

@@ -187,13 +187,39 @@ def fetch_cash_flow_statements(code, period: str = "annual", limit: int = 4) -> 
     return data.get("item") or [] if data else []
 
 
-def fetch_valuation(code) -> dict | None:
-    """估值快照（PE/PB/PS/PC）。
+def fetch_valuation(codes) -> dict:
+    """A 股估值快照（批量）→ {code6: {pe, pb, ps, pcf, pe_mrq}}。
 
-    注意: 已抓取契约(llms-full.txt)未暴露估值端点，暂返回 None。
-    待持有 Key 后实测补充；现有估值仍走腾讯 qt.gtimg.cn（fundamental.py）。
+    GET /api/a-share/valuations/snapshot?thscodes=...，单次 ≤100 只（服务端硬上限）。
+    返回字段：pe_ttm/pe_mrq/pb_mrq/ps_ttm/pcf_ttm。本系统映射 pe=pe_ttm、pb=pb_mrq。
+    **不含市值**（mkt_cap 仍走腾讯 qt.gtimg.cn）。fail-soft：无 Key/失败返回 {}。
     """
-    return None
+    if not _API_KEY:
+        return {}
+    if isinstance(codes, (str, int)):
+        codes = [str(codes)]
+    ts_list = [to_thscode(c) for c in codes]
+    ts_list = [t for t in ts_list if t]
+    if not ts_list:
+        return {}
+    out: dict = {}
+    for i in range(0, len(ts_list), 100):
+        batch = ts_list[i : i + 100]
+        data = _get("/api/a-share/valuations/snapshot", {"thscodes": ",".join(batch)})
+        if not data:
+            continue
+        for it in data.get("item") or []:
+            c6 = format_stock_code(it.get("ticker") or "")
+            if not c6:
+                continue
+            out[c6] = {
+                "pe": _num(it.get("pe_ttm")),
+                "pe_mrq": _num(it.get("pe_mrq")),
+                "pb": _num(it.get("pb_mrq")),
+                "ps": _num(it.get("ps_ttm")),
+                "pcf": _num(it.get("pcf_ttm")),
+            }
+    return out
 
 
 # ───────────────────────── 特色数据（本项目原本缺失） ─────────────────────────
@@ -257,3 +283,117 @@ def search_ticker(q: str, limit: int = 10) -> list:
 def trading_days() -> list:
     data = _get("/api/a-share/calendar/trading-days")
     return data.get("item") or [] if data else []
+
+
+# ───────────────────────── 个股异动原因（事件催化增强） ─────────────────────────
+def anomaly_list(tag_codes: str | None = None) -> list:
+    """当日个股异动原因列表；tag_codes=逗号分隔(LIMIT_UP/SHARP_RISE/RAPID_RALLY/...)，空=全部。"""
+    params = {"tag_codes": tag_codes} if tag_codes else None
+    return _special("/api/a-share/special-data/anomaly-analysis-list", params)
+
+
+def anomaly_stock(thscodes) -> list:
+    """按 thscode 批量查当日异动原因（≤50）。thscodes 可 6位/ths/list。返回含 keyword_list 催化剂标签。"""
+    if isinstance(thscodes, (list, tuple, set)):
+        ts = [to_thscode(c) for c in thscodes]
+    else:
+        ts = [to_thscode(thscodes)]
+    ts = [t for t in ts if t]
+    if not ts:
+        return []
+    return _special("/api/a-share/special-data/anomaly-analysis-stock", {"thscodes": ",".join(ts)})
+
+
+# ───────────────────────── 指数历史K + 快照（板块动量源） ─────────────────────────
+def fetch_index_historical(thscode, start: date, end: date, interval: str = "1d") -> pd.DataFrame:
+    """板块/行业/标准指数历史日 K。thscode 为指数 thscode（如 886042.TI / 000001.SH / 881101.TI）。"""
+    ts = str(thscode).strip().upper()
+    if not ts:
+        return pd.DataFrame()
+    data = _get(
+        "/api/a-share-index/prices/historical",
+        {"thscode": ts, "interval": interval, "start": _ms(start), "end": _ms(end)},
+    )
+    if not data:
+        return pd.DataFrame()
+    items = data.get("item") or []
+    rows = [
+        {
+            "date": _ms_to_date(it.get("date_ms")),
+            "open": _num(it.get("open_price")),
+            "high": _num(it.get("high_price")),
+            "low": _num(it.get("low_price")),
+            "close": _num(it.get("close_price")),
+            "volume": _num(it.get("volume")),
+            "amount": _num(it.get("turnover")),
+        }
+        for it in items
+        if it.get("date_ms")
+    ]
+    return pd.DataFrame(rows, columns=["date", "open", "high", "low", "close", "volume", "amount"])
+
+
+def fetch_index_snapshot(thscodes) -> pd.DataFrame:
+    """指数最新行情快照；thscodes 可 6位/ths/list。"""
+    if isinstance(thscodes, (list, tuple, set)):
+        ts = [str(t).strip().upper() for t in thscodes]
+    else:
+        ts = [str(thscodes).strip().upper()]
+    ts = [t for t in ts if t]
+    if not ts:
+        return pd.DataFrame()
+    data = _get("/api/a-share-index/prices/snapshot", {"thscodes": ",".join(ts)})
+    if not data:
+        return pd.DataFrame()
+    return pd.DataFrame(data.get("item") or [])
+
+
+# ───────────────────────── 复权因子事件流（qfq 守卫加固） ─────────────────────────
+def fetch_adjustment_factors(thscode, start: str | None = None, end: str | None = None) -> list:
+    """复权因子事件流（现金分红 + 送股）。thscode 单只；start/end 为 YYYY-MM-DD（可选）。"""
+    ts = to_thscode(thscode)
+    if not ts:
+        return []
+    params: dict = {"thscode": ts}
+    if start:
+        params["from"] = start
+    if end:
+        params["end"] = end
+    data = _get("/api/a-share/corporate-actions/adjustment-factors", params)
+    return data.get("item") or [] if data else []
+
+
+def derive_qfq_factor(events: list, as_of: date) -> float | None:
+    """由复权因子事件流推导截至 as_of 的前复权累计调整系数（价格比，不含 as_of 当日除权）。
+
+    前复权口径：历史价格 = 当日价格 / 累计因子。因子 = Π(1 + 每股分红/前收盘 + 每股送股)。
+    这里以「除权日 < as_of」的事件累乘近似（忽略精确前收，用于守卫交叉校验的容差比较）。
+    无事件返回 None（不约束）。
+    """
+    if not events:
+        return None
+    cum = 1.0
+    any_event = False
+    for ev in events:
+        ex_ms = ev.get("ex_date_ms")
+        if not ex_ms:
+            continue
+        ex_d = _ms_to_date(ex_ms)
+        if not ex_d:
+            continue
+        # 仅计入 as_of 之前的除权事件
+        try:
+            if _to_date(ex_d) >= as_of:
+                continue
+        except Exception:
+            continue
+        div = _num(ev.get("dividend_per_share")) or 0.0
+        bonus = _num(ev.get("per_share_bonus")) or 0.0
+        # 简化：以(分红+送股*近似价)无法得精确前收，这里用(1+送股比例)代表股本扩张，
+        # 分红影响在本次近似中并入（守卫仅做容差级别交叉校验）。
+        factor = 1.0 + bonus
+        if factor <= 0:
+            continue
+        cum *= factor
+        any_event = True
+    return cum if any_event else None

@@ -14,6 +14,7 @@
 """
 from __future__ import annotations
 
+from datetime import date, timedelta
 from typing import Optional
 
 from smcore.utils.code import from_thscode
@@ -96,3 +97,150 @@ def concept_stocks_map(tag: str = "cn_concept", *, codes_only: bool = True) -> d
 def concept_stocks_for(concept_thscode: str) -> list[str]:
     """单个板块的成分股 6 位代码列表。"""
     return _codes_from_items(_hk.concept_stocks(concept_thscode))
+
+
+# ───────────────────────── 个股异动原因（事件催化增强） ─────────────────────────
+def anomaly_codes(tag_codes: str | None = None) -> list[str]:
+    """异动股 6 位代码列表（按标签过滤可选）。"""
+    return _codes_from_items(_hk.anomaly_list(tag_codes))
+
+
+def anomaly_stock_raw(thscodes) -> list:
+    """按代码批量异动原因原始明细（含 keyword_list 催化剂标签、tag_name）。"""
+    return _hk.anomaly_stock(thscodes)
+
+
+def anomaly_keywords_for(code6: str) -> list[str]:
+    """某股当日异动关键词（催化剂标签，如 ["白酒","消费"]），供 theme 策略事件增强。去重保序。"""
+    items = _hk.anomaly_stock([code6]) or []
+    out: list[str] = []
+    for it in items:
+        for k in it.get("keyword_list") or []:
+            if k not in out:
+                out.append(k)
+    return out
+
+
+# ───────────────────────── 板块动量（风险四层中性化源） ─────────────────────────
+_SECTOR_MOM_CACHE: dict = {}
+
+
+def sector_momentum_map(tag: str = "industry", window: int = 20, *, use_cache: bool = True,
+                         names: Optional[list] = None) -> dict:
+    """同花顺行业/概念指数近 window 交易日收益 → {板块名: 收益率}。fail-soft。
+
+    用作风险四层中性化「板块动量」的权威源（替代/补充候选股 ret20 聚合）。
+    进程内按 (tag, window, 今日) 缓存，避免每次融合重复打指数历史K。
+    names: 行业名白名单（可选）。传入时只对匹配的白名单行业拉历史K，大幅减少调用数
+    （候选通常 <30 个行业，而非全市场 ~320 个），利于 CI 运行时与限速。
+    无 Key / 失败返回 {}。
+    """
+    global _SECTOR_MOM_CACHE
+    today = date.today().strftime("%Y%m%d")
+    cache_key = (tag, window, today, tuple(sorted(names)) if names else None)
+    if use_cache and cache_key in _SECTOR_MOM_CACHE:
+        return _SECTOR_MOM_CACHE[cache_key]
+    if not _hk.available():
+        return {}
+    cats = _hk.concept_list(tag) or []
+    if names:
+        wl = set(names)
+        cats = [
+            c for c in cats
+            if (c.get("name") in wl)
+            or any((n in (c.get("name") or "")) or ((c.get("name") or "") in n) for n in wl)
+        ]
+    end = date.today()
+    start = end - timedelta(days=window * 2 + 15)
+    out: dict = {}
+    for cat in cats:
+        ths = cat.get("thscode")
+        name = cat.get("name")
+        if not ths or not name:
+            continue
+        df = _hk.fetch_index_historical(ths, start, end)
+        if df is None or df.empty or len(df) < 2:
+            continue
+        closes = df["close"].dropna()
+        if len(closes) < 2:
+            continue
+        base = closes.iloc[-window - 1] if len(closes) > window else closes.iloc[0]
+        last = closes.iloc[-1]
+        if base and base > 0:
+            out[name] = round(float((last - base) / base), 4)
+    _SECTOR_MOM_CACHE[cache_key] = out
+    return out
+
+
+def _match_ths_sector(industry: str, ths: dict) -> Optional[str]:
+    """SW 行业名 → 同花顺行业指数名 的最佳匹配（精确 / 包含）。无匹配返回 None。"""
+    if not industry or industry in ("未知",):
+        return None
+    if industry in ths:
+        return industry
+    for k in ths:
+        if industry and (industry in k or k in industry):
+            return k
+    return None
+
+
+# ───────────────────────── 复权因子事件流 × qfq 守卫交叉校验 ─────────────────────────
+def corporate_action_explains(code6: str, break_date: str, ratio: float,
+                              prev_close: float | None = None, tol: float = 0.03) -> bool:
+    """该复权断层是否由真实分红/送股解释（break_date 邻近有除权事件且幅度吻合）。
+
+    前复权序列上真实分红本不应产生断层；若出现断层且金额/送股比与同期除权事件吻合，
+    说明是「缓存基准过期、需全量重拉」的预期事件，而非数据损坏。fail-soft：无 Key/异常→False。
+    """
+    if not _hk.available() or not code6 or not break_date:
+        return False
+    try:
+        evs = _hk.fetch_adjustment_factors(code6)
+    except Exception:
+        return False
+    if not evs:
+        return False
+    from datetime import date as _date
+    try:
+        brk_d = _date.fromisoformat(break_date) if "-" in break_date else None
+    except Exception:
+        brk_d = None
+    if brk_d is None:
+        return False
+    for ev in evs:
+        ex = _hk._ms_to_date(ev.get("ex_date_ms"))
+        if not ex:
+            continue
+        try:
+            ex_d = _date.fromisoformat(ex) if "-" in ex else None
+        except Exception:
+            ex_d = None
+        if ex_d is None or abs((ex_d - brk_d).days) > 3:
+            continue
+        div = _hk._num(ev.get("dividend_per_share")) or 0.0
+        bonus = _hk._num(ev.get("per_share_bonus")) or 0.0
+        if prev_close and prev_close > 0:
+            expected = (1.0 - div / prev_close) / (1.0 + bonus)
+            if expected > 0 and abs(ratio - expected) <= tol:
+                return True
+        else:
+            return True  # 无前收则仅按邻近除权事件存在判定（宽松）
+    return False
+
+
+def classify_breaks(code6: str, breaks: list) -> list:
+    """给 find_price_breaks 的断层列表加 explained_by_corporate_action 标注（fail-soft）。"""
+    out: list = []
+    for b in breaks or []:
+        prev = b.get("prev_close")
+        try:
+            explained = corporate_action_explains(
+                code6, b.get("date", ""), float(b.get("ratio", 1.0)),
+                float(prev) if prev is not None else None,
+            )
+        except Exception:
+            explained = False
+        nb = dict(b)
+        nb["explained_by_corporate_action"] = explained
+        out.append(nb)
+    return out

@@ -45,6 +45,9 @@ PRICE_LIMIT_BJ = float(os.getenv("KLINE_LIMIT_BJ", "30"))          # 北交所 8
 PRICE_LIMIT_MARGIN = float(os.getenv("KLINE_LIMIT_MARGIN", "1.15"))  # 余量，吸收停复牌等边缘情形
 JUMP_SKIP_HEAD_BARS = int(os.getenv("KLINE_JUMP_SKIP_HEAD", "10"))   # 新股上市初期不设涨跌幅限制
 
+# 同花顺复权因子事件流对 qfq 守卫的交叉校验（默认开；无 Key/异常自动跳过，不改动重拉行为）
+HITHINK_QFQ_CHECK = os.getenv("HITHINK_QFQ_CHECK", "1") == "1"
+
 
 def price_limit_ratio(code6: str) -> float:
     """该股单日价格变动的物理上限（比值，如 1.115）。超过即非市场行为。"""
@@ -352,6 +355,23 @@ def fetch_daily_k(
     # ② 整段自洽性检查：任何非市场跳变都触发全量重拉
     if not merged.empty:
         breaks = find_price_breaks(merged, code6)
+        if breaks and HITHINK_QFQ_CHECK:
+            # 交叉校验：断层若由真实分红/送股解释，则属「缓存基准过期需重拉」的预期事件；
+            # 无法解释的断层疑似真实数据错误，单独告警（仍触发下方全量重拉，安全不变）。
+            try:
+                from smcore.data import hithink as _hk
+                if _hk.available():
+                    from smcore.data.hithink_special import classify_breaks
+                    breaks = classify_breaks(code6, breaks)
+                    _unexplained = [b for b in breaks if not b.get("explained_by_corporate_action")]
+                    if _unexplained:
+                        import warnings as _w
+                        _w.warn(
+                            f"[kline] {code6} {len(_unexplained)} 处复权断层无法用分红/送股解释"
+                            f"（疑似真实数据错误，将触发全量重拉）；可解释={len(breaks) - len(_unexplained)}"
+                        )
+            except Exception:
+                pass
         if breaks:
             if (not force_refresh) and (not _no_retry):
                 return fetch_daily_k(

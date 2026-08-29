@@ -188,22 +188,37 @@ def get_valuation(code: str, *, force: bool = False) -> Optional[dict]:
             fresh = _fetch_spot_online([code6])
             if fresh is not None:
                 df = fresh
-    if df is None or "代码" not in df.columns:
-        return None
-    row = df[df["代码"] == code6]
-    if row.empty:
-        return None
-    r = row.iloc[0]
     out: dict = {}
-    for src, dst in (("pe", "pe"), ("pb", "pb"), ("mkt_cap", "mkt_cap")):
-        if src in r.index:
-            try:
-                v = float(r[src])
-                if pd.notna(v) and v > 0:
-                    out[dst] = v
-            except (TypeError, ValueError):
-                pass
+    if df is not None and "代码" in df.columns:
+        row = df[df["代码"] == code6]
+        if not row.empty:
+            r = row.iloc[0]
+            for src, dst in (("pe", "pe"), ("pb", "pb"), ("mkt_cap", "mkt_cap")):
+                if src in r.index:
+                    try:
+                        v = float(r[src])
+                        if pd.notna(v) and v > 0:
+                            out[dst] = v
+                    except (TypeError, ValueError):
+                        pass
+    # 同花顺估值（如配置 Key）增强：pe/pb/ps/pcf 优先用 THS（比腾讯多 PS/PCF 两口径），
+    # mkt_cap 腾讯无对应字段，保留腾讯值（THS 估值端点不含市值）。无 Key 时整体跳过。
+    hk = _fetch_valuation_hithink(code6)
+    if hk:
+        for k in ("pe", "pb", "ps", "pcf"):
+            if hk.get(k) is not None:
+                out[k] = hk[k]
     return out or None
+
+
+def _fetch_valuation_hithink(code6: str) -> Optional[dict]:
+    """同花顺估值快照 → {pe, pb, ps, pcf}（pe=pe_ttm, pb=pb_mrq）。fail-soft。"""
+    from smcore.data import hithink as _hk
+
+    if not _hk.available():
+        return None
+    v = _hk.fetch_valuation([code6])
+    return v.get(code6) if v else None
 
 
 # ───────────────────────── 质量 + 成长（baostock） ─────────────────────────
