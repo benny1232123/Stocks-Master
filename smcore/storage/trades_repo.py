@@ -72,6 +72,44 @@ def _to_app_trade(row: dict[str, Any], fallback_id: Any = None) -> dict[str, Any
     }
 
 
+#: 应用内部键名 → Supabase 列名
+_APP_TO_DB_KEYS = {
+    "date": "trade_date",
+    "code": "code",
+    "name": "name",
+    "side": "side",
+    "price": "price",
+    "qty": "quantity",
+    "fee": "fee",
+    "notes": "notes",
+}
+
+
+def _partial_to_db(updates: dict[str, Any]) -> dict[str, Any]:
+    """把**局部**更新字段从应用键名映射到 DB 列名。
+
+    注意：不能用 :func:`_to_db_trade` —— 它会把未提供的字段补成空串/0，
+    用于 UPDATE 会把该行其余列清空。这里只转换**显式传入**的键。
+    """
+    row: dict[str, Any] = {}
+    for key, value in (updates or {}).items():
+        if key not in _APP_TO_DB_KEYS:
+            continue
+        col = _APP_TO_DB_KEYS[key]
+        if key == "code":
+            row[col] = format_stock_code(str(value)) or str(value).strip()
+        elif key == "side":
+            row[col] = "BUY" if str(value).lower() == "buy" else "SELL"
+        elif key in ("price", "qty", "fee"):
+            try:
+                row[col] = float(value)
+            except (TypeError, ValueError):
+                continue
+        else:
+            row[col] = str(value)
+    return row
+
+
 def _to_db_trade(trade: dict[str, Any]) -> dict[str, Any]:
     side = str(trade.get("side", "buy")).lower()
     return {
@@ -112,6 +150,11 @@ class TradeBackend(ABC):
     @abstractmethod
     def append_many(self, trades: list[dict[str, Any]]) -> int:
         """批量追加（一次往返写多条），返回成功写入条数。"""
+        raise NotImplementedError
+
+    @abstractmethod
+    def update_by_id(self, trade_id: Any, updates: dict[str, Any]) -> bool:
+        """按 id 局部更新字段（用于管理端修改持仓）。"""
         raise NotImplementedError
 
 
@@ -165,6 +208,22 @@ class JsonTradeBackend(TradeBackend):
             t.pop("id", None)
         self.replace_all(merged)
         return len(trades)
+
+    def update_by_id(self, trade_id: Any, updates: dict[str, Any]) -> bool:
+        """按下标局部更新（JSON 后端用列表下标当 id）。"""
+        trades = self.load_all()
+        try:
+            idx = int(trade_id)
+        except (TypeError, ValueError):
+            return False
+        if idx < 0 or idx >= len(trades):
+            return False
+        for key, value in (updates or {}).items():
+            trades[idx][key] = value
+        for t in trades:
+            t.pop("id", None)
+        self.replace_all(trades)
+        return True
 
     def append(self, trade: dict[str, Any]) -> None:
         trades = self.load_all()
@@ -255,6 +314,19 @@ class SupabaseTradeBackend(TradeBackend):
         rows = [_to_db_trade(t) for t in trades]
         resp = self._client.table("trades").insert(rows).execute()
         return len(resp.data or [])
+
+    def update_by_id(self, trade_id: Any, updates: dict[str, Any]) -> bool:
+        """按自增 id 局部更新字段。updates 用应用内部键名（date/price/qty/side...）。"""
+        try:
+            tid = int(trade_id)
+        except (TypeError, ValueError):
+            return False
+        # 只更新显式传入的字段（_partial_to_db 不会补全其余列，避免清空数据）
+        row = _partial_to_db(updates)
+        if not row:
+            return False
+        resp = self._client.table("trades").update(row).eq("id", tid).execute()
+        return bool(resp.data)
 
 
 class TradeRepository:
@@ -353,6 +425,14 @@ class TradeRepository:
         except Exception as exc:
             logger.warning("%s 批量写入失败，回退 trades.json: %s", self._backend.name, exc)
             return int(self._fallback.append_many(trades))
+
+    def update_by_id(self, trade_id: Any, updates: dict[str, Any]) -> bool:
+        """按 id 局部更新。云端失败不回退 JSON（避免改到本地副本造成两边不一致）。"""
+        try:
+            return bool(self._backend.update_by_id(trade_id, updates))
+        except Exception as exc:
+            logger.warning("%s 更新单条失败: %s", self._backend.name, exc)
+            return False
 
 
 _repo: TradeRepository | None = None

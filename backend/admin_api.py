@@ -158,10 +158,16 @@ def post_snapshot(payload: dict[str, Any], _: None = Depends(_require_admin)) ->
 
 @router.post("/trades")
 def post_trade(payload: dict[str, Any], _: None = Depends(_require_admin)) -> dict[str, Any]:
-    """完整录入一笔交易（date/code/side/price/qty 必填）。"""
-    code = str(payload.get("code", "")).strip()
-    if not code:
+    """完整录入一笔交易（code/side/price/qty 必填；code 可用名称）。"""
+    from smcore.holdings_snapshot import resolve_identifier
+
+    code_raw = str(payload.get("code", "")).strip()
+    if not code_raw:
         raise HTTPException(status_code=400, detail="股票代码不能为空")
+    code, resolved_name, err = resolve_identifier(code_raw)
+    if not code:
+        raise HTTPException(status_code=400, detail=err or "股票代码或名称无效")
+
     try:
         price = float(payload.get("price", 0))
         qty = int(payload.get("qty", 0))
@@ -180,7 +186,7 @@ def post_trade(payload: dict[str, Any], _: None = Depends(_require_admin)) -> di
     trade = {
         "date": str(payload.get("date") or _date.today().isoformat()),
         "code": code,
-        "name": str(payload.get("name", "")).strip() or code,
+        "name": str(payload.get("name", "")).strip() or resolved_name or code,
         "side": side,
         "price": price,
         "qty": qty,
@@ -193,6 +199,92 @@ def post_trade(payload: dict[str, Any], _: None = Depends(_require_admin)) -> di
         raise HTTPException(status_code=400, detail=str(exc))
 
     return {"count": len(trades), "latest": trade}
+
+
+@router.get("/resolve")
+def resolve_stock(q: str, _: None = Depends(_require_admin)) -> dict[str, Any]:
+    """按股票**名称或代码**查候选，供录入时即时校验/补全。
+
+    ``?q=贵州茅台`` → ``{"ok": true, "code": "600519", "name": "贵州茅台", "candidates": [...]}``
+    """
+    from smcore.holdings_snapshot import resolve_identifier
+
+    code, name, err = resolve_identifier(q)
+    return {
+        "query": q,
+        "ok": bool(code),
+        "code": code,
+        "name": name,
+        "error": err,
+        "candidates": ([] if code else _lookup_candidates(q)),
+    }
+
+
+def _lookup_candidates(q: str, limit: int = 8) -> list[dict[str, Any]]:
+    from smcore.stock_names import lookup_candidates
+
+    try:
+        return lookup_candidates(q, limit=limit)
+    except Exception:
+        return []
+
+
+@router.put("/trades/{trade_id}")
+def update_trade(
+    trade_id: str,
+    payload: dict[str, Any],
+    _: None = Depends(_require_admin),
+) -> dict[str, Any]:
+    """修改一笔交易（用于「更改持仓」：改成本价 / 股数 / 日期等）。
+
+    只更新**显式传入**的字段，可传：date / code / name / side / price / qty / fee / notes。
+    """
+    repo = get_trade_repository()
+
+    allowed = ("date", "code", "name", "side", "price", "qty", "fee", "notes")
+    updates: dict[str, Any] = {}
+    for key in allowed:
+        if key not in payload:
+            continue
+        value = payload[key]
+        if key in ("price", "qty", "fee"):
+            try:
+                value = float(value)
+            except (TypeError, ValueError):
+                raise HTTPException(status_code=400, detail=f"{key} 必须是数字")
+            if key == "price" and value <= 0:
+                raise HTTPException(status_code=400, detail="价格必须 > 0")
+            if key == "qty" and value <= 0:
+                raise HTTPException(status_code=400, detail="数量必须 > 0")
+            if key == "fee" and value < 0:
+                raise HTTPException(status_code=400, detail="手续费不能为负")
+        elif key == "side":
+            if str(value).lower() not in ("buy", "sell"):
+                raise HTTPException(status_code=400, detail="side 只能是 buy/sell")
+            value = str(value).lower()
+        elif key == "code":
+            from smcore.holdings_snapshot import resolve_identifier
+
+            code, name, err = resolve_identifier(str(value))
+            if not code:
+                raise HTTPException(status_code=400, detail=err or "股票代码或名称无效")
+            updates["code"] = code
+            if "name" not in payload and name:
+                updates["name"] = name
+            continue
+        else:
+            value = str(value)
+        updates[key] = value
+
+    if not updates:
+        raise HTTPException(status_code=400, detail="没有需要更新的字段")
+
+    if not repo.update_by_id(trade_id, updates):
+        raise HTTPException(
+            status_code=404,
+            detail=f"未找到 id={trade_id} 的交易，或其后端不支持按 id 更新",
+        )
+    return {"status": "ok", "updated": trade_id, "fields": sorted(updates.keys())}
 
 
 @router.delete("/trades/{trade_id}")

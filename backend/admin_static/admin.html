@@ -52,6 +52,8 @@
   .center{max-width:360px;margin:80px auto}
   .del{padding:2px 8px;font-size:12px;color:var(--danger);border-color:#fecaca}
   .del:hover{background:#fef2f2}
+  button.small{padding:3px 10px;font-size:12px;margin-right:4px}
+  td input{width:88px;padding:4px 6px;font-size:13px}
   code{background:#f3f4f6;padding:1px 5px;border-radius:4px;font-size:12px}
 </style>
 </head>
@@ -88,14 +90,13 @@
     </div>
 
     <div class="card">
-      <h2>⚡ 快速录入（只需代码 + 数量）</h2>
+      <h2>⚡ 快速录入（名称 + 成本价 + 股数）</h2>
       <p class="hint">
-        忘了买入时间和成本价也能录。每行一只，代码和数量用空格或逗号隔开，名称可省略：<br>
-        <code>600519 100 贵州茅台</code> ・ <code>000001,1000</code><br>
-        日期默认今天；成本价自动取该股最新收盘价<b>占位</b>。
-        每日个股分析报告只按代码出技术面与基本面，<b>不含成本与盈亏</b>，所以占位不影响日报内容。
+        每行一只，格式：<b>股票名称 成本价 股数</b>（也可用 6 位代码，名称支持简称如「茅台」）：<br>
+        <code>贵州茅台 1500 100</code> ・ <code>600036 40.5 500</code> ・ <code>茅台 100</code>（不填成本价则自动按最新收盘占位）<br>
+        日期默认今天，无需填写。
       </p>
-      <textarea id="bulk" placeholder="600519 100 贵州茅台&#10;000001 1000 平安银行&#10;600036 500"></textarea>
+      <textarea id="bulk" placeholder="贵州茅台 1500 100&#10;平安银行 11.2 1000&#10;600036 40.5 500&#10;比亚迪 100"></textarea>
       <div class="actions">
         <button class="primary" id="bulkBtn">导入持仓</button>
         <button id="bulkReplaceBtn">导入并覆盖（先清空）</button>
@@ -106,7 +107,7 @@
       <h2>完整录入（知道成交明细时）</h2>
       <div class="row">
         <div><label>日期</label><input id="f_date" type="date"></div>
-        <div><label>代码</label><input id="f_code" placeholder="600519"></div>
+        <div><label>代码或名称</label><input id="f_code" placeholder="600519 / 贵州茅台"></div>
         <div><label>名称</label><input id="f_name" placeholder="贵州茅台"></div>
         <div><label>方向</label><select id="f_side"><option value="buy">买入</option><option value="sell">卖出</option></select></div>
         <div><label>价格</label><input id="f_price" type="number" step="0.01" min="0" placeholder="0.00"></div>
@@ -218,8 +219,8 @@
 
     var t = el('table');
     var thead = el('thead'), htr = el('tr');
-    ['代码', '名称', '买入日期', '数量', '成本价', '现价', '浮动盈亏', '收益率%'].forEach(function (h, i) {
-      var th = el('th', i >= 3 ? 'num' : null, h);
+    ['代码', '名称', '买入日期', '数量', '成本价', '现价', '浮动盈亏', '收益率%', '操作'].forEach(function (h, i) {
+      var th = el('th', (i >= 3 && i <= 7) ? 'num' : null, h);
       htr.appendChild(th);
     });
     thead.appendChild(htr); t.appendChild(thead);
@@ -241,6 +242,16 @@
       var cls = (pl === null || pl === undefined) ? 'muted' : (pl >= 0 ? 'up' : 'down');
       tr.appendChild(el('td', 'num ' + cls, pl === null || pl === undefined ? '—' : (pl >= 0 ? '+' : '') + fmtNum(pl)));
       tr.appendChild(el('td', 'num ' + cls, pct === null || pct === undefined ? '—' : (pct >= 0 ? '+' : '') + fmtNum(pct) + '%'));
+
+      // 操作列：编辑（改成本价/数量）
+      var actTd = el('td');
+      var code = String(p['代码'] || '');
+      var btn = el('button', 'small', '编辑');
+      btn.onclick = function () {
+        startEditPositionRow(tr, d, code, Number(p['数量'] || 0), Number(p['成本价'] || 0));
+      };
+      actTd.appendChild(btn);
+      tr.appendChild(actTd);
       tb.appendChild(tr);
     });
     t.appendChild(tb);
@@ -257,7 +268,7 @@
     }
     var t = el('table');
     var thead = el('thead'), htr = el('tr');
-    ['日期', '代码', '名称', '方向', '价格', '数量', '手续费', '备注', ''].forEach(function (h, i) {
+    ['日期', '代码', '名称', '方向', '价格', '数量', '手续费', '备注', '操作'].forEach(function (h, i) {
       htr.appendChild(el('th', (i >= 4 && i <= 6) ? 'num' : null, h));
     });
     thead.appendChild(htr); t.appendChild(thead);
@@ -276,9 +287,12 @@
       tr.appendChild(el('td', 'muted', tr_.notes || '—'));
 
       var td = el('td');
-      var btn = el('button', 'del', '删除');
-      btn.onclick = function () { removeTrade(tr_.id); };
-      td.appendChild(btn);
+      var editBtn = el('button', 'small', '编辑');
+      editBtn.onclick = function () { startEditTradeRow(tr, tr_); };
+      var delBtn = el('button', 'del', '删除');
+      delBtn.onclick = function () { removeTrade(tr_.id); };
+      td.appendChild(editBtn);
+      td.appendChild(delBtn);
       tr.appendChild(td);
       tb.appendChild(tr);
     });
@@ -300,17 +314,26 @@
     text.split(/\r?\n/).forEach(function (line) {
       line = line.trim();
       if (!line || line.charAt(0) === '#') { return; }
-      // 支持 "代码 数量 名称" 或 "代码,数量,名称"
+      // 格式：名称/代码 [成本价] 股数 —— 从右往左拆，兼容带空格的名称（如「万 科Ａ」）
       var parts = line.split(/[\s,，\t]+/).filter(function (s) { return s.length; });
       if (parts.length < 2) { return; }
-      out.push({ code: parts[0], qty: parts[1], name: parts.slice(2).join(' ') || '' });
+      var qty = parts[parts.length - 1];
+      var price = '';
+      var idParts;
+      if (parts.length >= 3) {
+        price = parts[parts.length - 2];
+        idParts = parts.slice(0, parts.length - 2);
+      } else {
+        idParts = parts.slice(0, parts.length - 1);
+      }
+      out.push({ code: idParts.join(' '), price: price, qty: qty });
     });
     return out;
   }
 
   function submitBulk(replace) {
     var items = parseBulk($('bulk').value);
-    if (!items.length) { showMsg('请先填写，每行一只：代码 数量 [名称]', 'err'); return; }
+    if (!items.length) { showMsg('请先填写，每行一只：名称 成本价 股数', 'err'); return; }
     clearMsg();
     api('/api/admin/holdings/snapshot', { method: 'POST', body: { items: items, replace: !!replace } })
       .then(function (d) {
@@ -354,6 +377,64 @@
     clearMsg();
     api('/api/admin/trades/' + encodeURIComponent(id), { method: 'DELETE' })
       .then(function () { showMsg('已删除', 'ok'); return loadHoldings(); })
+      .catch(function (e) { showMsg(e.message, 'err'); });
+  }
+
+  // ---------- 编辑持仓 ----------
+  function makeInlineCells(tr, priceIdx, qtyIdx, tradeId) {
+    var cells = tr.children;
+    var priceCell = cells[priceIdx], qtyCell = cells[qtyIdx], actCell = cells[cells.length - 1];
+
+    var priceInput = document.createElement('input');
+    priceInput.type = 'number'; priceInput.min = '0'; priceInput.step = '0.01';
+    priceInput.value = priceCell.textContent.trim() || '';
+    var qtyInput = document.createElement('input');
+    qtyInput.type = 'number'; qtyInput.min = '1'; qtyInput.step = '1';
+    qtyInput.value = qtyCell.textContent.trim() || '';
+
+    priceCell.textContent = ''; qtyCell.textContent = '';
+    priceCell.appendChild(priceInput);
+    qtyCell.appendChild(qtyInput);
+
+    actCell.textContent = '';
+    var saveBtn = el('button', 'primary small', '保存');
+    saveBtn.onclick = function () {
+      saveTradeEdit(tradeId, priceInput.value, qtyInput.value);
+    };
+    var cancelBtn = el('button', 'small', '取消');
+    cancelBtn.onclick = function () { loadHoldings(); };
+    actCell.appendChild(saveBtn);
+    actCell.appendChild(cancelBtn);
+    priceInput.focus();
+    return { priceInput: priceInput, qtyInput: qtyInput };
+  }
+
+  // 持仓表行编辑：成本价、数量 在第 4、3 列
+  function startEditPositionRow(tr, d, code, qty, cost) {
+    var buys = (d.trades || []).filter(function (t) {
+      return t.side === 'buy' && String(t.code) === String(code);
+    });
+    if (!buys.length) { showMsg('找不到 ' + code + ' 的买入记录，请到下方「交易流水」查看', 'err'); return; }
+    if (buys.length > 1) {
+      showMsg(code + ' 有多笔买入（' + buys.length + ' 笔），请到下方「交易流水」逐笔修改', 'warn');
+      return;
+    }
+    makeInlineCells(tr, 4, 3, buys[0].id);
+  }
+
+  // 流水表行编辑：价格、数量 在第 5、6 列（0 基）
+  function startEditTradeRow(tr, trade) {
+    makeInlineCells(tr, 4, 5, trade.id);
+  }
+
+  function saveTradeEdit(id, price, qty) {
+    var body = {};
+    if (price !== '' && price !== null && price !== undefined) { body.price = price; }
+    if (qty !== '' && qty !== null && qty !== undefined) { body.qty = qty; }
+    if (!Object.keys(body).length) { showMsg('没有要保存的修改', 'err'); return; }
+    clearMsg();
+    api('/api/admin/trades/' + encodeURIComponent(id), { method: 'PUT', body: body })
+      .then(function () { showMsg('已更新', 'ok'); return loadHoldings(); })
       .catch(function (e) { showMsg(e.message, 'err'); });
   }
 

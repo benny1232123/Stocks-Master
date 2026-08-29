@@ -81,16 +81,51 @@ def resolve_placeholder_price(code: str) -> tuple[float | None, str]:
     return None, ""
 
 
+def resolve_identifier(raw: str) -> tuple[str, str, str]:
+    """把用户输入解析为 ``(code, name, error)``。
+
+    ``raw`` 可以是 6 位代码（``600519``），也可以是股票名称（``贵州茅台`` / ``茅台``）。
+    解析失败时 ``code`` 为空，``error`` 说明原因（歧义时会列出候选，方便用户改用代码）。
+    """
+    from smcore.stock_names import code_to_name, resolve as _resolve
+
+    raw = str(raw or "").strip()
+    if not raw:
+        return "", "", "缺少股票代码或名称"
+
+    has_cjk = any("\u4e00" <= ch <= "\u9fff" for ch in raw)
+    has_alpha = any(ch.isalpha() for ch in raw)
+    digits = "".join(ch for ch in raw if ch.isdigit())
+
+    # 纯数字（含 600519.SH 这类带后缀）→ 直接当代码，不查索引
+    if not has_cjk and not has_alpha and digits:
+        code = format_stock_code(digits)
+        if code:
+            return code, (code_to_name(code) or code), ""
+        return "", "", f"股票代码无效: {raw}"
+
+    result = _resolve(raw)
+    if result.get("ok"):
+        return str(result["code"]), (str(result.get("name") or "") or str(result["code"])), ""
+
+    cands = result.get("candidates") or []
+    if cands:
+        hint = "；".join(f"{c['code']} {c['name']}" for c in cands[:5])
+        return "", "", f"名称有多个匹配，请改用代码（{hint}）"
+    return "", "", f"无法识别的股票名称或代码: {raw}"
+
+
 def build_snapshot_trades(
     items: list[dict[str, Any]],
     default_date: str | None = None,
 ) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
-    """把「代码 + 数量」补成标准 trade 记录。
+    """把「名称/代码 + 成本价 + 数量」补成标准 trade 记录。
 
     参数
     ----
     items
-        每项至少含 ``code`` 与 ``qty``；可选 ``name`` / ``date`` / ``price`` / ``notes``。
+        每项需含 ``code``（**可以是 6 位代码，也可以是股票名称**）与 ``qty``；
+        可选 ``price``（成本价，缺省则自动占位）、``name``、``date``、``notes``。
     default_date
         ``date`` 缺省时使用（默认今天，格式 ``YYYY-MM-DD``）。
 
@@ -103,24 +138,25 @@ def build_snapshot_trades(
     skipped: list[dict[str, Any]] = []
 
     for idx, item in enumerate(items, start=1):
-        raw_code = str(item.get("code", "")).strip()
-        code = format_stock_code(raw_code)
+        raw_id = str(item.get("code") or item.get("name") or "").strip()
+        code, resolved_name, err = resolve_identifier(raw_id)
         if not code:
-            skipped.append({"row": idx, "code": raw_code, "reason": "股票代码无效"})
+            skipped.append({"row": idx, "code": raw_id, "reason": err or "股票代码或名称无效"})
             continue
 
         try:
             qty = float(str(item.get("qty", "")).strip())
         except (TypeError, ValueError):
-            skipped.append({"row": idx, "code": code, "reason": f"数量无效: {item.get('qty')!r}"})
+            skipped.append({"row": idx, "code": raw_id, "reason": f"数量无效: {item.get('qty')!r}"})
             continue
         if qty <= 0:
-            skipped.append({"row": idx, "code": code, "reason": f"数量必须 > 0: {qty}"})
+            skipped.append({"row": idx, "code": raw_id, "reason": f"数量必须 > 0: {qty}"})
             continue
 
         trade_date = str(item.get("date", "")).strip() or today
         notes = str(item.get("notes", "")).strip()
-        name = str(item.get("name", "")).strip() or code
+        # 用户填的 name 优先 → 索引解析出的名称 → 代码
+        name = str(item.get("name", "")).strip() or resolved_name or code
 
         raw_price = str(item.get("price", "")).strip()
         if raw_price:
