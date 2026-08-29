@@ -121,6 +121,43 @@ def anomaly_keywords_for(code6: str) -> list[str]:
     return out
 
 
+def anomaly_keywords_map(codes: list) -> dict:
+    """批量 {code6: [催化剂关键词...]}，供 theme 策略一次性构建催化映射（避免逐股打 API）。
+
+    分批 ≤50 调 anomaly_stock（已验证端点），fail-soft：无 Key/异常/空输入返回 {}。
+    键统一为 6 位代码（from_thscode），与 theme 候选的 sh.600519 取尾段对齐。
+    """
+    if not _hk.available() or not codes:
+        return {}
+    try:
+        uniq: list[str] = []
+        seen: set[str] = set()
+        for c in codes:
+            c6 = from_thscode(c)
+            if c6 and c6 not in seen:
+                seen.add(c6)
+                uniq.append(c6)
+        if not uniq:
+            return {}
+        out: dict = {}
+        for i in range(0, len(uniq), 50):
+            batch = uniq[i : i + 50]
+            items = _hk.anomaly_stock(batch) or []
+            for it in items:
+                c6 = from_thscode(it.get("thscode"))
+                if not c6:
+                    continue
+                kws: list[str] = []
+                for k in it.get("keyword_list") or []:
+                    if k and k not in kws:
+                        kws.append(k)
+                if kws:
+                    out[c6] = kws
+        return out
+    except Exception:
+        return {}
+
+
 # ───────────────────────── 板块动量（风险四层中性化源） ─────────────────────────
 _SECTOR_MOM_CACHE: dict = {}
 

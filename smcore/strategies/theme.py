@@ -21,6 +21,17 @@ import pandas as pd
 from smcore.config.defaults import PROJECT_ROOT, STOCK_DATA_DIR
 from smcore.data.session import login
 
+try:
+    from smcore.data import hithink as _hk
+    from smcore.data import hithink_special as _hks
+except Exception:  # pragma: no cover - 同花顺适配层缺失时完全不影响题材策略
+    _hk = None
+    _hks = None
+
+
+def _hithink_ready() -> bool:
+    return _hk is not None and _hks is not None and getattr(_hk, "available", lambda: False)()
+
 
 ROOT_DIR = PROJECT_ROOT
 DATA_DIR = STOCK_DATA_DIR
@@ -36,6 +47,11 @@ DEFAULT_BS_TIMEOUT_SECONDS = float(os.getenv("BS_REQUEST_TIMEOUT_SECONDS", "15")
 DEFAULT_BS_REQUEST_INTERVAL_SECONDS = float(os.getenv("BS_REQUEST_INTERVAL_SECONDS", "0.05"))
 DEFAULT_BS_MAX_RETRIES = int(os.getenv("BS_MAX_RETRIES", "2"))
 THEME_MAX_BUY_GAP_PCT = float(os.getenv("THEME_MAX_BUY_GAP_PCT", "8"))
+# 异动催化加成（P1 个股异动原因 → theme 打分）。fail-soft：无同花顺 Key 时全局为 0。
+# THEME_CATALYST_BOOST: 催化剂关键词命中当前题材/名称时的加成上限（命中数封顶 2）。
+# THEME_CATALYST_GENERIC_BOOST: 该股出现在异动榜但关键词未命中当前题材时的小额通用加成。
+THEME_CATALYST_BOOST = float(os.getenv("THEME_CATALYST_BOOST", "8"))
+THEME_CATALYST_GENERIC_BOOST = float(os.getenv("THEME_CATALYST_GENERIC_BOOST", "2"))
 
 
 _BS_RATE_LIMIT_LOCK = threading.Lock()
@@ -582,13 +598,16 @@ def _calc_score(row):
     high_score = min(max(near_high - 0.9, 0.0) / 0.1, 1.0) * 10
     theme_score = min(theme_hits, 3) / 3.0 * 30
 
+    # 异动催化加成（同花顺个股异动原因关键词）。无 Key/无命中时为 0，不影响原打分。
+    catalyst_boost = float(row.get("异动催化分", 0.0) or 0.0)
+
     penalty = 0.0
     if ret5 > 12:
         penalty += 5.0
     if ret20 > 45:
         penalty += 5.0
 
-    return round(turn_score + flow_score + mom_score + high_score + theme_score - penalty, 2)
+    return round(turn_score + flow_score + mom_score + high_score + theme_score + catalyst_boost - penalty, 2)
 
 
 def _append_log(log_path, message):
@@ -602,7 +621,7 @@ def _append_log(log_path, message):
         pass
 
 
-def _evaluate_theme_candidate(item, hot_sectors, sector_hints, sector_code_map, end_date_text, args):
+def _evaluate_theme_candidate(item, hot_sectors, sector_hints, sector_code_map, end_date_text, args, anomaly_kw_map=None):
     code = item["code"]
     name = item["name"]
 
@@ -668,6 +687,24 @@ def _evaluate_theme_candidate(item, hot_sectors, sector_hints, sector_code_map, 
 
     themes = _match_theme(code, name, hot_sectors, sector_hints, sector_code_map)
 
+    # ── P1 异动催化增强（同花顺个股异动原因关键词）──
+    # 一次性构建的 {code6: [关键词]} 映射查表，O(1)；无 Key/空映射时不触发，打分零影响。
+    catalyst_hits = 0
+    catalyst_kw: list = []
+    catalyst_boost = 0.0
+    if anomaly_kw_map:
+        code6 = code.split(".")[-1]
+        raw_kws = anomaly_kw_map.get(code6) or []
+        if raw_kws:
+            ctx_set = set(hot_sectors) | {name} | set(themes)
+            relevant = [
+                kw for kw in raw_kws
+                if any((kw in c) or (c in kw) for c in ctx_set if c)
+            ]
+            catalyst_hits = len(relevant)
+            catalyst_kw = relevant if relevant else raw_kws
+            catalyst_boost = (min(catalyst_hits, 2) / 2.0) * THEME_CATALYST_BOOST + THEME_CATALYST_GENERIC_BOOST
+
     row = {
         "股票代码": code,
         "股票名称": name,
@@ -682,6 +719,9 @@ def _evaluate_theme_candidate(item, hot_sectors, sector_hints, sector_code_map, 
         "距20日高点比": round(near_high, 3),
         "题材命中数": len(themes),
         "题材标签": ",".join(themes),
+        "异动催化数": catalyst_hits,
+        "异动催化词": ",".join(catalyst_kw),
+        "异动催化分": round(catalyst_boost, 2),
     }
     row["综合分"] = _calc_score(row)
     return row, slow_msg
@@ -713,6 +753,17 @@ def build_strategy_candidates(args, log_path=None):
     base_count = len(universe)
     universe = _merge_universe_with_hot_pool(universe, hot_pool_universe)
     added_hot_pool = max(len(universe) - base_count, 0)
+
+    # 一次性拉取异动催化映射（同花顺个股异动原因 → 催化剂关键词），供候选查表加成。
+    # 分批 ≤50 打 API，仅一次；无 Key/失败则空映射 → 打分零影响（fail-soft）。
+    anomaly_kw_map = {}
+    if _hithink_ready():
+        try:
+            anomaly_kw_map = _hks.anomaly_keywords_map([it["code"] for it in universe])
+            _append_log(log_path, f"异动催化映射: 命中 {len(anomaly_kw_map)} 只")
+        except Exception as exc:
+            _append_log(log_path, f"异动催化映射失败(fail-soft): {type(exc).__name__}: {exc}")
+            anomaly_kw_map = {}
     print(f"扫描股票数量: {len(universe)}")
     print(f"热点板块: {', '.join(hot_sectors) if hot_sectors else '无'}")
     print(f"热点成分股映射: {len(sector_code_map)}")
@@ -741,7 +792,7 @@ def build_strategy_candidates(args, log_path=None):
         )
         with ThreadPoolExecutor(max_workers=worker_count) as ex:
             futures = {
-                ex.submit(_evaluate_theme_candidate, item, hot_sectors, sector_hints, sector_code_map, end_date_text, args): item
+                ex.submit(_evaluate_theme_candidate, item, hot_sectors, sector_hints, sector_code_map, end_date_text, args, anomaly_kw_map): item
                 for item in universe
             }
             completed = 0
@@ -775,7 +826,7 @@ def build_strategy_candidates(args, log_path=None):
             f"baostock参数: timeout={args.bs_timeout_seconds}s, interval={args.bs_request_interval_seconds}s, retries={args.bs_max_retries}",
         )
         for idx, item in enumerate(universe, start=1):
-            row, slow_msg = _evaluate_theme_candidate(item, hot_sectors, sector_hints, sector_code_map, end_date_text, args)
+            row, slow_msg = _evaluate_theme_candidate(item, hot_sectors, sector_hints, sector_code_map, end_date_text, args, anomaly_kw_map)
             if slow_msg:
                 _append_log(log_path, slow_msg)
             if row is not None:
@@ -831,7 +882,7 @@ def run_theme():
 
     if result_df.empty:
         # 即使 0 候选也写空文件（让 fusion 能区分「跑了但为空」vs「没跑过」）
-        pd.DataFrame(columns=["股票代码", "股票名称", "综合分", "最新换手率%", "成交额放大倍数", "题材标签"]).to_csv(
+        pd.DataFrame(columns=["股票代码", "股票名称", "综合分", "最新换手率%", "成交额放大倍数", "题材标签", "异动催化数", "异动催化词", "异动催化分"]).to_csv(
             out_path, index=False, encoding="utf-8-sig"
         )
         print(f"未筛选出符合条件的股票 → 已写入空文件 {out_path.name}")
@@ -843,7 +894,7 @@ def run_theme():
 
     print(f"策略输出已保存: {out_path}")
     print(f"总候选数: {len(result_df)}，展示前{len(top_df)}只")
-    print(top_df[["股票代码", "股票名称", "综合分", "最新换手率%", "成交额放大倍数", "题材标签"]].to_string(index=False))
+    print(top_df[["股票代码", "股票名称", "综合分", "最新换手率%", "成交额放大倍数", "题材标签", "异动催化数", "异动催化词", "异动催化分"]].to_string(index=False))
 
     return 0
 
