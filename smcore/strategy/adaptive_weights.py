@@ -407,11 +407,20 @@ def compute_adaptive_allocation(
 
 
 def save_regime_snapshot(payload: dict) -> Optional[str]:
-    """把市场状态 + 自适应权重快照落盘到 stock_data/regime-latest.json。"""
+    """把市场状态 + 自适应权重快照落盘到 stock_data/regime-latest.json。
+
+    原子写（临时文件 + os.replace）：非原子写曾因进程中断留下 0 字节 JSON，
+    导致下游 json.load 直接失败。
+    """
     try:
+        import os as _os
+
         path = STOCK_DATA_DIR / "regime-latest.json"
-        with open(path, "w", encoding="utf-8") as f:
-            json.dump(payload, ensure_ascii=False, indent=2)
+        path.parent.mkdir(parents=True, exist_ok=True)
+        tmp = path.with_suffix(".json.tmp")
+        with open(tmp, "w", encoding="utf-8") as f:
+            json.dump(payload, f, ensure_ascii=False, indent=2)
+        _os.replace(tmp, path)
         return str(path)
     except Exception:
         return None

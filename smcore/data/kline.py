@@ -282,8 +282,7 @@ def fetch_daily_k(
     parts: list[pd.DataFrame] = []
 
     def _fetch_segment(seg_start: date, seg_end: date, backend: str) -> pd.DataFrame:
-        if seg_start > seg_end:
-            return pd.DataFrame()
+        """按单个后端取一段 K 线（不回退）。"""
         if backend == "tdx":
             return _fetch_via_tdx(code6, seg_start, seg_end, adjust)
         if backend == "akshare":
@@ -311,17 +310,27 @@ def fetch_daily_k(
                 rows.append(rs.get_row_data())
             return pd.DataFrame(rows, columns=rs.fields) if rows else pd.DataFrame()
 
-    # 后端优先级：首选 tdx（最快最稳），失败自动回退 akshare → baostock
+    # 后端优先级：首选 _backend()（可经 KLINE_BACKEND 强制），失败自动回退其余源。
+    #
+    # ⚠️ 关键（2026-08-31 修复）：旧逻辑是 `if parts or not cached.empty: break`，
+    # 只要本地/仓库有缓存就会在**第一个后端**后就 break —— 即使该后端（如 hithink
+    # 缺 Key）一段新数据都没取到，也会直接返回**陈旧缓存**，导致持仓日报用旧 K 线。
+    # 现改为：只有当某后端把**所有缺失段**都取到（segments 为空表示缓存已覆盖全部）
+    # 才接受它；否则换下一个源，全失败才退回缓存。
     preferred = _backend()
-    fallback_chain = [preferred] + [b for b in ("tdx", "akshare", "baostock") if b != preferred]
+    fallback_chain = [preferred] + [b for b in ("tdx", "hithink", "akshare", "baostock") if b != preferred]
     for backend in fallback_chain:
         parts = []
+        fetched_all = True
         for seg_start, seg_end in segments:
             seg_df = _fetch_segment(seg_start, seg_end, backend)
-            if not seg_df.empty:
-                parts.append(seg_df)
-        if parts or not cached.empty:
-            break  # 拿到数据或用缓存即可，不再回退
+            if seg_df.empty:
+                fetched_all = False
+                parts = []  # 丢弃半成品，避免拼接出跨源混合数据
+                break
+            parts.append(seg_df)
+        if fetched_all:
+            break
 
     if cached.empty and not parts:
         return _empty_df()

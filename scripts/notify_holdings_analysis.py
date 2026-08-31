@@ -32,6 +32,15 @@ from smcore.analysis import build_stock_analysis
 from smcore.config.defaults import STOCK_DATA_DIR
 from smcore.notify.email import send_email
 
+# 本地手动跑时从仓库根 .env 读环境变量（SUPABASE_*/SMTP_* 等）。
+# CI 用 GitHub secrets 注入，不依赖此；dotenv 缺失也不影响运行。
+try:
+    from dotenv import load_dotenv
+
+    load_dotenv()
+except Exception:
+    pass
+
 
 def _today_str() -> str:
     for key in ("TODAY", "SIGNAL_DATE"):
