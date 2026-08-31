@@ -14,10 +14,13 @@ def send_email(
     csv_path: Optional[str] = None,
     log_lines: Optional[list] = None,
     extra_attachment_paths: Optional[list] = None,
+    html_content: Optional[str] = None,
 ) -> bool:
-    """通过 SMTP_SSL 发送邮件，可附带 CSV 附件。
+    """通过 SMTP_SSL 发送邮件，可附带 CSV/HTML 附件。
 
     环境变量：SMTP_HOST / SMTP_PORT(默认465) / SMTP_USER / SMTP_PASS / SMTP_TO。
+    html_content 不为空时，邮件以 multipart/alternative 发送（HTML 正文 + 纯文本兜底），
+    大多数邮件客户端会渲染 HTML，同时保留 content 作为纯文本回退。
     """
     host = os.getenv("SMTP_HOST", "").strip()
     port = int(os.getenv("SMTP_PORT", "465").strip())
@@ -46,6 +49,14 @@ def send_email(
     msg["To"] = to_addr
     msg.set_content(content)
 
+    # HTML 正文（可选）
+    if html_content:
+        try:
+            msg.add_alternative(html_content, subtype="html")
+        except Exception as exc:
+            if log_lines is not None:
+                log_lines.append(f"[WARN] HTML 正文添加失败，仅发纯文本: {exc}")
+
     attachment_paths = []
     if csv_path:
         attachment_paths.append(csv_path)
@@ -61,8 +72,9 @@ def send_email(
             continue
         if p.name in attached_names:
             continue
+        subtype = "html" if p.suffix.lower() == ".html" else "csv"
         with p.open("rb") as f:
-            msg.add_attachment(f.read(), maintype="text", subtype="csv", filename=p.name)
+            msg.add_attachment(f.read(), maintype="text", subtype=subtype, filename=p.name)
         attached_names.add(p.name)
     if attached_names and log_lines is not None:
         log_lines.append(f"Email attachments: {', '.join(sorted(attached_names))}")

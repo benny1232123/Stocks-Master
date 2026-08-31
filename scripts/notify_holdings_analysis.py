@@ -28,10 +28,12 @@ if ROOT not in sys.path:
 
 from smcore.storage.trades_repo import get_trade_repository
 from smcore.holdings import compute_fifo_positions, load_trades
-from smcore.analysis import build_stock_analysis
+from smcore.analysis import build_stock_analysis, recommendation_from_analysis
 from smcore.config.defaults import STOCK_DATA_DIR
 from smcore.notify.email import send_email
 from smcore.stock_names import resolve as _resolve_name
+from smcore.data.kline import fetch_daily_k
+import pandas as pd
 
 # 本地手动跑时从仓库根 .env 读环境变量（SUPABASE_*/SMTP_* 等）。
 # CI 用 GitHub secrets 注入，不依赖此；dotenv 缺失也不影响运行。
@@ -155,6 +157,106 @@ def build_portfolio_summary(stock_list: list[tuple[dict, dict | None]]) -> dict:
     return out
 
 
+def _rec_cls(action: str) -> str:
+    """持仓建议 → CSS 配色类（A股：红=偏多/加仓，绿=偏空/减仓）。"""
+    return {
+        "加仓": "bull", "持有偏多": "bull",
+        "减仓": "bear", "减仓偏空": "bear",
+        "持有观望": "neutral", "未知": "neutral",
+    }.get(action, "neutral")
+
+
+def build_recommendation_history(codes: list[str], pos_map: dict, n_days: int = 5) -> dict | None:
+    """回看最近 n_days 个交易日，每只持仓股在各日的持仓建议。
+
+    返回 {dates, matrix, names}，其中
+    matrix[date][code] = {action, reason, score, close}。
+    历史日仅取本地缓存 K 线（as_of），不联网。
+    """
+    from datetime import timedelta
+
+    # 取交易日历（任一持仓股的本地缓存 K 线尾部即可，A股交易日一致）
+    cal = None
+    for code in codes:
+        try:
+            df = fetch_daily_k(code, date.today() - timedelta(days=400), date.today())
+            if not df.empty:
+                dts = pd.to_datetime(df["date"], errors="coerce").dropna()
+                cal = sorted({d.strftime("%Y-%m-%d") for d in dts})
+                if len(cal) >= 2:
+                    break
+        except Exception:
+            continue
+    if not cal or len(cal) < 2:
+        return None
+
+    window = cal[-n_days:]
+    names: dict[str, str] = {}
+    matrix: dict[str, dict] = {}
+    for d in window:
+        y, m, dd = (int(x) for x in d.split("-"))
+        as_of = date(y, m, dd)
+        row: dict[str, dict] = {}
+        for code in codes:
+            names[code] = (pos_map.get(code, {}) or {}).get("name", "") or ""
+            try:
+                a = build_stock_analysis(code, as_of=as_of, with_fundamentals=False)
+                rec = recommendation_from_analysis(a)
+                close = (a.get("latest", {}) or {}).get("close")
+                row[code] = {
+                    "action": rec.get("action", "未知"),
+                    "reason": rec.get("reason", ""),
+                    "score": rec.get("score"),
+                    "close": close,
+                }
+            except Exception as exc:
+                row[code] = {"action": "未知", "reason": str(exc)[:40], "score": None, "close": None}
+        matrix[d] = row
+    return {"dates": window, "matrix": matrix, "names": names}
+
+
+def render_compare_html(hist: dict) -> str:
+    dates = hist["dates"]
+    names = hist["names"]
+    matrix = hist["matrix"]
+    head = "".join(f"<th>{d[5:]}</th>" for d in dates)
+    rows = []
+    for code, nm in names.items():
+        cells = []
+        for d in dates:
+            c = matrix.get(d, {}).get(code, {})
+            cls = _rec_cls(c.get("action", "未知"))
+            px = c.get("close")
+            px_html = f'<span class="px">{fmt_num(px)}</span>' if px is not None else ""
+            cells.append(f'<td><span class="tag {cls}">{c.get("action", "未知")}</span>{px_html}</td>')
+        rows.append(f'<tr><td class="name">{code} {nm}</td>{"".join(cells)}</tr>')
+    return (
+        f'<div class="card"><h3 style="font-size:15px;margin-bottom:6px">'
+        f'📅 近 {len(dates)} 天持仓建议对比</h3>'
+        f'<table class="cmp"><tr><th>股票</th>{head}</tr>{"".join(rows)}</table>'
+        f'<div class="state" style="margin-top:8px">单元格 = 当日技术面建议'
+        f'（红=偏多/加仓，绿=偏空/减仓），下方数字为当日收盘价。仅供参考，不构成投资建议。</div></div>'
+    )
+
+
+def render_compare_md(hist: dict) -> str:
+    dates = hist["dates"]
+    names = hist["names"]
+    matrix = hist["matrix"]
+    head = "| 股票 | " + " | ".join(d[5:] for d in dates) + " |"
+    sep = "| --- | " + " | ".join("---" for _ in dates) + " |"
+    rows = []
+    for code, nm in names.items():
+        cells = []
+        for d in dates:
+            c = matrix.get(d, {}).get(code, {})
+            px = c.get("close")
+            px_s = f"（{fmt_num(px)}）" if px is not None else ""
+            cells.append(f"{c.get('action', '未知')}{px_s}")
+        rows.append(f"| {code} {nm} | " + " | ".join(cells) + " |")
+    return f"## 📅 近 {len(dates)} 天持仓建议对比\n\n{head}\n{sep}\n" + "\n".join(rows) + "\n"
+
+
 def render_stock(analysis: dict, pos: dict | None = None) -> str:
     """把单只票的分析字典渲染成 Markdown 段落。
 
@@ -222,11 +324,13 @@ def render_stock(analysis: dict, pos: dict | None = None) -> str:
             kdj_state = f"K={k:.0f} D={d:.0f} J={j:.0f}"
 
     title = f"### {code} {name}" if name else f"### {code}"
+    rec = recommendation_from_analysis(analysis)
     lines = [
         title,
         "",
         f"- **Boll 信号**：{sig}",
         f"- **现价**：{fmt_num(close)} ｜ **趋势**：{trend}",
+        f"- **持仓建议**：{rec.get('action')}（{rec.get('reason')}）",
     ]
     if pos:
         cost = (pos or {}).get("cost")
@@ -324,6 +428,20 @@ body{background:#eef0f3;font-family:-apple-system,BlinkMacSystemFont,"PingFang S
 .pnl.bull{color:#d4380d}
 .pnl.bear{color:#389e0d}
 .err{color:#d4380d;font-size:13px;margin-top:6px}
+.rec{font-size:13px;font-weight:600;margin:8px 0 4px;padding:7px 11px;border-radius:9px}
+.rec.bull{background:#fff1f0;color:#d4380d}
+.rec.bear{background:#f6ffed;color:#389e0d}
+.rec.neutral{background:#f0f1f3;color:#5a6068}
+.cmp{width:100%;border-collapse:collapse;margin-top:6px;font-size:13px;background:#fff;border-radius:12px;overflow:hidden;box-shadow:0 1px 4px rgba(0,0,0,.06)}
+.cmp th,.cmp td{padding:9px 8px;text-align:center;border-bottom:1px solid #f0f1f3}
+.cmp th{background:#f7f8fa;color:#5a6068;font-weight:600}
+.cmp td.name{text-align:left;font-weight:600}
+.cmp .tag{display:inline-block;font-size:12px;font-weight:700;padding:2px 8px;border-radius:7px}
+.cmp .tag.bull{background:#fff1f0;color:#d4380d}
+.cmp .tag.bear{background:#f6ffed;color:#389e0d}
+.cmp .tag.neutral{background:#f0f1f3;color:#5a6068}
+.cmp .tag.unknown{background:#f0f1f3;color:#a0a6ad}
+.cmp .px{display:block;font-size:11px;color:#8a9099;margin-top:2px}
 .sum{background:linear-gradient(135deg,#1f3b57,#3a5a7a);color:#fff;border-radius:16px;padding:16px 20px;margin-bottom:14px;box-shadow:0 4px 14px rgba(31,59,87,.28)}
 .sum h2{font-size:16px;font-weight:700;margin-bottom:10px}
 .sum-grid{display:flex;flex-wrap:wrap;gap:10px 26px}
@@ -483,6 +601,18 @@ def render_stock_html(analysis: dict, pos: dict | None = None) -> str:
             )
         pos_html = f'<div class="pos">{"".join(items)}</div>'
 
+    # 持仓建议（技术面综合）
+    rec = recommendation_from_analysis(analysis)
+    _rec_cls = {
+        "加仓": "bull", "持有偏多": "bull",
+        "减仓": "bear", "减仓偏空": "bear",
+        "持有观望": "neutral", "未知": "neutral",
+    }.get(rec.get("action"), "neutral")
+    rec_html = (
+        f'<div class="rec {_rec_cls}">📌 持仓建议：{rec.get("action")}'
+        f'　｜　{rec.get("reason")}</div>'
+    )
+
     return f"""
     <div class="card">
       <div class="card-head">
@@ -493,6 +623,7 @@ def render_stock_html(analysis: dict, pos: dict | None = None) -> str:
       </div>
       <div class="sig">Boll 信号：{sig}</div>
       {pos_html}
+      {rec_html}
       {bar_html}
       <div class="metrics">
         {_m("MA5", ma5)} {_m("MA10", ma10)} {_m("MA20", ma20)} {_m("MA60", ma60)}
@@ -668,6 +799,20 @@ def main() -> int:
         )
         html = build_html_report(today, backend, summary_line, "\n".join(sections_html), summary_html)
 
+        # 近几天持仓建议对比（嵌入报告 + 单独落盘便于邮件附件）
+        compare_html = compare_md = ""
+        n_recent = int((os.getenv("RECENT_DAYS") or "5").strip() or 5)
+        try:
+            hist = build_recommendation_history(codes, pos_map, n_days=n_recent)
+            if hist:
+                compare_html = render_compare_html(hist)
+                compare_md = render_compare_md(hist)
+                sections_html.append(compare_html)
+                md = md.rstrip() + "\n\n" + compare_md
+                html = build_html_report(today, backend, summary_line, "\n".join(sections_html), summary_html)
+        except Exception as exc:
+            log_lines.append(f"近几天建议对比生成失败: {exc}")
+
     # 2) 落盘（Markdown 兼容 + HTML 美观版）
     md_path = STOCK_DATA_DIR / f"holdings_analysis_{today}.md"
     html_path = STOCK_DATA_DIR / f"holdings_analysis_{today}.html"
@@ -675,13 +820,34 @@ def main() -> int:
     md_path.write_text(md, encoding="utf-8")
     html_path.write_text(html, encoding="utf-8")
 
+    # 对比报告单独落盘（供邮件附件 / 单独查看）
+    compare_html_path = STOCK_DATA_DIR / f"holdings_rec_compare_{today}.html"
+    compare_md_path = STOCK_DATA_DIR / f"holdings_rec_compare_{today}.md"
+    if compare_html:
+        compare_html_doc = (
+            f"<!doctype html><html><head><meta charset=\"utf-8\">"
+            f"<meta name=\"viewport\" content=\"width=device-width,initial-scale=1\">"
+            f"<title>持仓建议对比 {today}</title><style>{_HTML_STYLE}</style></head>"
+            f"<body><div class=\"wrap\">"
+            f"<div class=\"top\"><h1>📅 持仓建议对比 · {today}</h1>"
+            f"<div class=\"meta\">📊 数据源 {backend} ｜ 近 {n_recent} 个交易日</div></div>"
+            f"{compare_html}"
+            f"<div class=\"foot\">Stocks-Master 自动生成 · 技术面综合持仓建议<br>仅供参考，不构成投资建议</div>"
+            f"</div></body></html>"
+        )
+        compare_html_path.write_text(compare_html_doc, encoding="utf-8")
+        compare_md_path.write_text(f"# 持仓建议对比 · {today}\n\n> 数据源：{backend}\n\n" + compare_md, encoding="utf-8")
+
     print("\n".join(log_lines))
     print(f"[OK] 报告已落盘:\n  - {md_path}\n  - {html_path}")
 
-    # 3) 邮件推送（配置 SMTP 即推送，否则仅落盘）
+    # 3) 邮件推送（HTML 正文 + HTML 报告附件 + 对比附件；未配 SMTP 仅落盘）
     subject = f"【持仓日报】{today} · 持仓个股分析"
-    if send_email(subject, md, log_lines=log_lines):
-        print("[OK] 已通过邮件推送")
+    attachments = [str(html_path)]
+    if compare_html:
+        attachments.append(str(compare_html_path))
+    if send_email(subject, md, log_lines=log_lines, html_content=html, extra_attachment_paths=attachments):
+        print("[OK] 已通过邮件推送（HTML 正文 + 报告/对比附件）")
     else:
         print("[INFO] 未配置 SMTP，仅落盘报告（不推送）")
 

@@ -53,9 +53,20 @@ def calc_kdj(high: pd.Series, low: pd.Series, close: pd.Series, n: int = 9, m1: 
     return pd.DataFrame({"K": k, "D": d, "J": j}, index=close.index)
 
 
-def build_stock_analysis(code: str, window: int = 20, k: float = 1.645, days_back: int = 180) -> dict[str, Any]:
-    """Build a JSON-friendly technical analysis snapshot for a stock."""
-    end_date = date.today()
+def build_stock_analysis(
+    code: str,
+    window: int = 20,
+    k: float = 1.645,
+    days_back: int = 180,
+    as_of: date | None = None,
+    with_fundamentals: bool = True,
+) -> dict[str, Any]:
+    """Build a JSON-friendly technical analysis snapshot for a stock.
+
+    as_of: 指定截至日期（默认今天），用于历史回看；历史日期仅取缓存 K 线，不联网。
+    with_fundamentals: 是否补取基本面（历史回看建议关掉以提速）。
+    """
+    end_date = as_of or date.today()
     start_date = end_date - timedelta(days=days_back)
     kdf = fetch_daily_k(code, start_date, end_date)
     if kdf.empty:
@@ -129,9 +140,99 @@ def build_stock_analysis(code: str, window: int = 20, k: float = 1.645, days_bac
             ).replace({pd.NA: None, np.nan: None}).to_dict(orient="records")
         },
         # ── 基本面 / 资金面（缓存优先，未命中实时补取并写回缓存）──
-        "fundamentals": _build_fundamentals(code),
+        "fundamentals": _build_fundamentals(code) if with_fundamentals else None,
     }
     return payload
+
+
+def recommendation_from_analysis(analysis: dict) -> dict[str, object]:
+    """由技术面指标综合给出持仓建议（仅供参考，不构成投资建议）。
+
+    综合维度：均线趋势(MA20/MA60)、MACD 柱、布林带位置/买卖信号、
+    RSI 超买超卖、KDJ(J 值) 超买超卖。各维度加权打分，按总分分档：
+        加仓 / 持有偏多 / 持有观望 / 减仓偏空 / 减仓
+    返回 {action, score, reason, drivers}。
+    """
+    if analysis.get("error"):
+        return {"action": "未知", "score": 0.0, "reason": "分析失败", "drivers": []}
+
+    latest = analysis.get("latest", {}) or {}
+    metrics = analysis.get("metrics", {}) or {}
+    signal_info = analysis.get("signal", {}) or {}
+
+    close = latest.get("close")
+    up = latest.get("upper")
+    lo = latest.get("lower")
+    ma20 = latest.get("ma20")
+    ma60 = latest.get("ma60")
+    rsi = latest.get("rsi")
+    hist = latest.get("macd_hist")
+    j = latest.get("j_val")
+    sig = metrics.get("signal_text") or latest.get("signal_text") or ""
+    sig_selected = bool(signal_info.get("selected"))
+
+    factors: list[tuple[float, str]] = []
+
+    # 均线趋势
+    if close is not None and ma20 is not None and ma60 is not None:
+        if close > ma20 > ma60:
+            factors.append((2.0, "多头排列(价>MA20>MA60)"))
+        elif close < ma20 < ma60:
+            factors.append((-2.0, "空头排列(价<MA20<MA60)"))
+        else:
+            factors.append((0.0, "均线缠绕震荡"))
+
+    # MACD 柱
+    if hist is not None:
+        factors.append((1.0 if hist > 0 else -1.0, "MACD红柱" if hist > 0 else "MACD绿柱"))
+
+    # 布林带位置 / 买卖信号
+    if close is not None and up and lo and up > lo:
+        if close >= up * 0.995:
+            factors.append((-2.0, "触及/突破布林上轨(超买)"))
+        elif close <= lo * 1.005:
+            factors.append((2.0, "触及/跌破布林下轨(超卖)"))
+        elif "near_upper" in sig or "overbought" in sig:
+            factors.append((-1.5, "高位接近上轨"))
+        elif sig_selected or any(
+            kw in sig for kw in ("near_lower", "mid_pullback", "squeeze", "oversold")
+        ):
+            factors.append((1.5, "布林买点信号"))
+
+    # RSI
+    if rsi is not None:
+        if rsi > 70:
+            factors.append((-1.0, f"RSI超买({rsi:.0f})"))
+        elif rsi < 30:
+            factors.append((1.0, f"RSI超卖({rsi:.0f})"))
+
+    # KDJ J 值
+    if j is not None:
+        if j > 100:
+            factors.append((-1.0, f"KDJ超买(J={j:.0f})"))
+        elif j < 0:
+            factors.append((1.0, f"KDJ超卖(J={j:.0f})"))
+
+    score = sum(w for w, _ in factors)
+    if score >= 3:
+        action = "加仓"
+    elif score >= 1:
+        action = "持有偏多"
+    elif score > -1:
+        action = "持有观望"
+    elif score > -3:
+        action = "减仓偏空"
+    else:
+        action = "减仓"
+
+    top = sorted(factors, key=lambda x: abs(x[0]), reverse=True)[:2]
+    reason = "，".join(lbl for _, lbl in top) if top else "无明显多空信号"
+    return {
+        "action": action,
+        "score": round(score, 1),
+        "reason": reason,
+        "drivers": [lbl for _, lbl in factors],
+    }
 
 
 def _build_fundamentals(code: str, timeout: float = 12.0) -> dict | None:
