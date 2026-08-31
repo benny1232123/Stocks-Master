@@ -31,6 +31,7 @@ from smcore.holdings import compute_fifo_positions, load_trades
 from smcore.analysis import build_stock_analysis
 from smcore.config.defaults import STOCK_DATA_DIR
 from smcore.notify.email import send_email
+from smcore.stock_names import resolve as _resolve_name
 
 # 本地手动跑时从仓库根 .env 读环境变量（SUPABASE_*/SMTP_* 等）。
 # CI 用 GitHub secrets 注入，不依赖此；dotenv 缺失也不影响运行。
@@ -59,8 +60,106 @@ def fmt_num(v, digits: int = 2, default: str = "—") -> str:
         return default
 
 
-def render_stock(analysis: dict) -> str:
-    """把单只票的分析字典渲染成 Markdown 段落。"""
+def fmt_money(v, digits: int = 0, default: str = "—") -> str:
+    """带千分位的金额（¥）。"""
+    if v is None:
+        return default
+    try:
+        return f"¥{float(v):,.{digits}f}"
+    except (TypeError, ValueError):
+        return default
+
+
+def _stock_pnl(analysis: dict, pos: dict | None):
+    """计算单只票的持仓盈亏。返回 (pnl, pct, today_pnl, has_cost)。
+
+    - pnl / pct：基于成本价（缺失则 None）
+    - today_pnl：当日浮动盈亏（基于序列末两根收盘价 × 数量）
+    """
+    has_cost = False
+    pnl = pct = None
+    latest = analysis.get("latest", {}) or {}
+    close = latest.get("close")
+    qty = (pos or {}).get("qty")
+    cost = (pos or {}).get("cost")
+    if qty is not None and cost not in (None, ""):
+        try:
+            qty = float(qty)
+            cost = float(cost)
+            if qty and cost:
+                pnl = (close - cost) * qty if close is not None else None
+                pct = (close - cost) / cost * 100 if close is not None else None
+                has_cost = True
+        except (TypeError, ValueError):
+            pass
+
+    today_pnl = None
+    rows = (analysis.get("series", {}) or {}).get("rows", []) or []
+    if qty is not None and len(rows) >= 2:
+        try:
+            cur = rows[-1].get("close")
+            prev = rows[-2].get("close")
+            if cur is not None and prev:
+                today_pnl = (float(cur) - float(prev)) * float(qty)
+        except (TypeError, ValueError):
+            today_pnl = None
+    return pnl, pct, today_pnl, has_cost
+
+
+def build_portfolio_summary(stock_list: list[tuple[dict, dict | None]]) -> dict:
+    """从 (analysis, pos) 列表聚合组合层盈亏。"""
+    total_value = total_cost = today_pnl = 0.0
+    have_cost = False
+    for analysis, pos in stock_list:
+        if analysis.get("error"):
+            continue
+        latest = analysis.get("latest", {}) or {}
+        close = latest.get("close")
+        qty = (pos or {}).get("qty")
+        if close is None or not qty:
+            continue
+        try:
+            qty = float(qty)
+            value = float(close) * qty
+        except (TypeError, ValueError):
+            continue
+        total_value += value
+        cost = (pos or {}).get("cost")
+        if cost not in (None, ""):
+            try:
+                cost = float(cost)
+                if cost and qty:
+                    total_cost += cost * qty
+                    have_cost = True
+            except (TypeError, ValueError):
+                pass
+        rows = (analysis.get("series", {}) or {}).get("rows", []) or []
+        if len(rows) >= 2:
+            cur = rows[-1].get("close")
+            prev = rows[-2].get("close")
+            if cur is not None and prev:
+                try:
+                    today_pnl += (float(cur) - float(prev)) * qty
+                except (TypeError, ValueError):
+                    pass
+
+    out = {"total_value": total_value, "total_cost": total_cost if have_cost else None, "today_pnl": today_pnl}
+    if have_cost and total_cost:
+        out["total_pnl"] = total_value - total_cost
+        out["total_pnl_pct"] = (total_value - total_cost) / total_cost * 100
+    else:
+        out["total_pnl"] = None
+        out["total_pnl_pct"] = None
+    prev_total = total_value - today_pnl
+    out["today_pnl_pct"] = (today_pnl / prev_total * 100) if prev_total else None
+    return out
+
+
+def render_stock(analysis: dict, pos: dict | None = None) -> str:
+    """把单只票的分析字典渲染成 Markdown 段落。
+
+    pos: 来自 FIFO 持仓的 {name, cost, qty, buy_date}（可选）。
+    """
     code = analysis.get("code", "")
     if analysis.get("error"):
         return f"### {code}\n\n⚠️ 分析失败：{analysis['error']}\n"
@@ -80,6 +179,10 @@ def render_stock(analysis: dict) -> str:
     k, d, j = latest.get("k_val"), latest.get("d_val"), latest.get("j_val")
     sig = metrics.get("signal_text") or latest.get("signal_text") or "—"
 
+    # 持仓信息
+    name = (pos or {}).get("name", "") if pos else ""
+    pnl, pct, today_pnl, has_cost = _stock_pnl(analysis, pos)
+
     # 趋势
     trend = "—"
     if close is not None and ma20 is not None and ma60 is not None:
@@ -93,8 +196,8 @@ def render_stock(analysis: dict) -> str:
     # 布林带位置
     band_pos = "—"
     if close is not None and up is not None and lo is not None and up > lo:
-        pct = (close - lo) / (up - lo) * 100
-        band_pos = f"{pct:.1f}%（上轨{fmt_num(up)} / 下轨{fmt_num(lo)} / 中轨{fmt_num(mid)}）"
+        bpos = (close - lo) / (up - lo) * 100
+        band_pos = f"{bpos:.1f}%（上轨{fmt_num(up)} / 下轨{fmt_num(lo)} / 中轨{fmt_num(mid)}）"
 
     # MACD 状态
     macd_state = "—"
@@ -118,11 +221,28 @@ def render_stock(analysis: dict) -> str:
         else:
             kdj_state = f"K={k:.0f} D={d:.0f} J={j:.0f}"
 
+    title = f"### {code} {name}" if name else f"### {code}"
     lines = [
-        f"### {code}",
+        title,
         "",
         f"- **Boll 信号**：{sig}",
         f"- **现价**：{fmt_num(close)} ｜ **趋势**：{trend}",
+    ]
+    if pos:
+        cost = (pos or {}).get("cost")
+        qty = (pos or {}).get("qty")
+        cost_str = fmt_num(cost) if cost not in (None, "") else "—"
+        qty_str = fmt_num(qty, 0) if qty not in (None, "") else "—"
+        pos_line = f"- **持仓**：成本 {cost_str} ｜ 数量 {qty_str}"
+        if has_cost and pnl is not None:
+            sign = "+" if pnl >= 0 else ""
+            pct_sign = "+" if pct >= 0 else ""
+            pos_line += f" ｜ **盈亏** {sign}{fmt_money(pnl)}（{pct_sign}{pct:.2f}%）"
+        if today_pnl is not None:
+            tsign = "+" if today_pnl >= 0 else ""
+            pos_line += f" ｜ 当日 {tsign}{fmt_money(today_pnl)}"
+        lines.append(pos_line)
+    lines += [
         f"- **均线**：MA5={fmt_num(ma5)} MA10={fmt_num(ma10)} MA20={fmt_num(ma20)} MA60={fmt_num(ma60)}",
         f"- **布林带位置**：{band_pos}",
         f"- **RSI(14)**：{fmt_num(rsi, 1)}",
@@ -170,7 +290,9 @@ body{background:#eef0f3;font-family:-apple-system,BlinkMacSystemFont,"PingFang S
 .meta{font-size:13px;opacity:.9;margin-top:6px}
 .card{background:#fff;border-radius:14px;padding:14px 16px;margin-bottom:12px;box-shadow:0 1px 4px rgba(0,0,0,.06)}
 .card-head{display:flex;align-items:center;gap:10px;flex-wrap:wrap}
+.title{display:flex;flex-direction:column;line-height:1.15}
 .code{font-size:19px;font-weight:700;letter-spacing:.5px}
+.name{font-size:12px;color:#8a9099;font-weight:500;margin-top:1px}
 .badge{font-size:12px;padding:3px 11px;border-radius:20px;font-weight:600}
 .badge.bull{background:#fff1f0;color:#d4380d}
 .badge.bear{background:#f6ffed;color:#389e0d}
@@ -195,13 +317,30 @@ body{background:#eef0f3;font-family:-apple-system,BlinkMacSystemFont,"PingFang S
 .chips{display:flex;flex-wrap:wrap;gap:6px}
 .chip{font-size:11px;background:#eef2ff;color:#3b5bdb;padding:3px 9px;border-radius:20px}
 .chip.dim{background:#f0f1f3;color:#a0a6ad}
+.pos{display:flex;flex-wrap:wrap;gap:14px;margin:10px 0 2px;padding:9px 12px;background:#fafbfc;border-radius:10px}
+.pos-item{display:flex;align-items:baseline;gap:5px}
+.pos-item .pl{font-size:11px;color:#8a9099}
+.pos-item b{font-size:14px;font-weight:700}
+.pnl.bull{color:#d4380d}
+.pnl.bear{color:#389e0d}
 .err{color:#d4380d;font-size:13px;margin-top:6px}
+.sum{background:linear-gradient(135deg,#1f3b57,#3a5a7a);color:#fff;border-radius:16px;padding:16px 20px;margin-bottom:14px;box-shadow:0 4px 14px rgba(31,59,87,.28)}
+.sum h2{font-size:16px;font-weight:700;margin-bottom:10px}
+.sum-grid{display:flex;flex-wrap:wrap;gap:10px 26px}
+.sum-cell{display:flex;flex-direction:column}
+.sum-cell .sl{font-size:11px;opacity:.8}
+.sum-cell .sv{font-size:19px;font-weight:700;margin-top:2px}
+.sum-cell .sv.bull{color:#ff9c8a}
+.sum-cell .sv.bear{color:#9be7a8}
 .foot{font-size:11px;color:#a0a6ad;text-align:center;margin-top:12px;line-height:1.7}
 """
 
 
-def render_stock_html(analysis: dict) -> str:
-    """把单只票的分析字典渲染成好看的 HTML 卡片。"""
+def render_stock_html(analysis: dict, pos: dict | None = None) -> str:
+    """把单只票的分析字典渲染成好看的 HTML 卡片。
+
+    pos: 来自 FIFO 持仓的 {name, cost, qty, buy_date}（可选）。
+    """
     code = analysis.get("code", "")
     if analysis.get("error"):
         return (
@@ -241,6 +380,10 @@ def render_stock_html(analysis: dict) -> str:
                 chg_cls = "bull" if chg_pct >= 0 else "bear"
         except (TypeError, ValueError):
             pass
+
+    # 持仓信息（名称 / 成本价 / 数量 / 盈亏）
+    name = (pos or {}).get("name", "") if pos else ""
+    pnl, pct, today_pnl, has_cost = _stock_pnl(analysis, pos)
 
     # 布林带位置
     band_pos = None
@@ -314,15 +457,42 @@ def render_stock_html(analysis: dict) -> str:
         else ""
     )
 
+    # 持仓行（成本 / 数量 / 持仓盈亏 / 当日浮动盈亏）
+    pos_html = ""
+    if pos:
+        cost = pos.get("cost")
+        qty = pos.get("qty")
+        cost_str = fmt_num(cost) if cost not in (None, "") else "—"
+        qty_str = fmt_num(qty, 0) if qty not in (None, "") else "—"
+        items = [
+            f'<span class="pos-item"><span class="pl">成本</span><b>{cost_str}</b></span>',
+            f'<span class="pos-item"><span class="pl">数量</span><b>{qty_str}</b></span>',
+        ]
+        if has_cost and pnl is not None:
+            pnl_cls = "bull" if pnl >= 0 else "bear"
+            items.append(
+                f'<span class="pos-item"><span class="pl">持仓盈亏</span>'
+                f'<b class="pnl {pnl_cls}">{"+" if pnl >= 0 else ""}{fmt_money(pnl)}'
+                f'（{"+" if pct >= 0 else ""}{pct:.2f}%）</b></span>'
+            )
+        if today_pnl is not None:
+            tcls = "bull" if today_pnl >= 0 else "bear"
+            items.append(
+                f'<span class="pos-item"><span class="pl">当日</span>'
+                f'<b class="pnl {tcls}">{"+" if today_pnl >= 0 else ""}{fmt_money(today_pnl)}</b></span>'
+            )
+        pos_html = f'<div class="pos">{"".join(items)}</div>'
+
     return f"""
     <div class="card">
       <div class="card-head">
-        <span class="code">{code}</span>
+        <div class="title"><span class="code">{code}</span><span class="name">{name}</span></div>
         <span class="badge {trend_cls}">{trend}</span>
         <span class="price">{fmt_num(close)}</span>
         {chg_html}
       </div>
       <div class="sig">Boll 信号：{sig}</div>
+      {pos_html}
       {bar_html}
       <div class="metrics">
         {_m("MA5", ma5)} {_m("MA10", ma10)} {_m("MA20", ma20)} {_m("MA60", ma60)}
@@ -334,17 +504,78 @@ def render_stock_html(analysis: dict) -> str:
     </div>"""
 
 
-def build_html_report(today: str, backend: str, summary_line: str, sections_html: str) -> str:
+def build_html_report(today: str, backend: str, summary_line: str, sections_html: str, summary_card: str = "") -> str:
     return f"""<!doctype html><html><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <title>持仓个股分析 {today}</title><style>{_HTML_STYLE}</style></head>
 <body><div class="wrap">
   <div class="top"><h1>📊 持仓个股分析日报</h1>
     <div class="meta">📅 {today} ｜ 数据源 {backend} ｜ {summary_line}</div></div>
+  {summary_card}
   {sections_html}
   <div class="foot">Stocks-Master 自动生成 · 技术面 Boll/MACD/RSI/KDJ/MA + 基本面/资金面<br>
   仅供研究参考，不构成投资建议</div>
 </div></body></html>"""
+
+
+def render_summary_html(summary: dict, count: int) -> str:
+    """顶部组合汇总卡片。"""
+    if not summary:
+        return ""
+    tv = summary.get("total_value") or 0.0
+    tc = summary.get("total_cost")
+    pnl = summary.get("total_pnl")
+    pnl_pct = summary.get("total_pnl_pct")
+    today_pnl = summary.get("today_pnl")
+    today_pct = summary.get("today_pnl_pct")
+
+    def _cell(label, value, cls=""):
+        return (
+            f'<div class="sum-cell"><span class="sl">{label}</span>'
+            f'<span class="sv {cls}">{value}</span></div>'
+        )
+
+    cells = [_cell("持仓市值", fmt_money(tv))]
+    if tc is not None:
+        cells.append(_cell("持仓成本", fmt_money(tc)))
+    if pnl is not None:
+        pcls = "bull" if pnl >= 0 else "bear"
+        pval = f"{'+' if pnl >= 0 else ''}{fmt_money(pnl)}"
+        if pnl_pct is not None:
+            pval += f" ({'+' if pnl_pct >= 0 else ''}{pnl_pct:.2f}%)"
+        cells.append(_cell("累计盈亏", pval, pcls))
+    tcls = "bull" if today_pnl >= 0 else "bear"
+    tval = f"{'+' if today_pnl >= 0 else ''}{fmt_money(today_pnl)}"
+    if today_pct is not None:
+        tval += f" ({'+' if today_pct >= 0 else ''}{today_pct:.2f}%)"
+    cells.append(_cell("当日浮动", tval, tcls))
+
+    return (
+        f'<div class="sum"><h2>💼 组合概览 ｜ {count} 只持仓</h2>'
+        f'<div class="sum-grid">{"".join(cells)}</div></div>'
+    )
+
+
+def render_summary_md(summary: dict, count: int) -> str:
+    if not summary:
+        return ""
+    tv = summary.get("total_value") or 0.0
+    tc = summary.get("total_cost")
+    pnl = summary.get("total_pnl")
+    pnl_pct = summary.get("total_pnl_pct")
+    today_pnl = summary.get("today_pnl")
+    today_pct = summary.get("today_pnl_pct")
+    lines = [f"## 💼 组合概览（{count} 只持仓）", f"- **持仓市值**：{fmt_money(tv)}"]
+    if tc is not None:
+        lines.append(f"- **持仓成本**：{fmt_money(tc)}")
+    if pnl is not None:
+        s = "+" if pnl >= 0 else ""
+        p = f"{s}{pnl_pct:.2f}%" if pnl_pct is not None else ""
+        lines.append(f"- **累计盈亏**：{s}{fmt_money(pnl)}（{p}）")
+    ts = "+" if today_pnl >= 0 else ""
+    tp = f"{ts}{today_pct:.2f}%" if today_pct is not None else ""
+    lines.append(f"- **当日浮动**：{ts}{fmt_money(today_pnl)}（{tp}）")
+    return "\n".join(lines) + "\n"
 
 
 def main() -> int:
@@ -374,19 +605,42 @@ def main() -> int:
             '<div class="card"><div class="sig">当前无持仓，无需推送个股分析。</div></div>',
         )
     else:
+        # 构建持仓基础信息（代码 -> 名称/成本价/数量/买入日期）
+        pos_map: dict[str, dict] = {}
+        for _, prow in pos_df.iterrows():
+            c = str(prow.get("代码", "")).strip()
+            if not c:
+                continue
+            cost = prow.get("成本价")
+            qty = prow.get("数量")
+            buy_date = prow.get("买入日期", "")
+            nm = ""
+            try:
+                nm = _resolve_name(c).get("name", "") or ""
+            except Exception:
+                nm = ""
+            pos_map[c] = {
+                "name": nm,
+                "cost": float(cost) if cost not in (None, "") else None,
+                "qty": float(qty) if qty not in (None, "") else None,
+                "buy_date": str(buy_date) if buy_date else "",
+            }
+
         codes = [str(c) for c in pos_df["代码"].tolist()]
         log_lines.append(f"当前持仓 {len(codes)} 只: {', '.join(codes)}")
 
         sections: list[str] = []
         sections_html: list[str] = []
+        stock_list: list[tuple] = []
         ok, failed = 0, 0
         for code in codes:
+            pos = pos_map.get(code)
             try:
                 analysis = build_stock_analysis(code)
             except Exception as exc:
                 failed += 1
                 log_lines.append(f"分析 {code} 异常: {exc}")
-                sections.append(f"### {code}\n\n⚠️ 分析异常：{exc}\n")
+                sections.append(f"### {code} {(pos or {}).get('name', '')}\n\n⚠️ 分析异常：{exc}\n")
                 sections_html.append(
                     f'<div class="card"><div class="card-head"><span class="code">{code}</span>'
                     f'</div><div class="err">⚠️ 分析异常：{exc}</div></div>'
@@ -396,18 +650,23 @@ def main() -> int:
                 failed += 1
             else:
                 ok += 1
-            sections.append(render_stock(analysis))
-            sections_html.append(render_stock_html(analysis))
+            stock_list.append((analysis, pos))
+            sections.append(render_stock(analysis, pos))
+            sections_html.append(render_stock_html(analysis, pos))
 
+        summary = build_portfolio_summary(stock_list)
         summary_line = f"成功 {ok} 只 / 失败 {failed} 只 / 共 {len(codes)} 只"
+        summary_md = render_summary_md(summary, len(codes))
+        summary_html = render_summary_html(summary, len(codes))
         md = (
             f"# 持仓个股分析日报 · {today}\n\n"
             f"> 数据源：{backend} ｜ {summary_line}\n\n"
+            + (summary_md + "\n" if summary_md else "")
             + "\n".join(sections)
             + f"\n---\n\n_本报告由 Stocks-Master 自动生成（技术面 Boll/MACD/RSI/KDJ/MA + 基本面/资金面）。\n"
             f"仅供研究参考，不构成投资建议。生成时间 {today}。_\n"
         )
-        html = build_html_report(today, backend, summary_line, "\n".join(sections_html))
+        html = build_html_report(today, backend, summary_line, "\n".join(sections_html), summary_html)
 
     # 2) 落盘（Markdown 兼容 + HTML 美观版）
     md_path = STOCK_DATA_DIR / f"holdings_analysis_{today}.md"
