@@ -354,30 +354,9 @@ def render_stock(analysis: dict, pos: dict | None = None) -> str:
         f"- **KDJ**：{kdj_state}",
     ]
 
-    # 基本面
+    # 基本面 / 资金面
     fund = analysis.get("fundamentals")
-    if isinstance(fund, dict):
-        if fund.get("error"):
-            lines.append(f"- **基本面**：暂不可用（{fund['error']}）")
-        else:
-            fl = []
-            if fund.get("pe") is not None:
-                fl.append(f"PE={fmt_num(fund['pe'])}")
-            if fund.get("pb") is not None:
-                fl.append(f"PB={fmt_num(fund['pb'])}")
-            if fund.get("mkt_cap") is not None:
-                fl.append(f"总市值={fmt_num(fund['mkt_cap'])}亿")
-            if fund.get("roe") is not None:
-                fl.append(f"ROE={fmt_num(fund['roe'], 1)}%")
-            if fund.get("gross_margin") is not None:
-                fl.append(f"毛利率={fmt_num(fund['gross_margin'], 1)}%")
-            if fund.get("revenue_growth") is not None:
-                fl.append(f"营收增速={fmt_num(fund['revenue_growth'], 1)}%")
-            if fund.get("turnover") is not None:
-                fl.append(f"换手={fmt_num(fund['turnover'], 2)}%")
-            lines.append(f"- **基本面**：{' / '.join(fl) if fl else '暂无数据'}")
-    else:
-        lines.append("- **基本面**：暂无数据")
+    lines += _fund_panel_md(fund)
 
     lines.append("")
     return "\n".join(lines)
@@ -421,6 +400,19 @@ body{background:#eef0f3;font-family:-apple-system,BlinkMacSystemFont,"PingFang S
 .chips{display:flex;flex-wrap:wrap;gap:6px}
 .chip{font-size:11px;background:#eef2ff;color:#3b5bdb;padding:3px 9px;border-radius:20px}
 .chip.dim{background:#f0f1f3;color:#a0a6ad}
+.fund{margin:10px 0 2px;padding:11px 13px;background:#fafcff;border:1px solid #eef3fb;border-radius:11px}
+.fund-grid{display:flex;flex-wrap:wrap;gap:14px}
+.fg{flex:1;min-width:120px}
+.fgh{font-size:11px;color:#3b5bdb;font-weight:700;letter-spacing:.5px;margin-bottom:5px}
+.fg-row{display:flex;justify-content:space-between;font-size:13px;padding:2px 0;border-bottom:1px dashed #f0f1f3}
+.fg-row span{color:#8a9099}
+.fg-row b{font-weight:600}
+.fund-note{font-size:12px;color:#5a6068;margin-top:9px;line-height:1.6}
+.fund-note b{color:#2b5876}
+.flag{display:inline-block;font-size:11px;font-weight:600;padding:1px 7px;border-radius:6px;margin:2px 4px 2px 0}
+.flag.good{background:#f6ffed;color:#389e0d}
+.flag.bad{background:#fff1f0;color:#d4380d}
+.flag.mid{background:#f0f1f3;color:#5a6068}
 .pos{display:flex;flex-wrap:wrap;gap:14px;margin:10px 0 2px;padding:9px 12px;background:#fafbfc;border-radius:10px}
 .pos-item{display:flex;align-items:baseline;gap:5px}
 .pos-item .pl{font-size:11px;color:#8a9099}
@@ -452,6 +444,175 @@ body{background:#eef0f3;font-family:-apple-system,BlinkMacSystemFont,"PingFang S
 .sum-cell .sv.bear{color:#9be7a8}
 .foot{font-size:11px;color:#a0a6ad;text-align:center;margin-top:12px;line-height:1.7}
 """
+
+
+# ───────────────────────── 基本面 / 资金面面板 ─────────────────────────
+def _fund_flags(fund: dict) -> list[tuple[str, str]]:
+    """根据基本面数据生成 (文本, 等级) 标签列表，等级 good/bad/mid。"""
+    flags: list[tuple[str, str]] = []
+    pb = fund.get("pb")
+    if pb is not None:
+        if pb < 1:
+            flags.append((f"破净 PB {pb:.2f}", "bad" if pb < 0.7 else "mid"))
+        elif pb > 5:
+            flags.append((f"高 PB {pb:.2f}", "bad"))
+    pe = fund.get("pe")
+    if pe is not None:
+        if pe < 0:
+            flags.append(("亏损 负PE", "bad"))
+        elif pe > 50:
+            flags.append((f"高估值 PE {pe:.1f}", "bad"))
+        elif pe < 15:
+            flags.append((f"低估值 PE {pe:.1f}", "good"))
+    roe = fund.get("roe")
+    if roe is not None:
+        if roe >= 0.12:
+            flags.append((f"盈利优 ROE {roe*100:.1f}%", "good"))
+        elif roe >= 0.08:
+            flags.append((f"盈利中 ROE {roe*100:.1f}%", "mid"))
+        else:
+            flags.append((f"盈利弱 ROE {roe*100:.1f}%", "bad"))
+    gm = fund.get("gross_margin")
+    if gm is not None:
+        if gm >= 0.40:
+            flags.append((f"高毛利 {gm*100:.0f}%", "good"))
+        elif gm >= 0.20:
+            flags.append((f"毛利中 {gm*100:.0f}%", "mid"))
+        else:
+            flags.append((f"低毛利 {gm*100:.0f}%", "bad"))
+    to = fund.get("turnover")
+    if to is not None:
+        if to >= 3:
+            flags.append((f"交投活跃 换手 {to:.1f}%", "mid"))
+        elif to < 1.5:
+            flags.append((f"交投清淡 换手 {to:.1f}%", "mid"))
+    return flags
+
+
+def _fund_panel_html(fund: dict) -> str:
+    """生成基本面/资金面 HTML 子面板；无数据时返回占位提示。"""
+    if not isinstance(fund, dict) or fund.get("error") or not any(
+        fund.get(k) is not None for k in ("pe", "pb", "roe", "mkt_cap", "turnover")
+    ):
+        return '<div class="fund"><div class="fund-note">暂无基本面数据（缓存未命中或联网失败）。</div></div>'
+
+    def row(label: str, val: str) -> str:
+        return f'<div class="fg-row"><span>{label}</span><b>{val}</b></div>'
+
+    pe = fund.get("pe")
+    pb = fund.get("pb")
+    ps = fund.get("ps")
+    pcf = fund.get("pcf")
+    mc = fund.get("mkt_cap")
+    roe = fund.get("roe")
+    gm = fund.get("gross_margin")
+    to = fund.get("turnover")
+    amt = fund.get("amount_20")
+    amt_yi = (amt / 1e8) if amt is not None else None
+
+    val_block = (
+        (row("PE", fmt_num(pe)) if pe is not None else "")
+        + (row("PB", fmt_num(pb)) if pb is not None else "")
+        + (row("PS", fmt_num(ps)) if ps is not None else "")
+        + (row("PCF", fmt_num(pcf)) if pcf is not None else "")
+        + (row("总市值", f"{fmt_num(mc)}亿") if mc is not None else "")
+    )
+    qual_block = (
+        (row("ROE", f"{fmt_num(roe*100,1)}%") if roe is not None else "")
+        + (row("毛利率", f"{fmt_num(gm*100,1)}%") if gm is not None else "")
+    )
+    flow_block = (
+        (row("换手率", f"{fmt_num(to,2)}%") if to is not None else "")
+        + (row("20日成交额", f"{fmt_num(amt_yi,2)}亿") if amt_yi is not None else "")
+    )
+    flags = _fund_flags(fund)
+    note = (
+        "估值点评："
+        + "".join(f'<span class="flag {lv}">{txt}</span>' for txt, lv in flags)
+        if flags
+        else "估值点评：数据不足"
+    )
+    return f"""
+    <div class="fund">
+      <div class="fund-grid">
+        <div class="fg"><div class="fgh">估值</div>{val_block}</div>
+        <div class="fg"><div class="fgh">质量</div>{qual_block}</div>
+        <div class="fg"><div class="fgh">资金面</div>{flow_block}</div>
+      </div>
+      <div class="fund-note">{note}</div>
+    </div>"""
+
+
+def _fund_panel_md(fund: dict) -> list[str]:
+    """生成基本面 Markdown 行（含估值点评）。"""
+    if not isinstance(fund, dict) or fund.get("error"):
+        return ["- **基本面/资金面**：暂无数据"]
+    specs = [
+        ("PE", "pe", lambda v: fmt_num(v)),
+        ("PB", "pb", lambda v: fmt_num(v)),
+        ("PS", "ps", lambda v: fmt_num(v)),
+        ("PCF", "pcf", lambda v: fmt_num(v)),
+        ("总市值", "mkt_cap", lambda v: f"{fmt_num(v)}亿"),
+        ("ROE", "roe", lambda v: f"{fmt_num(v*100,1)}%"),
+        ("毛利率", "gross_margin", lambda v: f"{fmt_num(v*100,1)}%"),
+        ("换手率", "turnover", lambda v: f"{fmt_num(v,2)}%"),
+    ]
+    parts = [f"{label}={fmt(fund[key])}" for label, key, fmt in specs if fund.get(key) is not None]
+    if not parts:
+        return ["- **基本面/资金面**：暂无数据"]
+    lines = ["- **基本面/资金面**：" + " ／ ".join(parts)]
+    flags = _fund_flags(fund)
+    if flags:
+        lines.append("  - 估值点评：" + "、".join(txt for txt, _ in flags))
+    return lines
+
+
+def build_fundamentals_compare(today: str, holdings: list[dict]) -> tuple[str, str]:
+    """跨持仓基本面对比表。holdings: [{code, name, analysis}]。返回 (html, md)。"""
+    rows_html: list[str] = []
+    rows_md: list[str] = []
+    for h in holdings:
+        code = h.get("code", "")
+        name = h.get("name", "")
+        fund = (h.get("analysis") or {}).get("fundamentals")
+        if not isinstance(fund, dict) or fund.get("error"):
+            rows_html.append(
+                f'<tr><td class="name">{code} {name}</td>'
+                f'<td colspan="6" style="color:#a0a6ad">暂无基本面数据</td></tr>'
+            )
+            rows_md.append(f"| {code} {name} | - | - | - | - | - | - | 暂无 |")
+            continue
+        flags = _fund_flags(fund)
+        note = "、".join(t for t, _ in flags) if flags else "—"
+        pe = fmt_num(fund.get("pe"))
+        pb = fmt_num(fund.get("pb"))
+        roe = f"{fmt_num(fund['roe']*100,1)}%" if fund.get("roe") is not None else "—"
+        gm = f"{fmt_num(fund['gross_margin']*100,1)}%" if fund.get("gross_margin") is not None else "—"
+        mc = fmt_num(fund.get("mkt_cap")) if fund.get("mkt_cap") is not None else "—"
+        to = f"{fmt_num(fund['turnover'],2)}%" if fund.get("turnover") is not None else "—"
+        rows_html.append(
+            f'<tr><td class="name">{code} {name}</td>'
+            f"<td>{pe}</td><td>{pb}</td><td>{roe}</td><td>{gm}</td>"
+            f'<td>{mc}</td><td>{to}</td>'
+            f'<td style="text-align:left;font-size:12px;color:#5a6068">{note}</td></tr>'
+        )
+        rows_md.append(f"| {code} {name} | {pe} | {pb} | {roe} | {gm} | {mc} | {to} | {note} |")
+    html = f"""
+    <div class="card">
+      <div class="card-head"><span class="code">📊 跨持仓基本面对比</span></div>
+      <table class="cmp">
+        <tr><th>股票</th><th>PE</th><th>PB</th><th>ROE</th><th>毛利率</th><th>市值(亿)</th><th>换手</th><th>点评</th></tr>
+        {''.join(rows_html)}
+      </table>
+    </div>"""
+    md = (
+        f"## 跨持仓基本面对比（{today}）\n\n"
+        f"| 股票 | PE | PB | ROE | 毛利率 | 市值(亿) | 换手 | 点评 |\n"
+        f"|---|---|---|---|---|---|---|---|\n"
+        + "\n".join(rows_md)
+        + "\n"
+    )
+    return html, md
 
 
 def render_stock_html(analysis: dict, pos: dict | None = None) -> str:
@@ -560,6 +721,7 @@ def render_stock_html(analysis: dict, pos: dict | None = None) -> str:
         if chips
         else '<span class="chip dim">暂无基本面数据</span>'
     )
+    fund_html = _fund_panel_html(fund)
 
     bar_html = ""
     if band_pos is not None:
@@ -631,7 +793,7 @@ def render_stock_html(analysis: dict, pos: dict | None = None) -> str:
         {_m("K", k)} {_m("D", d)} {_m("J", j)}
       </div>
       <div class="state">MACD：{macd_state} ｜ KDJ：{kdj_state}</div>
-      <div class="chips">{chip_html}</div>
+      {fund_html}
     </div>"""
 
 
@@ -712,6 +874,7 @@ def render_summary_md(summary: dict, count: int) -> str:
 def main() -> int:
     today = _today_str()
     log_lines: list[str] = []
+    fund_cmp_html = fund_cmp_md = ""
 
     # 1) 读取持仓
     try:
@@ -763,6 +926,7 @@ def main() -> int:
         sections: list[str] = []
         sections_html: list[str] = []
         stock_list: list[tuple] = []
+        holdings_meta: list[dict] = []
         ok, failed = 0, 0
         for code in codes:
             pos = pos_map.get(code)
@@ -782,6 +946,7 @@ def main() -> int:
             else:
                 ok += 1
             stock_list.append((analysis, pos))
+            holdings_meta.append({"code": code, "name": (pos or {}).get("name", ""), "analysis": analysis})
             sections.append(render_stock(analysis, pos))
             sections_html.append(render_stock_html(analysis, pos))
 
@@ -813,6 +978,16 @@ def main() -> int:
         except Exception as exc:
             log_lines.append(f"近几天建议对比生成失败: {exc}")
 
+        # 跨持仓基本面对比（嵌入报告 + 单独落盘便于邮件附件）
+        try:
+            fund_cmp_html, fund_cmp_md = build_fundamentals_compare(today, holdings_meta)
+            if fund_cmp_html:
+                sections_html.append(fund_cmp_html)
+                md = md.rstrip() + "\n\n" + fund_cmp_md
+                html = build_html_report(today, backend, summary_line, "\n".join(sections_html), summary_html)
+        except Exception as exc:
+            log_lines.append(f"跨持仓基本面对比生成失败: {exc}")
+
     # 2) 落盘（Markdown 兼容 + HTML 美观版）
     md_path = STOCK_DATA_DIR / f"holdings_analysis_{today}.md"
     html_path = STOCK_DATA_DIR / f"holdings_analysis_{today}.html"
@@ -838,6 +1013,24 @@ def main() -> int:
         compare_html_path.write_text(compare_html_doc, encoding="utf-8")
         compare_md_path.write_text(f"# 持仓建议对比 · {today}\n\n> 数据源：{backend}\n\n" + compare_md, encoding="utf-8")
 
+    # 跨持仓基本面对比单独落盘（供邮件附件 / 单独查看）
+    fund_cmp_html_path = STOCK_DATA_DIR / f"holdings_fund_compare_{today}.html"
+    fund_cmp_md_path = STOCK_DATA_DIR / f"holdings_fund_compare_{today}.md"
+    if fund_cmp_html:
+        fund_cmp_html_doc = (
+            f"<!doctype html><html><head><meta charset=\"utf-8\">"
+            f"<meta name=\"viewport\" content=\"width=device-width,initial-scale=1\">"
+            f"<title>跨持仓基本面对比 {today}</title><style>{_HTML_STYLE}</style></head>"
+            f"<body><div class=\"wrap\">"
+            f"<div class=\"top\"><h1>📊 跨持仓基本面对比 · {today}</h1>"
+            f"<div class=\"meta\">📊 数据源 {backend}</div></div>"
+            f"{fund_cmp_html}"
+            f"<div class=\"foot\">Stocks-Master 自动生成 · 基本面/资金面对比<br>仅供参考，不构成投资建议</div>"
+            f"</div></body></html>"
+        )
+        fund_cmp_html_path.write_text(fund_cmp_html_doc, encoding="utf-8")
+        fund_cmp_md_path.write_text(f"# 跨持仓基本面对比 · {today}\n\n> 数据源：{backend}\n\n" + fund_cmp_md, encoding="utf-8")
+
     print("\n".join(log_lines))
     print(f"[OK] 报告已落盘:\n  - {md_path}\n  - {html_path}")
 
@@ -846,6 +1039,8 @@ def main() -> int:
     attachments = [str(html_path)]
     if compare_html:
         attachments.append(str(compare_html_path))
+    if fund_cmp_html:
+        attachments.append(str(fund_cmp_html_path))
     if send_email(subject, md, log_lines=log_lines, html_content=html, extra_attachment_paths=attachments):
         print("[OK] 已通过邮件推送（HTML 正文 + 报告/对比附件）")
     else:
