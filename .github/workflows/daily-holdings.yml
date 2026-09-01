@@ -2,8 +2,12 @@ name: 每日持仓分析推送
 
 on:
   schedule:
-    # 北京时间 18:30（收盘后数据已定稿）= UTC 10:30，工作日 1-5
-    - cron: "30 10 * * 1-5"
+    # 到点自检轮询：UTC 10:00~13:40 每 20 分钟一槽（北京 18:00~21:40）。
+    # 实测 GitHub Actions schedule 排队延迟可达 7~10 小时（2026-08-27/28/31 推到北京凌晨），
+    # 单点 cron 不可靠；改为高频槽位 + job 内北京时间窗口自检，延迟只影响"哪一槽执行"，
+    # 不再导致"整天推到凌晨"。窗口外/已推送的槽位秒级空转（gate 内 curl 一次 API），
+    # 不触发 checkout / 装依赖，不消耗执行时间。
+    - cron: "*/20 10-13 * * 1-5"
   workflow_dispatch:
     inputs:
       signal_date:
@@ -23,31 +27,55 @@ jobs:
       # 同花顺官方 Financial-API：有 Key 时云端最快首选；缺失时 kline.py 回退链降级到 akshare/baostock。
       HITHINK_FINANCE_API_KEY: ${{ secrets.HITHINK_FINANCE_API_KEY }}
     steps:
-      - name: 计算信号日 $TODAY
-        id: today
+      - name: 北京时间窗口自检 + 当天防重 + 信号日
+        id: gate
+        env:
+          GH_TOKEN: ${{ github.token }}
         run: |
           if [ -n "${{ github.event.inputs.signal_date }}" ]; then
+            # 手动补跑：跳过窗口与防重，任意时刻执行
             TODAY="${{ github.event.inputs.signal_date }}"
+            echo "手动补跑信号日: $TODAY"
           else
-            TODAY=$(date +%Y%m%d)
+            NOW=$(TZ=Asia/Shanghai date +%H%M)
+            if [ "$NOW" -lt "1830" ] || [ "$NOW" -ge "2200" ]; then
+              echo "北京 $NOW 不在推送窗口 [18:30,22:00)，空转跳过"
+              echo "ok=false" >> $GITHUB_OUTPUT
+              exit 0
+            fi
+            TODAY=$(TZ=Asia/Shanghai date +%Y%m%d)
+            # 防重：当天 artifact 已存在 = 已推送过，跳过（秒级空转）
+            N=$(curl -s -H "Authorization: Bearer $GH_TOKEN" \
+                "https://api.github.com/repos/${{ github.repository }}/actions/artifacts?per_page=100&name=holdings-analysis-$TODAY" \
+                | grep -o '"total_count":[0-9]*' | head -1 | cut -d: -f2)
+            if [ "${N:-0}" -gt 0 ] 2>/dev/null; then
+              echo "当天 artifact holdings-analysis-$TODAY 已存在（已推送），跳过"
+              echo "ok=false" >> $GITHUB_OUTPUT
+              exit 0
+            fi
+            echo "进入推送窗口（北京 $NOW），信号日: $TODAY"
           fi
+          echo "ok=true" >> $GITHUB_OUTPUT
           echo "today=$TODAY" >> $GITHUB_OUTPUT
-          echo "[holdings] 信号日: $TODAY"
 
       - uses: actions/checkout@v4
+        if: steps.gate.outputs.ok == 'true'
 
       - uses: actions/setup-python@v5
+        if: steps.gate.outputs.ok == 'true'
         with:
           python-version: "3.11"
 
       - name: 安装依赖
+        if: steps.gate.outputs.ok == 'true'
         run: |
           pip install --upgrade pip
           pip install --retries 3 numpy pandas akshare baostock supabase requests
 
       - name: 生成持仓个股分析并推送
+        if: steps.gate.outputs.ok == 'true'
         env:
-          TODAY: ${{ steps.today.outputs.today }}
+          TODAY: ${{ steps.gate.outputs.today }}
           KLINE_BACKEND: hithink
           SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
           SUPABASE_KEY: ${{ secrets.SUPABASE_KEY }}
@@ -59,8 +87,8 @@ jobs:
           SMTP_TO: ${{ secrets.SMTP_TO }}
         run: |
           python scripts/notify_holdings_analysis.py
+          F="stock_data/holdings_analysis_${{ steps.gate.outputs.today }}.html"
           echo "### 持仓分析产出" >> $GITHUB_STEP_SUMMARY
-          F="stock_data/holdings_analysis_${{ steps.today.outputs.today }}.html"
           if [ -f "$F" ]; then
             echo "✅ 已生成美观 HTML 报告: $F" >> $GITHUB_STEP_SUMMARY
           else
@@ -71,8 +99,9 @@ jobs:
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: holdings-analysis-${{ steps.today.outputs.today }}
+          name: holdings-analysis-${{ steps.gate.outputs.today || 'skip' }}
           path: |
             stock_data/holdings_analysis_*.md
             stock_data/holdings_analysis_*.html
           retention-days: 30
+          if-no-files-found: warn
