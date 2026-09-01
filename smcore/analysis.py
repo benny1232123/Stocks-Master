@@ -1,6 +1,7 @@
 """Shared helpers for single-stock technical analysis."""
 from __future__ import annotations
 
+import math
 import threading
 from datetime import date, timedelta
 from typing import Any
@@ -11,6 +12,15 @@ import pandas as pd
 from smcore.config.defaults import RECOMMENDATION_CONFIG
 from smcore.data.kline import fetch_daily_k
 from smcore.indicators.boll import calc_bollinger, evaluate_boll_signal
+
+
+def _js_round(x: float) -> int:
+    """前端 ComprehensivePanel 的 Math.round 语义（正数四舍五入，x.5 进 1）。
+
+    Python 内置 round 是银行家舍入（round(56.5)=56），与 JS Math.round(56.5)=57
+    在 .5 边界差 1 分，会导致 total/rating 跨档不一致，故统一用 floor(x+0.5)。
+    """
+    return int(math.floor(x + 0.5))
 
 
 def calc_ma(close: pd.Series, periods: list[int] | None = None) -> pd.DataFrame:
@@ -287,7 +297,8 @@ def recommendation_from_analysis(
             if value is not None and label:
                 fmt = f"{value:.1f}" if unit in ("PE", "PB") else f"{value*100:.0f}%"
                 fund_detail.append(f"{unit}{fmt}·{label}")
-    fundScore = round(sum(fund_scores) / len(fund_scores)) if fund_scores else 0.0
+    # 无基本面/资金面时给 missing 分（与前端 dims 显示 50 一致），不置 0
+    fundScore = _js_round(sum(fund_scores) / len(fund_scores)) if fund_scores else float(missing_f)
     fc_cls = cfg.get("fund_cap_cls", {}) or {}
     fundCls = "good" if fundScore >= float(fc_cls.get("good", 65)) else "bad" if fundScore < float(fc_cls.get("bad", 45)) else "neutral"
 
@@ -297,7 +308,9 @@ def recommendation_from_analysis(
     cap_scores: list[float] = []
     if cfg.get("enable_capital", True) and hasF:
         liq_segs = w_c.get("liq_amt")
-        daily_amt = (amt / 20 / 1e8) if amt is not None else None
+        # amount_20 缓存口径 = 近20日日均成交额(元)（baostock amount.mean()），/1e8 即亿元。
+        # ⚠️ 勿再 /20——那会把日均再缩 20 倍，交投活跃股资金面分被压到"成交清淡"档。
+        daily_amt = (amt / 1e8) if amt is not None else None
         if liq_segs:
             sc, label = _seg_score(liq_segs, daily_amt)
             cap_scores.append(sc)
@@ -309,19 +322,19 @@ def recommendation_from_analysis(
             cap_scores.append(sc)
             if to is not None and label:
                 cap_detail.append(f"换手{to:.1f}%·{label}")
-    capScore = round(sum(cap_scores) / len(cap_scores)) if cap_scores else 0.0
+    capScore = _js_round(sum(cap_scores) / len(cap_scores)) if cap_scores else float(missing_c)
     capCls = "good" if capScore >= float(fc_cls.get("good", 65)) else "bad" if capScore < float(fc_cls.get("bad", 45)) else "neutral"
 
     # ── 综合分 + 档位（与前端 ComprehensivePanel 同构）──
     fw = cfg.get("face_weights", {}) or {}
     if hasF:
-        total = round(
+        total = _js_round(
             techScore * float(fw.get("technical", 0.40))
             + fundScore * float(fw.get("fundamental", 0.35))
             + capScore * float(fw.get("capital", 0.25))
         )
     else:
-        total = round(techScore)
+        total = _js_round(techScore)
     rating = "中性观望"
     for r_cfg in cfg.get("rating", []):
         if r_cfg.get("gte") is not None and total >= float(r_cfg["gte"]):

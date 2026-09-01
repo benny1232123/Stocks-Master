@@ -748,8 +748,8 @@ function ComprehensivePanel({ analysis }) {
   const fundScore = Math.round((peScore + pbScore + roeScore + gmScore + rgScore) / 5)
   const fundCls = fundScore >= 65 ? 'good' : fundScore < 45 ? 'bad' : 'neutral'
 
-  // 资金面
-  const dailyAmt = amt != null ? amt / 20 / 1e8 : null
+  // 资金面（amount_20 缓存口径 = 近20日日均成交额(元)，/1e8 即亿元；勿再 /20）
+  const dailyAmt = amt != null ? amt / 1e8 : null
   const liqScore = dailyAmt == null ? 50 : dailyAmt > 5 ? 92 : dailyAmt > 2 ? 76 : dailyAmt > 1 ? 62 : dailyAmt > 0.3 ? 48 : 32
   const toScore = to == null ? 50 : to > 5 ? 90 : to > 2 ? 78 : to > 1 ? 64 : to > 0.3 ? 52 : to < 0.1 ? 34 : 46
   const capScore = Math.round((liqScore + toScore) / 2)
