@@ -4,12 +4,15 @@ name: 纸盘组合每日执行（真实 process_day 闭环）
 # 离线重放 process_day（开仓→盯市出场→漂移再平衡→回撤熔断），产出纸盘组合快照与回撤报告。
 # 纯纸盘、零实盘、零网络（只读 daily-pick 已提交的 k_data 缓存 + DAL + sector_map.json）。
 #
-# 时序：daily-pick 在 08:30 UTC（北京 16:30）跑并 force-push 当日 DAL + k_data；
-# 本流程排在其后（11:00 UTC = 北京 19:00），确保当日数据已落库再重放。
+# 时序：daily-pick 在 08:30 UTC（北京 16:30）窗口自检轮询（见 daily-pick.yml），
+# 当日 DAL 落库后，本流程在 11:00 UTC 起的自检轮询（北京 19:30 后）执行。
+# state 跨日累积，重复执行会推进两次 process_day → 必须当天只跑一次（gate 内 artifact 防重）。
 
 on:
   schedule:
-    - cron: "0 11 * * 1-5"
+    # 到点自检轮询：UTC 11:00~14:40 每 20 分钟一槽（北京 19:00~22:40）。
+    # 单点 cron 排队延迟可达数小时，改为高频槽位 + 北京时间窗口自检。
+    - cron: "*/20 11-14 * * 1-5"
   workflow_dispatch: {}
 
 permissions:
@@ -21,21 +24,51 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 30
     steps:
+      - name: 北京时间窗口自检 + 当天防重
+        id: gate
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          NOW=$(TZ=Asia/Shanghai date +%H%M)
+          TODAY=$(TZ=Asia/Shanghai date +%Y%m%d)
+          if [ "$NOW" -lt "1930" ]; then
+            # 凌晨/上午槽 TODAY 可能已是次日；且 19:30 前当日 DAL 可能未落库
+            echo "北京 $NOW 未到窗口（<19:30），空转跳过"
+            echo "ok=false" >> $GITHUB_OUTPUT
+            exit 0
+          fi
+          # 防重：state 跨日累积，重复执行=重复推进 process_day → 当天只跑一次
+          N=$(curl -s -H "Authorization: Bearer $GH_TOKEN" \
+              "https://api.github.com/repos/${{ github.repository }}/actions/artifacts?per_page=100&name=paper-portfolio-report-$TODAY" \
+              | grep -o '"total_count":[0-9]*' | head -1 | cut -d: -f2)
+          if [ "${N:-0}" -gt 0 ] 2>/dev/null; then
+            echo "当天 artifact paper-portfolio-report-$TODAY 已存在（已执行），跳过"
+            echo "ok=false" >> $GITHUB_OUTPUT
+            exit 0
+          fi
+          echo "进入窗口（北京 $NOW），信号日: $TODAY"
+          echo "ok=true" >> $GITHUB_OUTPUT
+          echo "today=$TODAY" >> $GITHUB_OUTPUT
+
       - name: 检出（浅克隆，取最新 DAL + k_data 缓存 + sector_map）
         uses: actions/checkout@v4
+        if: steps.gate.outputs.ok == 'true'
         with:
           fetch-depth: 1
 
       - name: 配置 Python
         uses: actions/setup-python@v5
+        if: steps.gate.outputs.ok == 'true'
         with:
           python-version: "3.11"
 
       - name: 安装依赖（仅 pandas；离线重放，零网络）
+        if: steps.gate.outputs.ok == 'true'
         run: pip install --quiet pandas
 
       - name: 纸盘每日执行（开仓→盯市出场→漂移再平衡→回撤熔断）
         id: paper
+        if: steps.gate.outputs.ok == 'true'
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
@@ -47,8 +80,9 @@ jobs:
         uses: actions/upload-artifact@v4
         if: always()
         with:
-          name: paper-portfolio-report
+          name: paper-portfolio-report-${{ steps.gate.outputs.today || 'skip' }}
           path: |
             stock_data/position_monitor_state.json
             stock_data/paper_portfolio_report.json
           retention-days: 30
+          if-no-files-found: warn

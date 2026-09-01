@@ -2,7 +2,10 @@ name: 每日选股
 
 on:
   schedule:
-    - cron: "30 8 * * 1-5"
+    # 到点自检轮询：UTC 08:00~13:40 每 20 分钟一槽（北京 16:00~21:40）。
+    # 实测 schedule 排队延迟可达 7~10 小时（daily-holdings 2026-08-27/28/31 推到北京凌晨），
+    # 单点 cron 不可靠；高频槽位 + 窗口自检后，延迟只影响"哪一槽执行"，当日仍能完成。
+    - cron: "*/20 8-13 * * 1-5"
   workflow_dispatch:
     inputs:
       signal_date:
@@ -26,41 +29,68 @@ jobs:
       # 缺失/不可用时会由 kline.py 回退链自动降级到 akshare/baostock，不会静默失败。
       HITHINK_FINANCE_API_KEY: ${{ secrets.HITHINK_FINANCE_API_KEY }}
     steps:
-      - name: 计算信号日 $TODAY
-        id: today
+      - name: 北京时间窗口自检 + 当天防重 + 信号日
+        id: gate
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           if [ -n "${{ github.event.inputs.signal_date }}" ]; then
+            # 手动补跑：跳过窗口与防重，任意时刻执行
             TODAY="${{ github.event.inputs.signal_date }}"
+            echo "手动补跑信号日: $TODAY"
           else
-            TODAY=$(date +%Y%m%d)
+            NOW=$(TZ=Asia/Shanghai date +%H%M)
+            if [ "$NOW" -lt "1630" ]; then
+              # 凌晨/上午槽 TODAY 可能已是次日，必须挡掉避免用错误日期选股
+              echo "北京 $NOW 未到推送窗口（<16:30），空转跳过"
+              echo "ok=false" >> $GITHUB_OUTPUT
+              exit 0
+            fi
+            TODAY=$(TZ=Asia/Shanghai date +%Y%m%d)
+            # 防重：当日 DAL 已落库（远程 git 有 Daily-Action-List-$TODAY.csv）= 今天已跑过
+            N=$(curl -s -H "Authorization: Bearer $GH_TOKEN" \
+                "https://api.github.com/repos/${{ github.repository }}/commits?path=stock_data/Daily-Action-List-${TODAY}.csv&per_page=1" \
+                | grep -c '"sha"')
+            if [ "$N" -gt 0 ]; then
+              echo "当日 DAL 已落库（Daily-Action-List-$TODAY.csv），已跑过，跳过"
+              echo "ok=false" >> $GITHUB_OUTPUT
+              exit 0
+            fi
+            echo "进入推送窗口（北京 $NOW），信号日: $TODAY"
           fi
+          echo "ok=true" >> $GITHUB_OUTPUT
           echo "today=$TODAY" >> $GITHUB_OUTPUT
-          echo "[daily-pick] 信号日: $TODAY"
       - uses: actions/checkout@v4
+        if: steps.gate.outputs.ok == 'true'
 
       - uses: actions/setup-python@v5
+        if: steps.gate.outputs.ok == 'true'
         with:
           python-version: "3.11"
 
       - name: pip 缓存
         uses: actions/cache@v4
+        if: steps.gate.outputs.ok == 'true'
         with:
           path: ~/.cache/pip
           key: pip-${{ runner.os }}-${{ hashFiles('Frequently-Used-Program/auto_notify_boll.py') }}
           restore-keys: pip-${{ runner.os }}-
 
       - name: 安装依赖
+        if: steps.gate.outputs.ok == 'true'
         run: |
           pip install --upgrade pip
           pip install --retries 3 akshare pandas requests baostock matplotlib cos-python-sdk-v5 supabase backtrader
 
       - name: 尝试安装 pytdx（国内自托管 Runner 可选；GitHub 海外 Runner 自动跳过）
         continue-on-error: true
+        if: steps.gate.outputs.ok == 'true'
         run: pip install "pypandoc<1.10" pytdx 2>/dev/null || pip install pytdx 2>/dev/null || true
 
       - name: 策略1 Boll 扫描
         id: boll
         continue-on-error: true
+        if: steps.gate.outputs.ok == 'true'
         timeout-minutes: 25
         env:
           KLINE_BACKEND: hithink
@@ -68,7 +98,7 @@ jobs:
           SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
           SUPABASE_KEY: ${{ secrets.SUPABASE_KEY }}
         run: |
-          TODAY=${{ steps.today.outputs.today }}
+          TODAY=${{ steps.gate.outputs.today }}
           python scripts/strategy_cache.py pull boll $TODAY && echo "skip=true" >> $GITHUB_OUTPUT && exit 0
           python -m smcore.strategies.boll $TODAY
           python scripts/strategy_cache.py push boll $TODAY
@@ -86,13 +116,14 @@ jobs:
       - name: 策略2 题材热度
         id: theme
         continue-on-error: true
+        if: steps.gate.outputs.ok == 'true'
         timeout-minutes: 20
         env:
           KLINE_BACKEND: hithink
           SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
           SUPABASE_KEY: ${{ secrets.SUPABASE_KEY }}
         run: |
-          TODAY=${{ steps.today.outputs.today }}
+          TODAY=${{ steps.gate.outputs.today }}
           python scripts/strategy_cache.py pull theme $TODAY && echo "skip=true" >> $GITHUB_OUTPUT && exit 0
           # theme 内部 datetime.now() 硬编码，用 SIGNAL_DATE 包装脚本注入指定日期
           SIGNAL_DATE=$TODAY python scripts/run_strategy_for_date.py theme
@@ -110,13 +141,14 @@ jobs:
       - name: 策略3 CCTV 板块
         id: cctv
         continue-on-error: true
+        if: steps.gate.outputs.ok == 'true'
         timeout-minutes: 25
         env:
           KLINE_BACKEND: hithink
           SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
           SUPABASE_KEY: ${{ secrets.SUPABASE_KEY }}
         run: |
-          TODAY=${{ steps.today.outputs.today }}
+          TODAY=${{ steps.gate.outputs.today }}
           python scripts/strategy_cache.py pull cctv $TODAY && echo "skip=true" >> $GITHUB_OUTPUT && exit 0
           SIGNAL_DATE=$TODAY python scripts/run_strategy_for_date.py cctv
           python scripts/strategy_cache.py push cctv $TODAY
@@ -133,6 +165,7 @@ jobs:
       - name: 策略4 相对强弱
         id: relativity
         continue-on-error: true
+        if: steps.gate.outputs.ok == 'true'
         timeout-minutes: 20
         env:
           KLINE_BACKEND: hithink
@@ -141,7 +174,7 @@ jobs:
           SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
           SUPABASE_KEY: ${{ secrets.SUPABASE_KEY }}
         run: |
-          TODAY=${{ steps.today.outputs.today }}
+          TODAY=${{ steps.gate.outputs.today }}
           python scripts/strategy_cache.py pull relativity $TODAY && echo "skip=true" >> $GITHUB_OUTPUT && exit 0
           # relativity --max-workers 1 仍可通过 env 注入信号日
           SIGNAL_DATE=$TODAY python scripts/run_strategy_for_date.py relativity
@@ -159,13 +192,14 @@ jobs:
       - name: 策略5 动量/相对强度
         id: momentum
         continue-on-error: true
+        if: steps.gate.outputs.ok == 'true'
         timeout-minutes: 25
         env:
           KLINE_BACKEND: hithink
           SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
           SUPABASE_KEY: ${{ secrets.SUPABASE_KEY }}
         run: |
-          TODAY=${{ steps.today.outputs.today }}
+          TODAY=${{ steps.gate.outputs.today }}
           python scripts/strategy_cache.py pull momentum $TODAY && echo "skip=true" >> $GITHUB_OUTPUT && exit 0
           SIGNAL_DATE=$TODAY python scripts/run_strategy_for_date.py momentum
           python scripts/strategy_cache.py push momentum $TODAY
@@ -180,6 +214,7 @@ jobs:
           fi
 
       - name: 生成操作清单 + 上传 COS
+        if: steps.gate.outputs.ok == 'true'
         env:
           KLINE_BACKEND: hithink
           COS_SECRET_ID: ${{ secrets.COS_SECRET_ID }}
@@ -187,7 +222,7 @@ jobs:
           COS_BUCKET: ${{ secrets.COS_BUCKET }}
           COS_REGION: ${{ secrets.COS_REGION }}
         run: |
-          TODAY=${{ steps.today.outputs.today }}
+          TODAY=${{ steps.gate.outputs.today }}
           SIGNAL_DATE=$TODAY python -c "
           import os, sys; sys.path.insert(0, '.')
           from smcore.strategy import fuse_signals, save_action_list
@@ -211,6 +246,7 @@ jobs:
           "
 
       - name: 上传结果产物
+        if: steps.gate.outputs.ok == 'true'
         uses: actions/upload-artifact@v4
         with:
           name: stock-results-${{ github.run_number }}
@@ -223,15 +259,18 @@ jobs:
             stock_data/Daily-Action-List-*.csv
             stock_data/backtest_status.txt
           retention-days: 30
+          if-no-files-found: warn
 
       - name: 预热看板数据
         continue-on-error: true
+        if: steps.gate.outputs.ok == 'true'
         env:
           KLINE_BACKEND: hithink
         run: python scripts/prewarm_dashboard.py
 
       - name: 每日清单前向信号回测
         continue-on-error: true
+        if: steps.gate.outputs.ok == 'true'
         timeout-minutes: 55
         env:
           KLINE_BACKEND: hithink
@@ -249,8 +288,10 @@ jobs:
       # 此处只负责生成/提交数据，不再构建前端或生成静态 JSON。
 
       - name: 提交缓存与数据到仓库
+        if: steps.gate.outputs.ok == 'true'
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TODAY: ${{ steps.gate.outputs.today }}
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
@@ -346,10 +387,10 @@ jobs:
           fi
 
       - name: 失败告警（无候选且无策略产出时开 issue）
-        if: always()
+        if: steps.gate.outputs.ok == 'true'
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          TODAY: ${{ steps.today.outputs.today }}
+          TODAY: ${{ steps.gate.outputs.today }}
         run: |
           # 兜底：若 earlier step 未设置 TODAY，取当前日期
           TODAY="${TODAY:-$(date +%Y%m%d)}"
