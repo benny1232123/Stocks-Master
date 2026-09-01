@@ -123,64 +123,111 @@ MAX_SINGLE_WEIGHT_PCT = _CEILS["MAX_SINGLE_WEIGHT_PCT"]
 
 # ── 持仓建议三维度综合打分（技术面 + 基本面 + 资金面）──
 # 设计原则（符合"权重/阈值集中配置、禁散落魔数"）：
-#  - 每个因子 weight = 触发时的「方向贡献」（正=偏多，负=偏空）。
-#  - 面净分 raw_face = Σ(触发因子 weight)；面满分 max_face = Σ|weight|（启用因子）。
-#  - 面归一分 face_norm = raw_face / max_face ∈ [-1, +1]。
-#  - 综合分 = Σ(face_weights[f]·face_norm[f]) / Σ(face_weights[f])（仅启用面），恒 ∈ [-1, +1]。
-#  - 分档看综合分（action_thresholds），不随因子数漂移。
-#  - enable_* 可单独关闭某一面；thresholds 为绝对阈值，集中可调。
+#  - 与前端 ComprehensivePanel 完全同构（2026-09-01 对齐）：三面均为 0-100 分制，
+#    综合分 = 技术0.40 + 基本面0.35 + 资金0.25（有基本面时；无则仅技术面）。
+#  - 技术面：五组信号累加 techS（RSI/MACD/KDJ/均线/布林），techScore = clamp(50+techS*6, 0, 100)。
+#  - 基本面：PE/PB/ROE/毛利率/营收增长 5 因子分段打分后取平均（缺营收增长 → missing=50）。
+#  - 资金面：20日成交额日均(亿) + 换手率(%) 2 因子分段打分后取平均。
+#  - 档位：tech 分档 good≥70/bad≤30；fund/cap good≥65/bad<45；rating 五档；action 由 rating 映射。
+#  - enable_* 可单独关闭某一面；缺失因子一律给 missing 分（不稀释面均值）。
 RECOMMENDATION_CONFIG = {
     "enable_technical": True,
     "enable_fundamental": True,
     "enable_capital": True,
-    "face_weights": {"technical": 1.0, "fundamental": 0.8, "capital": 0.5},
+    "face_weights": {"technical": 0.40, "fundamental": 0.35, "capital": 0.25},
+    "tech_base": 50,
+    "tech_step": 6,
     "technical": {
-        "ma_trend": 2.0,        # 多头排列 + / 空头排列 -
-        "macd_hist": 1.0,       # 红柱 + / 绿柱 -
-        "boll_upper": 2.0,      # 触/破上轨超买 -
-        "boll_lower": 2.0,      # 触/破下轨超卖 +
-        "boll_near_upper": 1.5, # 高位近上轨 -
-        "boll_buy": 1.5,        # 布林买点信号 +
-        "rsi_overbought": 1.0,  # RSI>70 -
-        "rsi_oversold": 1.0,    # RSI<30 +
-        "kdj_overbought": 1.0,  # J>100 -
-        "kdj_oversold": 1.0,    # J<0 +
+        "rsi": [
+            {"gt": 80, "score": -2, "label": "严重超买"},
+            {"gt": 70, "score": -1, "label": "高位"},
+            {"lt": 20, "score": 2, "label": "严重超卖"},
+            {"lt": 30, "score": 1, "label": "超卖"},
+            {"gt": 55, "score": 1, "label": "偏强"},
+            {"lt": 45, "score": -1, "label": "偏弱"},
+        ],
+        "macd_golden_red": 2,   # dif>dea 且 macd_hist>0（金叉红柱）
+        "macd_dead_green": -2,  # dif<dea 且 macd_hist<0（死叉绿柱）
+        "kdj_j_over": 100, "kdj_j_over_score": -2,   # J>100 极端超买
+        "kdj_j_under": 0, "kdj_j_under_score": 2,    # J<0 极端超卖
+        "kdj_k_gt_d": 1, "kdj_k_lt_d": -1,
+        "ma_bull": 2, "ma_bear": -2,                 # MA5>MA10>MA20 多头 / 反向空头
+        "ma5_gt_ma20": 1, "ma5_lt_ma20": -1,
+        "boll_below_lower": 1,                       # 破下轨（超卖）
+        "boll_near_lower_dist": 2.0, "boll_near_lower": 1,   # dist_to_lower_pct < 2
+        "boll_near_upper_dist": -2.0, "boll_near_upper": -1, # dist_to_upper_pct > -2
     },
-    # 权重约定：所有 weight 均为「幅度」(正数)，方向由代码 direction 决定(+1/-1)。
-    #           切勿在 config 里写负号——否则与 direction=-1 相乘会负负得正。
-    # 阈值约定：PE/PB 为倍数；ROE / 毛利率 / 换手率 为百分数(%)。
-    #           注意 fundamental 的 roe/gross_margin 原始值是小数(0.156=15.6%)，
-    #           recommendation_from_analysis 内部统一 ×100 后再比对阈值。
+    "technical_cls": {"good": 70, "bad": 30},
     "fundamental": {
-        "pb_break": 1.5,        # 破净 PB<1（低估值）
-        "pe_low": 1.0,          # PE < pe_low_cap
-        "pe_high": 1.5,         # PE > pe_high_cap
-        "pb_high": 1.0,         # PB > pb_high_cap
-        "roe_good": 1.0,        # ROE >= roe_good_floor
-        "roe_weak": 1.0,        # ROE < roe_weak_cap
-        "margin_good": 0.8,     # 毛利率 >= margin_good_floor
-        "margin_weak": 0.8,     # 毛利率 < margin_weak_cap
+        "pe": [
+            {"lt": 0, "score": 38, "label": "亏损"},
+            {"lt": 15, "score": 90, "label": "偏低·有吸引力"},
+            {"lt": 25, "score": 76, "label": "中性合理"},
+            {"lt": 35, "score": 62, "label": "偏高"},
+            {"lt": 50, "score": 46, "label": "高估值"},
+            {"score": 32, "label": "高估值"},
+        ],
+        "pb": [
+            {"lt": 1, "score": 90, "label": "破净·低估值"},
+            {"lt": 3, "score": 76, "label": "偏低"},
+            {"lt": 6, "score": 62, "label": "合理"},
+            {"lt": 10, "score": 46, "label": "偏高"},
+            {"score": 32, "label": "高PB"},
+        ],
+        "roe": [
+            {"gt": 0.20, "score": 92, "label": "优秀"},
+            {"gt": 0.15, "score": 82, "label": "良好"},
+            {"gt": 0.10, "score": 66, "label": "一般"},
+            {"gt": 0, "score": 50, "label": "偏低"},
+            {"score": 28, "label": "亏损"},
+        ],
+        "gm": [
+            {"gt": 0.5, "score": 92, "label": "高毛利"},
+            {"gt": 0.4, "score": 82, "label": "较高"},
+            {"gt": 0.3, "score": 66, "label": "中等"},
+            {"gt": 0.2, "score": 54, "label": "较低"},
+            {"score": 42, "label": "低毛利"},
+        ],
+        "rg": [
+            {"gt": 0.3, "score": 92, "label": "高增长"},
+            {"gt": 0.2, "score": 82, "label": "稳健增长"},
+            {"gt": 0.1, "score": 66, "label": "微增"},
+            {"gt": 0, "score": 54, "label": "持平"},
+            {"score": 32, "label": "负增长"},
+        ],
+        "missing": 50,
     },
     "capital": {
-        "turnover_active": 0.8, # 换手率 >= turnover_active_floor（资金关注）
-        "turnover_thin": 0.8,   # 换手率 < turnover_thin_cap（清淡）
+        "liq_amt": [  # 20日成交额日均（亿元）
+            {"gt": 5, "score": 92, "label": "流动性充裕"},
+            {"gt": 2, "score": 76, "label": "流动性较好"},
+            {"gt": 1, "score": 62, "label": "流动性中等"},
+            {"gt": 0.3, "score": 48, "label": "成交偏清淡"},
+            {"score": 32, "label": "成交清淡"},
+        ],
+        "turnover": [  # 换手率（%）
+            {"gt": 5, "score": 90, "label": "高度活跃"},
+            {"gt": 2, "score": 78, "label": "活跃"},
+            {"gt": 1, "score": 64, "label": "一般"},
+            {"gt": 0.3, "score": 52, "label": "偏低"},
+            {"lt": 0.1, "score": 34, "label": "低迷"},
+            {"score": 46, "label": "一般"},
+        ],
+        "missing": 50,
     },
-    "thresholds": {
-        "pe_low_cap": 15.0,
-        "pe_high_cap": 60.0,
-        "pb_high_cap": 8.0,
-        "roe_good_floor": 12.0,
-        "roe_weak_cap": 5.0,
-        "margin_good_floor": 30.0,
-        "margin_weak_cap": 15.0,
-        "turnover_active_floor": 3.0,  # %
-        "turnover_thin_cap": 0.5,      # %
-    },
-    "action_thresholds": {
-        "add": 0.25,        # 综合分 >= 加仓
-        "bullish": 0.08,    # >= 持有偏多
-        "neutral": -0.08,   # >  持有观望
-        "bearish": -0.25,   # >  减仓偏空
-        # else 减仓
+    "fund_cap_cls": {"good": 65, "bad": 45},
+    "rating": [
+        {"gte": 70, "label": "推荐关注"},
+        {"gte": 58, "label": "偏积极"},
+        {"gte": 45, "label": "中性观望"},
+        {"gte": 35, "label": "偏谨慎"},
+        {"label": "回避"},
+    ],
+    "action_map": {
+        "推荐关注": "加仓",
+        "偏积极": "持有偏多",
+        "中性观望": "持有观望",
+        "偏谨慎": "减仓偏空",
+        "回避": "减仓",
     },
 }

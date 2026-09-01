@@ -336,7 +336,7 @@ def render_stock(analysis: dict, pos: dict | None = None) -> str:
     _face_parts = []
     for _lbl, _key in (("技术", "technical"), ("基本面", "fundamental"), ("资金", "capital")):
         _v = _faces_md.get(_key)
-        _face_parts.append(f"{_lbl} {_v:+.2f}" if _v is not None else f"{_lbl} —")
+        _face_parts.append(f"{_lbl} {_v:.0f}" if _v is not None else f"{_lbl} —")
     _faces_line = " ｜ ".join(_face_parts)
     lines = [
         title,
@@ -344,7 +344,7 @@ def render_stock(analysis: dict, pos: dict | None = None) -> str:
         f"- **Boll 信号**：{sig}",
         f"- **现价**：{fmt_num(close)} ｜ **趋势**：{trend}",
         f"- **持仓建议**：{rec.get('action')}（{rec.get('reason')}）",
-        f"- **三维打分**：{_faces_line}（各面 [-1,+1]，正=偏多，负=偏空）",
+        f"- **三维打分**：{_faces_line}（各面 0-100，与网站评分一致；≥65 偏多/优质/活跃，<45 偏空/偏弱/清淡）",
     ]
     if pos:
         cost = (pos or {}).get("cost")
@@ -796,8 +796,8 @@ def render_stock_html(analysis: dict, pos: dict | None = None) -> str:
         v = _faces.get(key)
         if v is None:
             return f'<span class="face dim">{label} 无数据</span>'
-        cls = "up" if v > 0.02 else ("down" if v < -0.02 else "flat")
-        return f'<span class="face {cls}">{label} {v:+.2f}</span>'
+        cls = "up" if v >= 65 else ("down" if v < 45 else "flat")
+        return f'<span class="face {cls}">{label} {v:.0f}</span>'
 
     faces_html = (
         '<div class="faces">'

@@ -151,15 +151,23 @@ def recommendation_from_analysis(
 ) -> dict[str, object]:
     """由「技术面 + 基本面 + 资金面」三维度综合给出持仓建议。
 
-    技术面：均线趋势(MA20/MA60)、MACD 柱、布林带位置/买卖信号、RSI、KDJ(J)。
-    基本面：估值(PE/PB 绝对阈值)、质量(ROE/毛利率)。
-    资金面：换手率活跃度。
+    ⚠️ 2026-09-01 与前端 ComprehensivePanel（frontend/src/App.jsx）完全对齐：
+    三面均为 0-100 分制，同一因子、同一分段阈值、同一综合权重、同一档位语义，
+    保证「日报/后端算出的三维打分 = 网站展示的三维评分」。
 
-    每个维度先算「面归一分」= 面净分 / Σ|该面权重| ∈ [-1, +1]，
-    再按 face_weights 加权得综合分 ∈ [-1, +1]，按 action_thresholds 分五档：
-        加仓 / 持有偏多 / 持有观望 / 减仓偏空 / 减仓
-    数据缺失的维度自动从加权中剔除，避免无数据面把综合分稀释向 0。
-    返回 {action, score, reason, drivers, faces}。
+    技术面：RSI / MACD(金叉红柱·死叉绿柱) / KDJ(J 极值·K-D) / 均线(MA5-10-20 排列) /
+            布林(破下轨·近下轨·近上轨) 五组信号累加 techS → techScore = clamp(50+techS*6, 0, 100)。
+    基本面：PE / PB / ROE / 毛利率 / 营收增长 5 因子分段打分取平均（缺失因子给 missing 分）。
+    资金面：20 日成交额日均(亿) + 换手率(%) 2 因子分段打分取平均。
+    综合分：有基本面时 total = round(tech*0.40 + fund*0.35 + cap*0.25)，否则 = techScore。
+    档位：rating 五档（推荐关注/偏积极/中性观望/偏谨慎/回避），action 由 rating 映射
+          （加仓/持有偏多/持有观望/减仓偏空/减仓）。
+
+    返回 {action, score, reason, drivers, faces, rating, cls}：
+    - score: 综合分 0-100；faces: {technical, fundamental, capital} 各面 0-100
+    - drivers: 全部因子明细（技术信号 + 估值/质量/资金点评）
+    - reason: 自然语言理由（按前端 verdict 逻辑 + 最强驱动）
+    - cls: 各面档位 {technical, fundamental, capital} ∈ good/bad/neutral
     权重与阈值全部来自 smcore.config.defaults.RECOMMENDATION_CONFIG（可传参覆盖）。
     """
     def _num(v: object) -> float | None:
@@ -168,187 +176,186 @@ def recommendation_from_analysis(
         except (TypeError, ValueError):
             return None
 
-    def _thr(d: dict, key: str, default: float) -> float:
-        v = _num(d.get(key))
-        return default if v is None else v
-
     cfg = cfg or RECOMMENDATION_CONFIG
     if analysis.get("error"):
         return {
-            "action": "未知",
-            "score": 0.0,
-            "reason": "分析失败",
-            "drivers": [],
-            "faces": {},
+            "action": "未知", "score": 0, "reason": "分析失败",
+            "drivers": [], "faces": {"technical": 0, "fundamental": 0, "capital": 0},
+            "rating": "中性观望", "cls": {},
         }
 
     latest = analysis.get("latest", {}) or {}
     metrics = analysis.get("metrics", {}) or {}
-    signal_info = analysis.get("signal", {}) or {}
     fund = analysis.get("fundamentals")
-    if not isinstance(fund, dict) or fund.get("error"):
-        fund = {}
+    hasF = isinstance(fund, dict) and not fund.get("error")
+    fund = fund if hasF else {}
 
     w_t = cfg.get("technical", {}) or {}
     w_f = cfg.get("fundamental", {}) or {}
     w_c = cfg.get("capital", {}) or {}
-    face_weights = cfg.get("face_weights", {}) or {}
+    missing_f = float(w_f.get("missing", 50))
+    missing_c = float(w_c.get("missing", 50))
 
-    close = latest.get("close")
-    up = latest.get("upper")
-    lo = latest.get("lower")
-    ma20 = latest.get("ma20")
-    ma60 = latest.get("ma60")
-    rsi = latest.get("rsi")
-    hist = latest.get("macd_hist")
-    j = latest.get("j_val")
-    sig = metrics.get("signal_text") or latest.get("signal_text") or ""
-    sig_selected = bool(signal_info.get("selected"))
+    def _seg_score(segments: list, value: float | None) -> tuple[float, str | None]:
+        """按前端分段（gt/lt 逐条命中）返回 (score, label)；value=None → missing 分。"""
+        if value is None:
+            return missing_f, None
+        for s in segments:
+            if "gt" in s and value > float(s["gt"]):
+                return float(s["score"]), s.get("label")
+            if "lt" in s and value < float(s["lt"]):
+                return float(s["score"]), s.get("label")
+        return float(segments[-1]["score"]), segments[-1].get("label")
 
-    faces: dict[str, list[tuple[float, str]]] = {
-        "technical": [],
-        "fundamental": [],
-        "capital": [],
-    }
+    # ── 技术面（与前端 ComprehensivePanel 同构）──
+    rsi, dif, dea = _num(latest.get("rsi")), _num(latest.get("dif")), _num(latest.get("dea"))
+    macdH, kV, dV, jV = (
+        _num(latest.get("macd_hist")), _num(latest.get("k_val")),
+        _num(latest.get("d_val")), _num(latest.get("j_val")),
+    )
+    close, lower, upper = _num(latest.get("close")), _num(latest.get("lower")), _num(latest.get("upper"))
+    ma5, ma10, ma20 = _num(latest.get("ma5")), _num(latest.get("ma10")), _num(latest.get("ma20"))
+    distLo = _num(metrics.get("dist_to_lower_pct"))
+    distHi = _num(metrics.get("dist_to_upper_pct"))
 
-    def _add(face: str, weight: float, label: str, direction: int = 1) -> None:
-        """direction: +1 按 weight 原符号计入，-1 取反。"""
-        faces[face].append((float(weight) * direction, label))
-
-    # ── 技术面 ──
+    tech_detail: list[tuple[float, str, str]] = []  # (score, label, side)
+    techS = 0.0
     if cfg.get("enable_technical", True):
-        if close is not None and ma20 is not None and ma60 is not None:
-            if close > ma20 > ma60:
-                _add("technical", _thr(w_t, "ma_trend", 2.0), "多头排列(价>MA20>MA60)", 1)
-            elif close < ma20 < ma60:
-                _add("technical", _thr(w_t, "ma_trend", 2.0), "空头排列(价<MA20<MA60)", -1)
-            else:
-                _add("technical", 0.0, "均线缠绕震荡")
-        if hist is not None:
-            red = hist > 0
-            _add(
-                "technical",
-                _thr(w_t, "macd_hist", 1.0),
-                "MACD红柱" if red else "MACD绿柱",
-                1 if red else -1,
-            )
-        if close is not None and up and lo and up > lo:
-            if close >= up * 0.995:
-                _add("technical", _thr(w_t, "boll_upper", 2.0), "触及/突破布林上轨(超买)", -1)
-            elif close <= lo * 1.005:
-                _add("technical", _thr(w_t, "boll_lower", 2.0), "触及/跌破布林下轨(超卖)", 1)
-            elif "near_upper" in sig or "overbought" in sig:
-                _add("technical", _thr(w_t, "boll_near_upper", 1.5), "高位接近上轨", -1)
-            elif sig_selected or any(
-                kw in sig for kw in ("near_lower", "mid_pullback", "squeeze", "oversold")
-            ):
-                _add("technical", _thr(w_t, "boll_buy", 1.5), "布林买点信号", 1)
         if rsi is not None:
-            if rsi > 70:
-                _add("technical", _thr(w_t, "rsi_overbought", 1.0), f"RSI超买({rsi:.0f})", -1)
-            elif rsi < 30:
-                _add("technical", _thr(w_t, "rsi_oversold", 1.0), f"RSI超卖({rsi:.0f})", 1)
-        if j is not None:
-            if j > 100:
-                _add("technical", _thr(w_t, "kdj_overbought", 1.0), f"KDJ超买(J={j:.0f})", -1)
-            elif j < 0:
-                _add("technical", _thr(w_t, "kdj_oversold", 1.0), f"KDJ超卖(J={j:.0f})", 1)
+            hit = next((s for s in w_t.get("rsi", [])
+                        if ("gt" in s and rsi > float(s["gt"])) or ("lt" in s and rsi < float(s["lt"]))), None)
+            if hit:
+                techS += float(hit["score"])
+                tech_detail.append((float(hit["score"]), f"RSI·{hit.get('label','')}", "bear" if hit["score"] < 0 else "bull"))
+        if dif is not None and dea is not None and macdH is not None:
+            if dif > dea and macdH > 0:
+                techS += float(w_t.get("macd_golden_red", 2))
+                tech_detail.append((float(w_t.get("macd_golden_red", 2)), "MACD·金叉红柱", "bull"))
+            elif dif < dea and macdH < 0:
+                techS += float(w_t.get("macd_dead_green", -2))
+                tech_detail.append((float(w_t.get("macd_dead_green", -2)), "MACD·死叉绿柱", "bear"))
+        if kV is not None and dV is not None:
+            if jV is not None and jV > float(w_t.get("kdj_j_over", 100)):
+                s = float(w_t.get("kdj_j_over_score", -2))
+                techS += s; tech_detail.append((s, "KDJ·极端超买", "bear"))
+            elif jV is not None and jV < float(w_t.get("kdj_j_under", 0)):
+                s = float(w_t.get("kdj_j_under_score", 2))
+                techS += s; tech_detail.append((s, "KDJ·极端超卖", "bull"))
+            elif kV > dV:
+                techS += float(w_t.get("kdj_k_gt_d", 1))
+                tech_detail.append((float(w_t.get("kdj_k_gt_d", 1)), "KDJ·金叉", "bull"))
+            elif kV < dV:
+                techS += float(w_t.get("kdj_k_lt_d", -1))
+                tech_detail.append((float(w_t.get("kdj_k_lt_d", -1)), "KDJ·死叉", "bear"))
+        if ma5 is not None and ma10 is not None and ma20 is not None:
+            if ma5 > ma10 > ma20:
+                techS += float(w_t.get("ma_bull", 2)); tech_detail.append((float(w_t.get("ma_bull", 2)), "均线·多头排列", "bull"))
+            elif ma5 < ma10 < ma20:
+                techS += float(w_t.get("ma_bear", -2)); tech_detail.append((float(w_t.get("ma_bear", -2)), "均线·空头排列", "bear"))
+            elif ma5 > ma20:
+                techS += float(w_t.get("ma5_gt_ma20", 1)); tech_detail.append((float(w_t.get("ma5_gt_ma20", 1)), "均线·短期偏强", "bull"))
+            elif ma5 < ma20:
+                techS += float(w_t.get("ma5_lt_ma20", -1)); tech_detail.append((float(w_t.get("ma5_lt_ma20", -1)), "均线·短期偏弱", "bear"))
+        if close is not None and lower is not None:
+            if close < lower:
+                techS += float(w_t.get("boll_below_lower", 1)); tech_detail.append((float(w_t.get("boll_below_lower", 1)), "布林·破下轨", "bull"))
+            elif distLo is not None and distLo < float(w_t.get("boll_near_lower_dist", 2.0)):
+                techS += float(w_t.get("boll_near_lower", 1)); tech_detail.append((float(w_t.get("boll_near_lower", 1)), "布林·近下轨", "bull"))
+            elif distHi is not None and distHi > float(w_t.get("boll_near_upper_dist", -2.0)):
+                techS += float(w_t.get("boll_near_upper", -1)); tech_detail.append((float(w_t.get("boll_near_upper", -1)), "布林·近上轨", "bear"))
 
-    # ── 基本面：估值(PE/PB) + 质量(ROE/毛利率) ──
-    th = cfg.get("thresholds", {}) or {}
-    pe = _num(fund.get("pe"))
-    pb = _num(fund.get("pb"))
-    # baostock 的 roeAvg / gpMargin 是小数(0.156 → 15.6%)，统一 ×100 转百分数后再比对阈值，
-    # 与报告展示层(roe*100)口径保持一致。turnover 本身已是百分数，不转换。
-    _roe_raw = _num(fund.get("roe"))
-    _gm_raw = _num(fund.get("gross_margin"))
-    roe = _roe_raw * 100 if _roe_raw is not None else None
-    gm = _gm_raw * 100 if _gm_raw is not None else None
-    turnover = _num(fund.get("turnover"))
+    tech_base = float(cfg.get("tech_base", 50))
+    tech_step = float(cfg.get("tech_step", 6))
+    techScore = max(0.0, min(100.0, tech_base + techS * tech_step))
+    t_cls_cfg = cfg.get("technical_cls", {}) or {}
+    techCls = "good" if techScore >= float(t_cls_cfg.get("good", 70)) else "bad" if techScore <= float(t_cls_cfg.get("bad", 30)) else "neutral"
 
-    if cfg.get("enable_fundamental", True) and fund:
-        if pb is not None:
-            if pb < 1:
-                _add("fundamental", _thr(w_f, "pb_break", 1.5), f"破净·估值低(PB {pb:.2f})", 1)
-            elif pb > _thr(th, "pb_high_cap", 8.0):
-                _add("fundamental", _thr(w_f, "pb_high", 1.0), f"PB偏高({pb:.1f})", -1)
-        if pe is not None:
-            if pe < _thr(th, "pe_low_cap", 15.0):
-                _add("fundamental", _thr(w_f, "pe_low", 1.0), f"PE偏低({pe:.0f})", 1)
-            elif pe > _thr(th, "pe_high_cap", 60.0):
-                _add("fundamental", _thr(w_f, "pe_high", 1.5), f"PE偏高({pe:.0f})", -1)
-        if roe is not None:
-            if roe >= _thr(th, "roe_good_floor", 12.0):
-                _add("fundamental", _thr(w_f, "roe_good", 1.0), f"ROE优({roe:.0f}%)", 1)
-            elif roe < _thr(th, "roe_weak_cap", 5.0):
-                _add("fundamental", _thr(w_f, "roe_weak", 1.0), f"ROE弱({roe:.0f}%)", -1)
-        if gm is not None:
-            if gm >= _thr(th, "margin_good_floor", 30.0):
-                _add("fundamental", _thr(w_f, "margin_good", 0.8), f"毛利高({gm:.0f}%)", 1)
-            elif gm < _thr(th, "margin_weak_cap", 15.0):
-                _add("fundamental", _thr(w_f, "margin_weak", 0.8), f"毛利低({gm:.0f}%)", -1)
+    # ── 基本面（与前端 ComprehensivePanel 同构）──
+    pe, pb = _num(fund.get("pe")), _num(fund.get("pb"))
+    roe, gm = _num(fund.get("roe")), _num(fund.get("gross_margin"))
+    rg = _num(fund.get("revenue_growth"))
+    fund_detail: list[str] = []
+    fund_scores: list[float] = []
+    if cfg.get("enable_fundamental", True) and hasF:
+        for key, value, unit in (("pe", pe, "PE"), ("pb", pb, "PB"), ("roe", roe, "ROE"),
+                                 ("gm", gm, "毛利"), ("rg", rg, "营收增长")):
+            segments = w_f.get(key)
+            if not segments:
+                continue
+            sc, label = _seg_score(segments, value)
+            fund_scores.append(sc)
+            if value is not None and label:
+                fmt = f"{value:.1f}" if unit in ("PE", "PB") else f"{value*100:.0f}%"
+                fund_detail.append(f"{unit}{fmt}·{label}")
+    fundScore = round(sum(fund_scores) / len(fund_scores)) if fund_scores else 0.0
+    fc_cls = cfg.get("fund_cap_cls", {}) or {}
+    fundCls = "good" if fundScore >= float(fc_cls.get("good", 65)) else "bad" if fundScore < float(fc_cls.get("bad", 45)) else "neutral"
 
-    # ── 资金面：换手率活跃度 ──
-    if cfg.get("enable_capital", True) and fund and turnover is not None:
-        if turnover >= _thr(th, "turnover_active_floor", 3.0):
-            _add("capital", _thr(w_c, "turnover_active", 0.8), f"交投活跃(换手{turnover:.1f}%)", 1)
-        elif turnover < _thr(th, "turnover_thin_cap", 0.5):
-            _add("capital", _thr(w_c, "turnover_thin", 0.8), f"交投清淡(换手{turnover:.1f}%)", -1)
+    # ── 资金面（与前端 ComprehensivePanel 同构）──
+    amt, to = _num(fund.get("amount_20")), _num(fund.get("turnover"))
+    cap_detail: list[str] = []
+    cap_scores: list[float] = []
+    if cfg.get("enable_capital", True) and hasF:
+        liq_segs = w_c.get("liq_amt")
+        daily_amt = (amt / 20 / 1e8) if amt is not None else None
+        if liq_segs:
+            sc, label = _seg_score(liq_segs, daily_amt)
+            cap_scores.append(sc)
+            if daily_amt is not None and label:
+                cap_detail.append(f"日均成交{daily_amt:.2f}亿·{label}")
+        to_segs = w_c.get("turnover")
+        if to_segs:
+            sc, label = _seg_score(to_segs, to)
+            cap_scores.append(sc)
+            if to is not None and label:
+                cap_detail.append(f"换手{to:.1f}%·{label}")
+    capScore = round(sum(cap_scores) / len(cap_scores)) if cap_scores else 0.0
+    capCls = "good" if capScore >= float(fc_cls.get("good", 65)) else "bad" if capScore < float(fc_cls.get("bad", 45)) else "neutral"
 
-    # ── 汇总：面归一分 → 按面权重加权得综合分 ──
-    available = {
-        "technical": cfg.get("enable_technical", True) and bool(faces["technical"]),
-        "fundamental": bool(faces["fundamental"]),
-        "capital": bool(faces["capital"]),
-    }
-    max_abs = {
-        "technical": sum(abs(float(w)) for w in w_t.values()),
-        "fundamental": sum(abs(float(w)) for w in w_f.values()),
-        "capital": sum(abs(float(w)) for w in w_c.values()),
-    }
-
-    face_norm: dict[str, float] = {}
-    weighted_sum = 0.0
-    weight_sum = 0.0
-    for face in ("technical", "fundamental", "capital"):
-        if not available.get(face):
-            continue
-        raw = sum(w for w, _ in faces[face])
-        denom = max_abs.get(face) or 0.0
-        norm = (raw / denom) if denom > 0 else 0.0
-        face_norm[face] = round(norm, 3)
-        fw = float(face_weights.get(face, 1.0))
-        weighted_sum += fw * norm
-        weight_sum += fw
-    score = (weighted_sum / weight_sum) if weight_sum else 0.0
-
-    at = cfg.get("action_thresholds", {}) or {}
-    if score >= _thr(at, "add", 0.25):
-        action = "加仓"
-    elif score >= _thr(at, "bullish", 0.08):
-        action = "持有偏多"
-    elif score > _thr(at, "neutral", -0.08):
-        action = "持有观望"
-    elif score > _thr(at, "bearish", -0.25):
-        action = "减仓偏空"
+    # ── 综合分 + 档位（与前端 ComprehensivePanel 同构）──
+    fw = cfg.get("face_weights", {}) or {}
+    if hasF:
+        total = round(
+            techScore * float(fw.get("technical", 0.40))
+            + fundScore * float(fw.get("fundamental", 0.35))
+            + capScore * float(fw.get("capital", 0.25))
+        )
     else:
-        action = "减仓"
+        total = round(techScore)
+    rating = "中性观望"
+    for r_cfg in cfg.get("rating", []):
+        if r_cfg.get("gte") is not None and total >= float(r_cfg["gte"]):
+            rating = r_cfg["label"]
+            break
+        if r_cfg.get("gte") is None:
+            rating = r_cfg["label"]
+    action = (cfg.get("action_map", {}) or {}).get(rating, "持有观望")
 
-    # ── 理由：每个面取最强驱动，保证三维度都被反映 ──
-    parts: list[str] = []
-    for face in ("technical", "fundamental", "capital"):
-        drivers = [e for e in faces[face] if e[0] != 0]
-        if not drivers:
-            continue
-        parts.append(max(drivers, key=lambda x: abs(x[0]))[1])
-    reason = "，".join(parts[:3]) if parts else "无明显多空信号"
+    # ── 理由（前端 verdict 逻辑 + 各面最强驱动）──
+    if not hasF:
+        reason = "当前标的暂无基本面/资金面缓存，研判仅基于技术面"
+    elif techCls == "good" and fundScore >= 60 and capScore >= 55:
+        reason = "三维共振偏多：技术走强、基本面扎实、资金活跃"
+    elif techCls == "bad" and fundScore < 55:
+        reason = "技术与基本面双弱，风险偏高"
+    elif techCls == "good" and fundScore < 55:
+        reason = "技术面偏多但基本面一般"
+    elif techCls != "good" and fundScore >= 65 and capScore >= 55:
+        reason = "基本面优质、资金认可，技术震荡"
+    else:
+        reason = "多空因素交织，建议结合仓位管理观望"
+    drivers = [lbl for _, lbl, _ in tech_detail] + fund_detail + cap_detail
+    if drivers:
+        reason += "；" + "，".join(drivers[:4])
 
     return {
         "action": action,
-        "score": round(score, 3),
+        "score": int(total),
         "reason": reason,
-        "drivers": [lbl for entries in faces.values() for _, lbl in entries],
-        "faces": face_norm,
+        "drivers": drivers,
+        "faces": {"technical": int(techScore), "fundamental": int(fundScore), "capital": int(capScore)},
+        "rating": rating,
+        "cls": {"technical": techCls, "fundamental": fundCls, "capital": capCls},
     }
 
 
