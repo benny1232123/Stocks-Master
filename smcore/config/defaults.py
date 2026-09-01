@@ -119,3 +119,68 @@ MAX_SECTOR_WEIGHT_PCT = _CEILS["MAX_SECTOR_WEIGHT_PCT"]
 PORTFOLIO_BETA_CEILING = _CEILS["PORTFOLIO_BETA_CEILING"]
 BETA_MIN_KEEP = _CEILS["BETA_MIN_KEEP"]
 MAX_SINGLE_WEIGHT_PCT = _CEILS["MAX_SINGLE_WEIGHT_PCT"]
+
+
+# ── 持仓建议三维度综合打分（技术面 + 基本面 + 资金面）──
+# 设计原则（符合"权重/阈值集中配置、禁散落魔数"）：
+#  - 每个因子 weight = 触发时的「方向贡献」（正=偏多，负=偏空）。
+#  - 面净分 raw_face = Σ(触发因子 weight)；面满分 max_face = Σ|weight|（启用因子）。
+#  - 面归一分 face_norm = raw_face / max_face ∈ [-1, +1]。
+#  - 综合分 = Σ(face_weights[f]·face_norm[f]) / Σ(face_weights[f])（仅启用面），恒 ∈ [-1, +1]。
+#  - 分档看综合分（action_thresholds），不随因子数漂移。
+#  - enable_* 可单独关闭某一面；thresholds 为绝对阈值，集中可调。
+RECOMMENDATION_CONFIG = {
+    "enable_technical": True,
+    "enable_fundamental": True,
+    "enable_capital": True,
+    "face_weights": {"technical": 1.0, "fundamental": 0.8, "capital": 0.5},
+    "technical": {
+        "ma_trend": 2.0,        # 多头排列 + / 空头排列 -
+        "macd_hist": 1.0,       # 红柱 + / 绿柱 -
+        "boll_upper": 2.0,      # 触/破上轨超买 -
+        "boll_lower": 2.0,      # 触/破下轨超卖 +
+        "boll_near_upper": 1.5, # 高位近上轨 -
+        "boll_buy": 1.5,        # 布林买点信号 +
+        "rsi_overbought": 1.0,  # RSI>70 -
+        "rsi_oversold": 1.0,    # RSI<30 +
+        "kdj_overbought": 1.0,  # J>100 -
+        "kdj_oversold": 1.0,    # J<0 +
+    },
+    # 权重约定：所有 weight 均为「幅度」(正数)，方向由代码 direction 决定(+1/-1)。
+    #           切勿在 config 里写负号——否则与 direction=-1 相乘会负负得正。
+    # 阈值约定：PE/PB 为倍数；ROE / 毛利率 / 换手率 为百分数(%)。
+    #           注意 fundamental 的 roe/gross_margin 原始值是小数(0.156=15.6%)，
+    #           recommendation_from_analysis 内部统一 ×100 后再比对阈值。
+    "fundamental": {
+        "pb_break": 1.5,        # 破净 PB<1（低估值）
+        "pe_low": 1.0,          # PE < pe_low_cap
+        "pe_high": 1.5,         # PE > pe_high_cap
+        "pb_high": 1.0,         # PB > pb_high_cap
+        "roe_good": 1.0,        # ROE >= roe_good_floor
+        "roe_weak": 1.0,        # ROE < roe_weak_cap
+        "margin_good": 0.8,     # 毛利率 >= margin_good_floor
+        "margin_weak": 0.8,     # 毛利率 < margin_weak_cap
+    },
+    "capital": {
+        "turnover_active": 0.8, # 换手率 >= turnover_active_floor（资金关注）
+        "turnover_thin": 0.8,   # 换手率 < turnover_thin_cap（清淡）
+    },
+    "thresholds": {
+        "pe_low_cap": 15.0,
+        "pe_high_cap": 60.0,
+        "pb_high_cap": 8.0,
+        "roe_good_floor": 12.0,
+        "roe_weak_cap": 5.0,
+        "margin_good_floor": 30.0,
+        "margin_weak_cap": 15.0,
+        "turnover_active_floor": 3.0,  # %
+        "turnover_thin_cap": 0.5,      # %
+    },
+    "action_thresholds": {
+        "add": 0.25,        # 综合分 >= 加仓
+        "bullish": 0.08,    # >= 持有偏多
+        "neutral": -0.08,   # >  持有观望
+        "bearish": -0.25,   # >  减仓偏空
+        # else 减仓
+    },
+}

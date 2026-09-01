@@ -8,6 +8,7 @@ from typing import Any
 import numpy as np
 import pandas as pd
 
+from smcore.config.defaults import RECOMMENDATION_CONFIG
 from smcore.data.kline import fetch_daily_k
 from smcore.indicators.boll import calc_bollinger, evaluate_boll_signal
 
@@ -145,20 +146,53 @@ def build_stock_analysis(
     return payload
 
 
-def recommendation_from_analysis(analysis: dict) -> dict[str, object]:
-    """由技术面指标综合给出持仓建议（仅供参考，不构成投资建议）。
+def recommendation_from_analysis(
+    analysis: dict, cfg: dict | None = None
+) -> dict[str, object]:
+    """由「技术面 + 基本面 + 资金面」三维度综合给出持仓建议。
 
-    综合维度：均线趋势(MA20/MA60)、MACD 柱、布林带位置/买卖信号、
-    RSI 超买超卖、KDJ(J 值) 超买超卖。各维度加权打分，按总分分档：
+    技术面：均线趋势(MA20/MA60)、MACD 柱、布林带位置/买卖信号、RSI、KDJ(J)。
+    基本面：估值(PE/PB 绝对阈值)、质量(ROE/毛利率)。
+    资金面：换手率活跃度。
+
+    每个维度先算「面归一分」= 面净分 / Σ|该面权重| ∈ [-1, +1]，
+    再按 face_weights 加权得综合分 ∈ [-1, +1]，按 action_thresholds 分五档：
         加仓 / 持有偏多 / 持有观望 / 减仓偏空 / 减仓
-    返回 {action, score, reason, drivers}。
+    数据缺失的维度自动从加权中剔除，避免无数据面把综合分稀释向 0。
+    返回 {action, score, reason, drivers, faces}。
+    权重与阈值全部来自 smcore.config.defaults.RECOMMENDATION_CONFIG（可传参覆盖）。
     """
+    def _num(v: object) -> float | None:
+        try:
+            return None if v is None else float(v)
+        except (TypeError, ValueError):
+            return None
+
+    def _thr(d: dict, key: str, default: float) -> float:
+        v = _num(d.get(key))
+        return default if v is None else v
+
+    cfg = cfg or RECOMMENDATION_CONFIG
     if analysis.get("error"):
-        return {"action": "未知", "score": 0.0, "reason": "分析失败", "drivers": []}
+        return {
+            "action": "未知",
+            "score": 0.0,
+            "reason": "分析失败",
+            "drivers": [],
+            "faces": {},
+        }
 
     latest = analysis.get("latest", {}) or {}
     metrics = analysis.get("metrics", {}) or {}
     signal_info = analysis.get("signal", {}) or {}
+    fund = analysis.get("fundamentals")
+    if not isinstance(fund, dict) or fund.get("error"):
+        fund = {}
+
+    w_t = cfg.get("technical", {}) or {}
+    w_f = cfg.get("fundamental", {}) or {}
+    w_c = cfg.get("capital", {}) or {}
+    face_weights = cfg.get("face_weights", {}) or {}
 
     close = latest.get("close")
     up = latest.get("upper")
@@ -171,67 +205,150 @@ def recommendation_from_analysis(analysis: dict) -> dict[str, object]:
     sig = metrics.get("signal_text") or latest.get("signal_text") or ""
     sig_selected = bool(signal_info.get("selected"))
 
-    factors: list[tuple[float, str]] = []
+    faces: dict[str, list[tuple[float, str]]] = {
+        "technical": [],
+        "fundamental": [],
+        "capital": [],
+    }
 
-    # 均线趋势
-    if close is not None and ma20 is not None and ma60 is not None:
-        if close > ma20 > ma60:
-            factors.append((2.0, "多头排列(价>MA20>MA60)"))
-        elif close < ma20 < ma60:
-            factors.append((-2.0, "空头排列(价<MA20<MA60)"))
-        else:
-            factors.append((0.0, "均线缠绕震荡"))
+    def _add(face: str, weight: float, label: str, direction: int = 1) -> None:
+        """direction: +1 按 weight 原符号计入，-1 取反。"""
+        faces[face].append((float(weight) * direction, label))
 
-    # MACD 柱
-    if hist is not None:
-        factors.append((1.0 if hist > 0 else -1.0, "MACD红柱" if hist > 0 else "MACD绿柱"))
+    # ── 技术面 ──
+    if cfg.get("enable_technical", True):
+        if close is not None and ma20 is not None and ma60 is not None:
+            if close > ma20 > ma60:
+                _add("technical", _thr(w_t, "ma_trend", 2.0), "多头排列(价>MA20>MA60)", 1)
+            elif close < ma20 < ma60:
+                _add("technical", _thr(w_t, "ma_trend", 2.0), "空头排列(价<MA20<MA60)", -1)
+            else:
+                _add("technical", 0.0, "均线缠绕震荡")
+        if hist is not None:
+            red = hist > 0
+            _add(
+                "technical",
+                _thr(w_t, "macd_hist", 1.0),
+                "MACD红柱" if red else "MACD绿柱",
+                1 if red else -1,
+            )
+        if close is not None and up and lo and up > lo:
+            if close >= up * 0.995:
+                _add("technical", _thr(w_t, "boll_upper", 2.0), "触及/突破布林上轨(超买)", -1)
+            elif close <= lo * 1.005:
+                _add("technical", _thr(w_t, "boll_lower", 2.0), "触及/跌破布林下轨(超卖)", 1)
+            elif "near_upper" in sig or "overbought" in sig:
+                _add("technical", _thr(w_t, "boll_near_upper", 1.5), "高位接近上轨", -1)
+            elif sig_selected or any(
+                kw in sig for kw in ("near_lower", "mid_pullback", "squeeze", "oversold")
+            ):
+                _add("technical", _thr(w_t, "boll_buy", 1.5), "布林买点信号", 1)
+        if rsi is not None:
+            if rsi > 70:
+                _add("technical", _thr(w_t, "rsi_overbought", 1.0), f"RSI超买({rsi:.0f})", -1)
+            elif rsi < 30:
+                _add("technical", _thr(w_t, "rsi_oversold", 1.0), f"RSI超卖({rsi:.0f})", 1)
+        if j is not None:
+            if j > 100:
+                _add("technical", _thr(w_t, "kdj_overbought", 1.0), f"KDJ超买(J={j:.0f})", -1)
+            elif j < 0:
+                _add("technical", _thr(w_t, "kdj_oversold", 1.0), f"KDJ超卖(J={j:.0f})", 1)
 
-    # 布林带位置 / 买卖信号
-    if close is not None and up and lo and up > lo:
-        if close >= up * 0.995:
-            factors.append((-2.0, "触及/突破布林上轨(超买)"))
-        elif close <= lo * 1.005:
-            factors.append((2.0, "触及/跌破布林下轨(超卖)"))
-        elif "near_upper" in sig or "overbought" in sig:
-            factors.append((-1.5, "高位接近上轨"))
-        elif sig_selected or any(
-            kw in sig for kw in ("near_lower", "mid_pullback", "squeeze", "oversold")
-        ):
-            factors.append((1.5, "布林买点信号"))
+    # ── 基本面：估值(PE/PB) + 质量(ROE/毛利率) ──
+    th = cfg.get("thresholds", {}) or {}
+    pe = _num(fund.get("pe"))
+    pb = _num(fund.get("pb"))
+    # baostock 的 roeAvg / gpMargin 是小数(0.156 → 15.6%)，统一 ×100 转百分数后再比对阈值，
+    # 与报告展示层(roe*100)口径保持一致。turnover 本身已是百分数，不转换。
+    _roe_raw = _num(fund.get("roe"))
+    _gm_raw = _num(fund.get("gross_margin"))
+    roe = _roe_raw * 100 if _roe_raw is not None else None
+    gm = _gm_raw * 100 if _gm_raw is not None else None
+    turnover = _num(fund.get("turnover"))
 
-    # RSI
-    if rsi is not None:
-        if rsi > 70:
-            factors.append((-1.0, f"RSI超买({rsi:.0f})"))
-        elif rsi < 30:
-            factors.append((1.0, f"RSI超卖({rsi:.0f})"))
+    if cfg.get("enable_fundamental", True) and fund:
+        if pb is not None:
+            if pb < 1:
+                _add("fundamental", _thr(w_f, "pb_break", 1.5), f"破净·估值低(PB {pb:.2f})", 1)
+            elif pb > _thr(th, "pb_high_cap", 8.0):
+                _add("fundamental", _thr(w_f, "pb_high", 1.0), f"PB偏高({pb:.1f})", -1)
+        if pe is not None:
+            if pe < _thr(th, "pe_low_cap", 15.0):
+                _add("fundamental", _thr(w_f, "pe_low", 1.0), f"PE偏低({pe:.0f})", 1)
+            elif pe > _thr(th, "pe_high_cap", 60.0):
+                _add("fundamental", _thr(w_f, "pe_high", 1.5), f"PE偏高({pe:.0f})", -1)
+        if roe is not None:
+            if roe >= _thr(th, "roe_good_floor", 12.0):
+                _add("fundamental", _thr(w_f, "roe_good", 1.0), f"ROE优({roe:.0f}%)", 1)
+            elif roe < _thr(th, "roe_weak_cap", 5.0):
+                _add("fundamental", _thr(w_f, "roe_weak", 1.0), f"ROE弱({roe:.0f}%)", -1)
+        if gm is not None:
+            if gm >= _thr(th, "margin_good_floor", 30.0):
+                _add("fundamental", _thr(w_f, "margin_good", 0.8), f"毛利高({gm:.0f}%)", 1)
+            elif gm < _thr(th, "margin_weak_cap", 15.0):
+                _add("fundamental", _thr(w_f, "margin_weak", 0.8), f"毛利低({gm:.0f}%)", -1)
 
-    # KDJ J 值
-    if j is not None:
-        if j > 100:
-            factors.append((-1.0, f"KDJ超买(J={j:.0f})"))
-        elif j < 0:
-            factors.append((1.0, f"KDJ超卖(J={j:.0f})"))
+    # ── 资金面：换手率活跃度 ──
+    if cfg.get("enable_capital", True) and fund and turnover is not None:
+        if turnover >= _thr(th, "turnover_active_floor", 3.0):
+            _add("capital", _thr(w_c, "turnover_active", 0.8), f"交投活跃(换手{turnover:.1f}%)", 1)
+        elif turnover < _thr(th, "turnover_thin_cap", 0.5):
+            _add("capital", _thr(w_c, "turnover_thin", 0.8), f"交投清淡(换手{turnover:.1f}%)", -1)
 
-    score = sum(w for w, _ in factors)
-    if score >= 3:
+    # ── 汇总：面归一分 → 按面权重加权得综合分 ──
+    available = {
+        "technical": cfg.get("enable_technical", True) and bool(faces["technical"]),
+        "fundamental": bool(faces["fundamental"]),
+        "capital": bool(faces["capital"]),
+    }
+    max_abs = {
+        "technical": sum(abs(float(w)) for w in w_t.values()),
+        "fundamental": sum(abs(float(w)) for w in w_f.values()),
+        "capital": sum(abs(float(w)) for w in w_c.values()),
+    }
+
+    face_norm: dict[str, float] = {}
+    weighted_sum = 0.0
+    weight_sum = 0.0
+    for face in ("technical", "fundamental", "capital"):
+        if not available.get(face):
+            continue
+        raw = sum(w for w, _ in faces[face])
+        denom = max_abs.get(face) or 0.0
+        norm = (raw / denom) if denom > 0 else 0.0
+        face_norm[face] = round(norm, 3)
+        fw = float(face_weights.get(face, 1.0))
+        weighted_sum += fw * norm
+        weight_sum += fw
+    score = (weighted_sum / weight_sum) if weight_sum else 0.0
+
+    at = cfg.get("action_thresholds", {}) or {}
+    if score >= _thr(at, "add", 0.25):
         action = "加仓"
-    elif score >= 1:
+    elif score >= _thr(at, "bullish", 0.08):
         action = "持有偏多"
-    elif score > -1:
+    elif score > _thr(at, "neutral", -0.08):
         action = "持有观望"
-    elif score > -3:
+    elif score > _thr(at, "bearish", -0.25):
         action = "减仓偏空"
     else:
         action = "减仓"
 
-    top = sorted(factors, key=lambda x: abs(x[0]), reverse=True)[:2]
-    reason = "，".join(lbl for _, lbl in top) if top else "无明显多空信号"
+    # ── 理由：每个面取最强驱动，保证三维度都被反映 ──
+    parts: list[str] = []
+    for face in ("technical", "fundamental", "capital"):
+        drivers = [e for e in faces[face] if e[0] != 0]
+        if not drivers:
+            continue
+        parts.append(max(drivers, key=lambda x: abs(x[0]))[1])
+    reason = "，".join(parts[:3]) if parts else "无明显多空信号"
+
     return {
         "action": action,
-        "score": round(score, 1),
+        "score": round(score, 3),
         "reason": reason,
-        "drivers": [lbl for _, lbl in factors],
+        "drivers": [lbl for entries in faces.values() for _, lbl in entries],
+        "faces": face_norm,
     }
 
 

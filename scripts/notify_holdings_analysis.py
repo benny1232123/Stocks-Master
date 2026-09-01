@@ -17,6 +17,7 @@
 """
 from __future__ import annotations
 
+import html as html_escape_mod
 import os
 import sys
 from datetime import date
@@ -171,7 +172,11 @@ def build_recommendation_history(codes: list[str], pos_map: dict, n_days: int = 
 
     返回 {dates, matrix, names}，其中
     matrix[date][code] = {action, reason, score, close}。
-    历史日仅取本地缓存 K 线（as_of），不联网。
+
+    口径说明：历史日的「技术面」用本地缓存 K 线按 as_of 截断计算；
+    「基本面/资金面」无历史序列，统一取当前缓存值（各日固定）。
+    这样各日建议口径一致，对比表反映的是技术面演变，而不是
+    "纯技术面 vs 三维度综合"的口径差（后者会让当日建议出现虚假跳变）。
     """
     from datetime import timedelta
 
@@ -200,7 +205,8 @@ def build_recommendation_history(codes: list[str], pos_map: dict, n_days: int = 
         for code in codes:
             names[code] = (pos_map.get(code, {}) or {}).get("name", "") or ""
             try:
-                a = build_stock_analysis(code, as_of=as_of, with_fundamentals=False)
+                # 基本面无历史序列 → 用当前缓存，保证与当日建议口径一致
+                a = build_stock_analysis(code, as_of=as_of, with_fundamentals=True)
                 rec = recommendation_from_analysis(a)
                 close = (a.get("latest", {}) or {}).get("close")
                 row[code] = {
@@ -234,8 +240,9 @@ def render_compare_html(hist: dict) -> str:
         f'<div class="card"><h3 style="font-size:15px;margin-bottom:6px">'
         f'📅 近 {len(dates)} 天持仓建议对比</h3>'
         f'<table class="cmp"><tr><th>股票</th>{head}</tr>{"".join(rows)}</table>'
-        f'<div class="state" style="margin-top:8px">单元格 = 当日技术面建议'
-        f'（红=偏多/加仓，绿=偏空/减仓），下方数字为当日收盘价。仅供参考，不构成投资建议。</div></div>'
+        f'<div class="state" style="margin-top:8px">单元格 = 当日三维度综合建议'
+        f'（技术面随日变化；基本面/资金面无历史序列，取当前缓存、各日固定）。'
+        f'红=偏多/加仓，绿=偏空/减仓，下方数字为当日收盘价。仅供参考，不构成投资建议。</div></div>'
     )
 
 
@@ -325,12 +332,19 @@ def render_stock(analysis: dict, pos: dict | None = None) -> str:
 
     title = f"### {code} {name}" if name else f"### {code}"
     rec = recommendation_from_analysis(analysis)
+    _faces_md = rec.get("faces") or {}
+    _face_parts = []
+    for _lbl, _key in (("技术", "technical"), ("基本面", "fundamental"), ("资金", "capital")):
+        _v = _faces_md.get(_key)
+        _face_parts.append(f"{_lbl} {_v:+.2f}" if _v is not None else f"{_lbl} —")
+    _faces_line = " ｜ ".join(_face_parts)
     lines = [
         title,
         "",
         f"- **Boll 信号**：{sig}",
         f"- **现价**：{fmt_num(close)} ｜ **趋势**：{trend}",
         f"- **持仓建议**：{rec.get('action')}（{rec.get('reason')}）",
+        f"- **三维打分**：{_faces_line}（各面 [-1,+1]，正=偏多，负=偏空）",
     ]
     if pos:
         cost = (pos or {}).get("cost")
@@ -424,6 +438,12 @@ body{background:#eef0f3;font-family:-apple-system,BlinkMacSystemFont,"PingFang S
 .rec.bull{background:#fff1f0;color:#d4380d}
 .rec.bear{background:#f6ffed;color:#389e0d}
 .rec.neutral{background:#f0f1f3;color:#5a6068}
+.faces{display:flex;flex-wrap:wrap;gap:8px;margin-top:6px;font-weight:400;font-size:12px}
+.face{padding:2px 8px;border-radius:20px;background:#fff;opacity:.95}
+.face.up{background:#ffece8;color:#d4380d}
+.face.down{background:#eafbe6;color:#389e0d}
+.face.flat{background:#f0f1f3;color:#5a6068}
+.face.dim{background:#f7f8f9;color:#a0a6ad}
 .cmp{width:100%;border-collapse:collapse;margin-top:6px;font-size:13px;background:#fff;border-radius:12px;overflow:hidden;box-shadow:0 1px 4px rgba(0,0,0,.06)}
 .cmp th,.cmp td{padding:9px 8px;text-align:center;border-bottom:1px solid #f0f1f3}
 .cmp th{background:#f7f8fa;color:#5a6068;font-weight:600}
@@ -763,16 +783,35 @@ def render_stock_html(analysis: dict, pos: dict | None = None) -> str:
             )
         pos_html = f'<div class="pos">{"".join(items)}</div>'
 
-    # 持仓建议（技术面综合）
+    # 持仓建议（技术面 + 基本面 + 资金面 三维度综合）
     rec = recommendation_from_analysis(analysis)
     _rec_cls = {
         "加仓": "bull", "持有偏多": "bull",
         "减仓": "bear", "减仓偏空": "bear",
         "持有观望": "neutral", "未知": "neutral",
     }.get(rec.get("action"), "neutral")
+    _faces = rec.get("faces") or {}
+
+    def _face_html(label: str, key: str) -> str:
+        v = _faces.get(key)
+        if v is None:
+            return f'<span class="face dim">{label} 无数据</span>'
+        cls = "up" if v > 0.02 else ("down" if v < -0.02 else "flat")
+        return f'<span class="face {cls}">{label} {v:+.2f}</span>'
+
+    faces_html = (
+        '<div class="faces">'
+        + _face_html("技术面", "technical")
+        + _face_html("基本面", "fundamental")
+        + _face_html("资金面", "capital")
+        + "</div>"
+    )
+    # 理由可能含 '<'（如"空头排列(价<MA20<MA60)"），必须 HTML 转义，否则被浏览器当标签吞掉后半段
+    _rec_action = html_escape_mod.escape(str(rec.get("action") or ""))
+    _rec_reason = html_escape_mod.escape(str(rec.get("reason") or ""))
     rec_html = (
-        f'<div class="rec {_rec_cls}">📌 持仓建议：{rec.get("action")}'
-        f'　｜　{rec.get("reason")}</div>'
+        f'<div class="rec {_rec_cls}">📌 持仓建议：{_rec_action}'
+        f'　｜　{_rec_reason}{faces_html}</div>'
     )
 
     return f"""
