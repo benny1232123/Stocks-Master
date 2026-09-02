@@ -50,7 +50,7 @@ jobs:
             # 防重：当日 DAL 已落库（远程 git 有 Daily-Action-List-$TODAY.csv）= 今天已跑过
             N=$(curl -s -H "Authorization: Bearer $GH_TOKEN" \
                 "https://api.github.com/repos/${{ github.repository }}/commits?path=stock_data/Daily-Action-List-${TODAY}.csv&per_page=1" \
-                | grep -c '"sha"')
+                | grep -c '"sha"' || true)
             if [ "$N" -gt 0 ]; then
               echo "当日 DAL 已落库（Daily-Action-List-$TODAY.csv），已跑过，跳过"
               echo "ok=false" >> $GITHUB_OUTPUT
