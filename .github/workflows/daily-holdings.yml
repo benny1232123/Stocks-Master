@@ -38,8 +38,11 @@ jobs:
             echo "手动补跑信号日: $TODAY"
           else
             NOW=$(TZ=Asia/Shanghai date +%H%M)
-            if [ "$NOW" -lt "1830" ] || [ "$NOW" -ge "2200" ]; then
-              echo "北京 $NOW 不在推送窗口 [18:30,22:00)，空转跳过"
+            # 仅保留下限 18:30；不再设 22:00 上限——GitHub schedule 延迟常把 18:00~21:40 的
+            # 槽位推到 22:00 之后才执行，原 [18:30,22:00) 上限会把这些延迟 run 全部空转、导致漏推。
+            # 对齐 daily-pick（只用下限）。凌晨 00:00~18:30 仍空转，避免 TODAY 变成次日。
+            if [ "$NOW" -lt "1830" ]; then
+              echo "北京 $NOW 未到推送窗口（<18:30），空转跳过"
               echo "ok=false" >> $GITHUB_OUTPUT
               exit 0
             fi
