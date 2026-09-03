@@ -1,1 +1,3 @@
-﻿
+﻿code,buy_date,sell_date,buy_price,sell_price,qty,return_pct,exit_reason
+002158,2026-08-28,2026-09-03,27.558,29.061,300,5.46,take_partial
+002158,2026-08-28,2026-09-03,27.558,29.061,700,5.46,take_band
