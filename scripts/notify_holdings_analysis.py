@@ -34,6 +34,7 @@ from smcore.config.defaults import STOCK_DATA_DIR
 from smcore.notify.email import send_email
 from smcore.stock_names import resolve as _resolve_name
 from smcore.data.kline import fetch_daily_k
+from smcore.strategy.news_surface import build_news_surface
 import pandas as pd
 
 # 本地手动跑时从仓库根 .env 读环境变量（SUPABASE_*/SMTP_* 等）。
@@ -165,6 +166,26 @@ def _rec_cls(action: str) -> str:
         "减仓": "bear", "减仓偏空": "bear",
         "持有观望": "neutral", "未知": "neutral",
     }.get(action, "neutral")
+
+
+def _news_cls(score) -> str:
+    """舆论分 → 情绪配色类（A股：红=偏多/涨，绿=偏空/跌）。None 视作中性。"""
+    try:
+        s = float(score)
+    except (TypeError, ValueError):
+        return "neutral"
+    if s >= 3.0:
+        return "bull"
+    if s <= -3.0:
+        return "bear"
+    return "neutral"
+
+
+_NEWS_LABEL = {"bull": "偏多", "bear": "偏空", "neutral": "中性"}
+
+
+def _news_label(score) -> str:
+    return _NEWS_LABEL[_news_cls(score)]
 
 
 def build_recommendation_history(codes: list[str], pos_map: dict, n_days: int = 5) -> dict | None:
@@ -372,6 +393,9 @@ def render_stock(analysis: dict, pos: dict | None = None) -> str:
     fund = analysis.get("fundamentals")
     lines += _fund_panel_md(fund)
 
+    # 消息面（关联板块 + 相关新闻）
+    lines += _render_stock_news_md(analysis.get("code", ""))
+
     lines.append("")
     return "\n".join(lines)
 
@@ -463,6 +487,25 @@ body{background:#eef0f3;font-family:-apple-system,BlinkMacSystemFont,"PingFang S
 .sum-cell .sv.bull{color:#ff9c8a}
 .sum-cell .sv.bear{color:#9be7a8}
 .foot{font-size:11px;color:#a0a6ad;text-align:center;margin-top:12px;line-height:1.7}
+.news-card{margin:10px 0 2px;padding:12px 13px;background:#fafcff;border:1px solid #eef3fb;border-radius:11px}
+.news-po{margin:10px 0 2px;padding:10px 13px;background:#fafcff;border:1px solid #eef3fb;border-radius:11px}
+.news-head{display:flex;align-items:center;gap:8px;margin-bottom:8px}
+.news-head .ttl{font-size:14px;font-weight:700}
+.news-head .dt{font-size:11px;color:#8a9099;margin-left:auto}
+.chip.bull{background:#fff1f0;color:#d4380d}
+.chip.bear{background:#f6ffed;color:#389e0d}
+.chip.neutral{background:#f0f1f3;color:#5a6068}
+.news-item{display:flex;gap:8px;align-items:flex-start;padding:7px 0;border-bottom:1px dashed #f0f1f3}
+.news-item:last-child{border-bottom:none}
+.news-badge{font-size:11px;font-weight:700;padding:2px 8px;border-radius:7px;white-space:nowrap;flex-shrink:0}
+.news-badge.bull{background:#fff1f0;color:#d4380d}
+.news-badge.bear{background:#f6ffed;color:#389e0d}
+.news-badge.neutral{background:#f0f1f3;color:#5a6068}
+.news-body{flex:1;min-width:0}
+.news-title{font-size:13px;font-weight:600;line-height:1.4}
+.news-preview{font-size:12px;color:#8a9099;margin-top:2px;line-height:1.5;overflow:hidden;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical}
+.news-feed{margin-top:4px}
+.news-sub{font-size:11px;color:#3b5bdb;font-weight:700;letter-spacing:.5px;margin:8px 0 4px}
 """
 
 
@@ -742,6 +785,7 @@ def render_stock_html(analysis: dict, pos: dict | None = None) -> str:
         else '<span class="chip dim">暂无基本面数据</span>'
     )
     fund_html = _fund_panel_html(fund)
+    news_html = _render_stock_news_html(code)
 
     bar_html = ""
     if band_pos is not None:
@@ -833,6 +877,7 @@ def render_stock_html(analysis: dict, pos: dict | None = None) -> str:
       </div>
       <div class="state">MACD：{macd_state} ｜ KDJ：{kdj_state}</div>
       {fund_html}
+      {news_html}
     </div>"""
 
 
@@ -908,6 +953,143 @@ def render_summary_md(summary: dict, count: int) -> str:
     tp = f"{ts}{today_pct:.2f}%" if today_pct is not None else ""
     lines.append(f"- **当日浮动**：{ts}{fmt_money(today_pnl)}（{tp}）")
     return "\n".join(lines) + "\n"
+
+
+def render_news_surface_html(surface: dict) -> str:
+    """市场视角消息面卡片（热门板块 + 新闻流）。无数据返回空串。"""
+    hot = surface.get("hot_sectors") or []
+    items = surface.get("news_items") or []
+    date_tag = surface.get("date") or "—"
+    if not (hot or items):
+        return ""
+    chips_html = ""
+    if hot:
+        parts = []
+        for h in hot[:12]:
+            s = h.get("sentiment")
+            cls = _news_cls(s)
+            heat = h.get("heat")
+            extra = f" {fmt_num(heat, 0)}" if heat is not None else ""
+            parts.append(
+                f'<span class="chip {cls}">{html_escape_mod.escape(str(h.get("sector", "")))}{extra}</span>'
+            )
+        chips_html = '<div class="news-sub">热门板块</div><div class="chips">' + "".join(parts) + "</div>"
+    feed_html = ""
+    if items:
+        rows = []
+        for it in items[:12]:
+            cls = _news_cls(it.get("sentiment"))
+            rows.append(
+                f'<div class="news-item">'
+                f'<span class="news-badge {cls}">{html_escape_mod.escape(str(it.get("sector", "")))}</span>'
+                f'<div class="news-body">'
+                f'<div class="news-title">{html_escape_mod.escape(str(it.get("title", "")))}</div>'
+                f'<div class="news-preview">{html_escape_mod.escape(str(it.get("preview", "")[:90]))}</div>'
+                f"</div></div>"
+            )
+        feed_html = '<div class="news-sub">相关新闻</div><div class="news-feed">' + "".join(rows) + "</div>"
+    return (
+        f'<div class="card"><div class="news-head">'
+        f'<span class="ttl">📰 消息面 · 市场舆情</span>'
+        f'<span class="dt">数据日期 {date_tag}</span></div>'
+        f"{chips_html}{feed_html}</div>"
+    )
+
+
+def render_news_surface_md(surface: dict) -> str:
+    """市场视角消息面 Markdown。无数据返回空串。"""
+    hot = surface.get("hot_sectors") or []
+    items = surface.get("news_items") or []
+    date_tag = surface.get("date") or "—"
+    if not (hot or items):
+        return ""
+    lines = [f"## 📰 消息面 · 市场舆情（数据日期 {date_tag}）", ""]
+    if hot:
+        lines.append("**热门板块**：" + "、".join(str(h.get("sector", "")) for h in hot[:12]))
+    if items:
+        lines.append("")
+        lines.append("**相关新闻**：")
+        for it in items[:12]:
+            lines.append(
+                f"- 【{_news_label(it.get('sentiment'))}·{it.get('sector', '')}】{it.get('title', '')}"
+            )
+    lines.append("")
+    return "\n".join(lines)
+
+
+def _render_stock_news_html(code: str) -> str:
+    """单只票消息面（关联板块 + 相关新闻）。不在池则兜底显市场热点板块。"""
+    try:
+        surf = build_news_surface(code)
+    except Exception:
+        return ""
+    if not surf.get("has_data"):
+        return ""
+    rel = surf.get("stock_sectors") or []
+    items = surf.get("news_items") or []
+    if not (rel or items):
+        hot = surf.get("hot_sectors") or []
+        if not hot:
+            return ""
+        chips = "".join(
+            f'<span class="chip">{html_escape_mod.escape(str(h.get("sector", "")))}</span>' for h in hot[:10]
+        )
+        return (
+            f'<div class="news-po"><div class="news-sub">📰 消息面（未进入舆情热点板块，参考市场热点）</div>'
+            f'<div class="chips">{chips}</div></div>'
+        )
+    rel_html = ""
+    if rel:
+        rel_html = (
+            '<div class="chips">'
+            + "".join(
+                f'<span class="chip">{html_escape_mod.escape(str(r.get("sector", "")))}</span>' for r in rel
+            )
+            + "</div>"
+        )
+    feed = ""
+    if items:
+        rows = []
+        for it in items[:5]:
+            cls = _news_cls(it.get("sentiment"))
+            rows.append(
+                f'<div class="news-item">'
+                f'<span class="news-badge {cls}">{html_escape_mod.escape(str(it.get("sector", "")))}</span>'
+                f'<div class="news-body">'
+                f'<div class="news-title">{html_escape_mod.escape(str(it.get("title", "")))}</div>'
+                f'<div class="news-preview">{html_escape_mod.escape(str(it.get("preview", "")[:80]))}</div>'
+                f"</div></div>"
+            )
+        feed = '<div class="news-sub">关联新闻</div><div class="news-feed">' + "".join(rows) + "</div>"
+    return f'<div class="news-po"><div class="news-sub">📰 消息面（关联板块）</div>{rel_html}{feed}</div>'
+
+
+def _render_stock_news_md(code: str) -> list[str]:
+    """单只票消息面 Markdown 行（关联板块 + 相关新闻）。"""
+    try:
+        surf = build_news_surface(code)
+    except Exception:
+        return []
+    if not surf.get("has_data"):
+        return []
+    rel = surf.get("stock_sectors") or []
+    items = surf.get("news_items") or []
+    if not (rel or items):
+        hot = surf.get("hot_sectors") or []
+        if not hot:
+            return []
+        return [
+            "- **📰 消息面**：未进入当前舆情热点板块，参考市场热点："
+            + "、".join(str(h.get("sector", "")) for h in hot[:10])
+        ]
+    out: list[str] = []
+    if rel:
+        out.append("- **📰 消息面**：关联板块 " + "、".join(str(r.get("sector", "")) for r in rel))
+    if items:
+        out.append("  - 相关新闻：")
+        for it in items[:5]:
+            out.append(f"    - 【{_news_label(it.get('sentiment'))}·{it.get('sector', '')}】{it.get('title', '')}")
+    return out
 
 
 def main() -> int:
@@ -993,12 +1175,19 @@ def main() -> int:
         summary_line = f"成功 {ok} 只 / 失败 {failed} 只 / 共 {len(codes)} 只"
         summary_md = render_summary_md(summary, len(codes))
         summary_html = render_summary_html(summary, len(codes))
+        # 消息面（市场视角，最新 CCTV 舆情；纯本地读 CSV，无网络依赖）
+        news_surf = build_news_surface()
+        news_html = render_news_surface_html(news_surf)
+        news_md = render_news_surface_md(news_surf)
+        if news_html:
+            sections_html.insert(0, news_html)
         md = (
             f"# 持仓个股分析日报 · {today}\n\n"
             f"> 数据源：{backend} ｜ {summary_line}\n\n"
             + (summary_md + "\n" if summary_md else "")
+            + (news_md + "\n" if news_md else "")
             + "\n".join(sections)
-            + f"\n---\n\n_本报告由 Stocks-Master 自动生成（技术面 Boll/MACD/RSI/KDJ/MA + 基本面/资金面）。\n"
+            + f"\n---\n\n_本报告由 Stocks-Master 自动生成（技术面 Boll/MACD/RSI/KDJ/MA + 基本面/资金面 + 消息面）。\n"
             f"仅供研究参考，不构成投资建议。生成时间 {today}。_\n"
         )
         html = build_html_report(today, backend, summary_line, "\n".join(sections_html), summary_html)
