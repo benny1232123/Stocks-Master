@@ -12,6 +12,7 @@ import pandas as pd
 from smcore.config.defaults import RECOMMENDATION_CONFIG
 from smcore.data.kline import fetch_daily_k
 from smcore.indicators.boll import calc_bollinger, evaluate_boll_signal
+from smcore.strategy.news_surface import build_news_surface
 
 
 def _js_round(x: float) -> int:
@@ -152,6 +153,8 @@ def build_stock_analysis(
         },
         # ── 基本面 / 资金面（缓存优先，未命中实时补取并写回缓存）──
         "fundamentals": _build_fundamentals(code) if with_fundamentals else None,
+        # ── 消息面（CCTV 舆情：热门板块 + 相关新闻，纯本地文件读取）──
+        "news": build_news_surface(code) if with_fundamentals else None,
     }
     return payload
 

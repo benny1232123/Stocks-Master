@@ -29,6 +29,7 @@ os.environ.setdefault("KLINE_BACKEND", "akshare")
 
 from smcore.artifacts import ArtifactFile, find_latest_file, find_latest_file_any, preview_csv, read_csv_file, STOCK_DATA_DIR
 from smcore.analysis import build_stock_analysis
+from smcore.strategy.news_surface import build_news_surface
 from smcore.backtest import run_signal_backtest, run_multi_strategy_backtest
 from smcore.dashboard import build_dashboard_payload, prewarm_dashboard_cache
 from smcore.holdings import add_trade, clear_trades, portfolio_snapshot, trades_backend_name
@@ -242,8 +243,16 @@ def daily_action_list_dates() -> dict:
     return {"items": items}
 
 
+@app.get("/api/artifacts/news-surface")
+def news_surface() -> dict:
+    """消息面 / 市场舆情：热门板块 + 全市场新闻流（CCTV 舆情产物，纯本地读取）。
 
-@app.get("/api/portfolio")
+    供前端「日报」页渲染 📰 消息面区块；个股视角见 /api/analysis/{code} 的 news 字段。
+    """
+    return build_news_surface()
+
+
+
 def portfolio() -> dict:
     return portfolio_snapshot()
 

@@ -666,6 +666,7 @@ function ComprehensivePanel({ analysis }) {
   const M = analysis?.metrics ?? {}
   const F = analysis?.fundamentals
   const hasF = !!F
+  const news = analysis?.news
 
   // 技术面原始指标
   const rsi = L.rsi != null ? Number(L.rsi) : null
@@ -877,6 +878,66 @@ function ComprehensivePanel({ analysis }) {
           </div>
         ) : <div className='comp-empty'>暂无资金面缓存（未覆盖该标的）</div>}
       </div>
+
+      <div className='comp-block'>
+        <div className='comp-block-head'>
+          <span className='comp-block-title'>📰 消息面</span>
+          <span className='comp-block-sub'>CCTV 舆情 · 数据日期 {news?.date || '—'}</span>
+        </div>
+        {(() => {
+          const N = news
+          if (!N || !N.has_data) return <div className='comp-empty'>暂无消息面数据（CCTV 舆情产物未生成）</div>
+          const sl = (v) => (v == null ? 'neutral' : v >= 3 ? 'bull' : v <= -3 ? 'bear' : 'neutral')
+          const slTxt = (l) => (l === 'bull' ? '偏多' : l === 'bear' ? '偏空' : '中性')
+          const relSectors = N.stock_sectors || []
+          const items = N.news_items || []
+          const hot = N.hot_sectors || []
+          return (
+            <>
+              {relSectors.length > 0 && (
+                <div className='news-sectors'>
+                  <span className='news-sectors-label'>关联热门板块</span>
+                  <div className='news-chip-row'>
+                    {relSectors.map((s, i) => (
+                      <span key={i} className={cn('news-chip', `nc-${sl(s.sentiment)}`)}>
+                        {s.sector}{s.sentiment != null ? ` · ${slTxt(sl(s.sentiment))}` : ''}
+                      </span>
+                    ))}
+                  </div>
+                </div>
+              )}
+              {items.length > 0 ? (
+                <div className='news-feed'>
+                  {items.map((it, i) => (
+                    <div key={i} className='news-item'>
+                      <div className='news-item-head'>
+                        <span className={cn('news-badge', `nb-${it.sentiment_label}`)}>{slTxt(it.sentiment_label)}</span>
+                        <span className='news-tag'>{it.sector}</span>
+                      </div>
+                      <div className='news-title'>{it.title}</div>
+                      {it.preview ? <div className='news-preview'>{it.preview}</div> : null}
+                    </div>
+                  ))}
+                </div>
+              ) : (
+                <div className='news-note'>{N.in_pool ? '近期无直接关联新闻' : '该股近期未进入 CCTV 热门板块舆情；下方为全市场热点板块供参考'}</div>
+              )}
+              {(!items.length || !N.in_pool) && hot.length > 0 && (
+                <div className='news-markets'>
+                  <span className='news-markets-label'>全市场热点板块</span>
+                  <div className='news-chip-row'>
+                    {hot.slice(0, 8).map((s, i) => (
+                      <span key={i} className={cn('news-chip', `nc-${sl(s.sentiment)}`)}>
+                        {s.sector}{s.heat != null ? ` ${s.heat.toFixed(0)}` : ''}
+                      </span>
+                    ))}
+                  </div>
+                </div>
+              )}
+            </>
+          )
+        })()}
+      </div>
     </>
   )
 }
@@ -914,6 +975,7 @@ function App() {
   const [scanLogs, setScanLogs] = useState([])
   const [dbStatus, setDbStatus] = useState(null)
   const [fullDaily, setFullDaily] = useState(null)
+  const [newsSurface, setNewsSurface] = useState(null)   // 消息面/市场舆情（/api/artifacts/news-surface）
   const [dailyDate, setDailyDate] = useState(null)        // 当前查看的日报日期(YYYYMMDD)，null=最新
   const [dailyDates, setDailyDates] = useState([])         // 可选日报日期列表
   const [dateOpen, setDateOpen] = useState(false)          // 日期下拉框是否展开
@@ -1030,9 +1092,10 @@ function App() {
 
   async function reloadArtifacts(date) {
     try {
-      const [a, f] = await Promise.all([
+      const [a, f, n] = await Promise.all([
         fetch('/api/artifacts/daily-action-list'),
         fetch(`/api/artifacts/daily-action-list/full${date ? `?date=${date}` : ''}`),
+        fetch('/api/artifacts/news-surface'),
       ])
       if (a.ok) setArtifacts(await a.json())
       if (f.ok) {
@@ -1040,6 +1103,7 @@ function App() {
         setFullDaily(d)
         if (date && d.latest?.name) setDailyDate(date)
       }
+      if (n.ok) setNewsSurface(await n.json())
     } catch { /* 忽略刷新失败 */ }
   }
 
@@ -2313,6 +2377,46 @@ function App() {
                       </div>
                     </SectionCard>
                   </div>
+
+                  {/* 消息面 / 市场舆情 */}
+                  {newsSurface && newsSurface.has_data ? (
+                    <SectionCard title="📰 消息面 · 市场舆情" subtitle={newsSurface.date ? `CCTV 舆情数据日期 ${newsSurface.date}` : ''} className="max-w-none">
+                      <div className='ns-wrap'>
+                        <div className='ns-col'>
+                          <div className='ns-col-head'>热门板块</div>
+                          <div className='ns-sectors'>
+                            {(newsSurface.hot_sectors || []).slice(0, 10).map((s, i) => {
+                              const sl = s.sentiment == null ? 'neutral' : s.sentiment >= 3 ? 'bull' : s.sentiment <= -3 ? 'bear' : 'neutral'
+                              const slTxt = sl === 'bull' ? '偏多' : sl === 'bear' ? '偏空' : '中性'
+                              return (
+                                <div key={i} className='ns-sector'>
+                                  <span className={cn('ns-badge', `nb-${sl}`)}>{slTxt}</span>
+                                  <span className='ns-sector-name'>{s.sector}</span>
+                                  <span className='ns-sector-heat'>{s.heat != null ? `热度 ${s.heat.toFixed(0)}` : ''}</span>
+                                  {s.change && s.change !== 'N/A' ? <span className={cn('ns-change', String(s.change).startsWith('-') ? 'text-down' : 'text-up')}>{s.change}</span> : null}
+                                </div>
+                              )
+                            })}
+                          </div>
+                        </div>
+                        <div className='ns-col'>
+                          <div className='ns-col-head'>近期新闻流</div>
+                          <div className='ns-feed'>
+                            {(newsSurface.news_items || []).map((it, i) => (
+                              <div key={i} className='ns-item'>
+                                <div className='ns-item-head'>
+                                  <span className={cn('news-badge', `nb-${it.sentiment_label}`)}>{it.sentiment_label === 'bull' ? '偏多' : it.sentiment_label === 'bear' ? '偏空' : '中性'}</span>
+                                  <span className='news-tag'>{it.sector}</span>
+                                </div>
+                                <div className='news-title'>{it.title}</div>
+                                {it.preview ? <div className='news-preview'>{it.preview}</div> : null}
+                              </div>
+                            ))}
+                          </div>
+                        </div>
+                      </div>
+                    </SectionCard>
+                  ) : null}
 
                   {/* 完整明细：二层可展开 */}
                   <SectionCard title={`完整信号明细 · ${total} 行`} subtitle={fullDaily.latest?.path ?? ''} className="max-w-none">
