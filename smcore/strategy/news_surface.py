@@ -112,22 +112,33 @@ def _read_news_items(sectors: list[str] | None, max_news: int = 12) -> tuple[lis
     if df.empty or "标题" not in df.columns or "板块" not in df.columns:
         return [], date_tag
 
-    recs: list[dict] = []
+    # 按标题去重：同一 CCTV 新闻常命中多个板块，只保留情感强度最大的一条，避免 UI 重复刷屏。
+    # preview 同时去掉开头的标题重复、缩短到 80 字，实现「简要提取关键内容」。
+    seen: dict[str, dict] = {}
     for _, r in df.iterrows():
         sector = _safe(r.get("板块")) or ""
         if sectors and sector not in sectors:
             continue
         s = _num(r.get("舆论分"))
-        recs.append({
-            "title": _safe(r.get("标题")) or "(无标题)",
-            "preview": (_safe(r.get("新闻片段")) or "")[:140],
+        title = _safe(r.get("标题")) or "(无标题)"
+        preview_raw = _safe(r.get("新闻片段")) or ""
+        if preview_raw.startswith(title):
+            preview_raw = preview_raw[len(title):].lstrip()
+        preview = preview_raw[:80]
+        rec = {
+            "title": title,
+            "preview": preview,
             "sector": sector,
             "sentiment": s,
             "sentiment_label": _sentiment_label(s),
             "pos": _num(r.get("正向词命中")) or 0,
             "neg": _num(r.get("负向词命中")) or 0,
             "keywords": [k for k in str(r.get("命中关键词", "") or "").split("|") if k],
-        })
+        }
+        existing = seen.get(title)
+        if existing is None or abs(s or 0) > abs(existing.get("sentiment") or 0):
+            seen[title] = rec
+    recs = list(seen.values())
     recs.sort(key=lambda x: abs(x["sentiment"] or 0), reverse=True)
     return recs[:max_news], date_tag
 

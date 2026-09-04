@@ -803,6 +803,10 @@ def _read_local_table(file_path):
 
     表名优先取文件名（去目录/扩展名），并兜底兼容旧式「全路径替换分隔符/点」拼法，
     避免 DB 实际表名（如 stock_info_a_code_name）与拼出的 stock_data_stock_info_a_code_name_csv 不匹配。
+
+    新增：若标准候选表不存在，按子串 LIKE 匹配 sqlite_master 中的表名。
+    fetch_data_core 存表时常带来源前缀（ak_stock_info_a_code_name / baostock_...），
+    子串匹配可自适应这些前缀，解决 CCTV 个股池在本地/CI 读到空表的问题。
     """
     from pathlib import Path as _Path
     stem = _Path(file_path).stem
@@ -810,13 +814,33 @@ def _read_local_table(file_path):
     candidates = [t for t in dict.fromkeys([stem, legacy]) if t]  # stem 优先，去重
     try:
         conn = sqlite3.connect(str(DATA_DIR / "stocks_data.db"))
+        # 1) 标准候选表名
         for raw in candidates:
             table_name = f"t_{raw}" if raw[0].isdigit() else raw
             try:
                 df = pd.read_sql_query(f'SELECT * FROM "{table_name}"', conn)
-                return df
+                if not df.empty:
+                    return df
             except Exception:
                 continue
+        # 2) 子串匹配（来源前缀表，如 ak_stock_info_a_code_name）
+        try:
+            like_stem = f"%{stem}%"
+            matching = pd.read_sql_query(
+                "SELECT name FROM sqlite_master WHERE type=? AND name LIKE ? ORDER BY name",
+                conn,
+                params=("table", like_stem),
+            )["name"].tolist()
+            for table_name in matching:
+                try:
+                    df = pd.read_sql_query(f'SELECT * FROM "{table_name}"', conn)
+                    if not df.empty:
+                        print(f"[cctv] 本地表未命中标准名，已回退到匹配表: {table_name}")
+                        return df
+                except Exception:
+                    continue
+        except Exception:
+            pass
         return pd.DataFrame()
     finally:
         conn.close()
