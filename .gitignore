@@ -46,6 +46,7 @@ stock_data/*.csv
 !stock_data/Stock-Selection-*.csv
 !stock_data/CCTV-Sector-Stock-Pool-*.csv
 !stock_data/CCTV-Sector-News-Matched-*.csv
+!stock_data/CCTV-Hot-Sectors-*.csv
 
 # walk-forward 重验产物（CI 产出，不入库）
 stock_data/walk_forward_recommendation.json
