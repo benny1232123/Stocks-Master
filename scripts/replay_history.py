@@ -304,7 +304,7 @@ def _dal_ok(date: str) -> bool:
 # ───────────────────────────── 回测阶段 ─────────────────────────────
 def _backtest_all() -> None:
     os.environ["LOOKBACK_DAYS"] = str(LOOKBACK_DAYS)
-    os.environ["HOLD_DAYS"] = os.environ.get("HOLD_DAYS", "10")
+    os.environ["HOLD_DAYS"] = os.environ.get("HOLD_DAYS", "12")
     os.environ["BACKTEST_MIN_STRATEGIES"] = "2"
     os.environ["PREPULL_INTERVAL"] = "0.2"
     os.environ["BACKTEST_INLINE_FILTER"] = "1"

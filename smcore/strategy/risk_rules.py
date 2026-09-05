@@ -60,7 +60,7 @@ _BUILTIN_DEFAULTS = {
         "take_profit_pct": {"base": 0.06, "min": 0.03, "max": 0.12, "vol_sensitivity": 0.5},
         "trailing_stop_pct": {"base": 0.05, "min": 0.025, "max": 0.10, "vol_sensitivity": 0.5},
         "trend_exit_ma": {"defensive": 40, "neutral": 60, "up": 90},
-        "hold_days": 10,
+        "hold_days": 12,
         "slippage": 0.001,
         "partial_take_profit": {
             "enabled": True,

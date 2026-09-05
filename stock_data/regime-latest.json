@@ -1,0 +1,51 @@
+{
+  "date": "20260904",
+  "regime": "下行防御",
+  "cash_pct": 28,
+  "cold_start": false,
+  "method": "fully_adaptive(softmax+ebayes_shrinkage+pseudo15+zero_negative_edge+adaptive_evidence_n+S-cash_curve+regime_cash_adj+dynamic_thresholds+sector_weight_cap+beta_neutral)",
+  "adaptive_weights": {
+    "boll": 10,
+    "theme": 32,
+    "relativity": 9,
+    "momentum": 37,
+    "cctv": 12
+  },
+  "strategy_edge": {
+    "boll": {
+      "n": 1,
+      "avg_return": 0.25,
+      "win_rate": 100.0,
+      "edge": 0.25
+    },
+    "theme": {
+      "n": 21,
+      "avg_return": 2.238,
+      "win_rate": 71.4,
+      "edge": 2.238095238095238
+    },
+    "relativity": {
+      "n": 6,
+      "avg_return": -0.783,
+      "win_rate": 50.0,
+      "edge": -0.7833333333333335
+    },
+    "momentum": {
+      "n": 5,
+      "avg_return": 5.518,
+      "win_rate": 80.0,
+      "edge": 5.518000000000001
+    },
+    "cctv": {
+      "n": 5,
+      "avg_return": 1.756,
+      "win_rate": 60.0,
+      "edge": 1.7560000000000002
+    }
+  },
+  "market_profile": "regime=下行防御 strength=0.11 trend=down vol=mid(15.3%, p47) breadth=0.00 activity=0.79",
+  "portfolio_beta": 0.25,
+  "sector_weight_cap_pct": 10.0,
+  "beta_ceiling": 1.0,
+  "single_weight_cap_pct": 5.0
+}

@@ -504,7 +504,7 @@ def _filter_incomplete(
 
 
 def main() -> int:
-    hold_days = int(os.environ.get("HOLD_DAYS", "10"))
+    hold_days = int(os.environ.get("HOLD_DAYS", "12"))  # 20260905 A/B: 12日窗口 日均+0.022%/夏普-0.047 vs 10日 -0.067%/-0.084
     lookback_days = int(os.environ.get("LOOKBACK_DAYS", "14"))  # 默认从30降到14（海外慢）
     today = date.today()
     t0 = time.time()
