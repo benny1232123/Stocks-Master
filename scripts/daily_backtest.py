@@ -208,7 +208,11 @@ def _backtest_one(path: Path, sd: date, hold_days: int, market_profile=None, por
     # ② 内联 RS 过滤 + 流动性门槛（与 fusion.py 生产融合逻辑一致，
     #    确保 daily_backtest 的回测输入与「当天新跑 fusion」的输出等价）
     _inline_filter_enabled = os.environ.get("BACKTEST_INLINE_FILTER", "1") == "1"
-    rs_dropped = liq_dropped = 0
+    rs_dropped = liq_dropped = vol_dropped = 0
+    # 个股波动率上限（入场过滤实验开关）：20260905 交易归因显示 vol20>4% 的入场
+    # （277笔）均值仅 +1.37%，且集中 66% 的 stop_hard（15% 上限止损+跌停尾部）；
+    # 3~4% 区间反而是最优桶（+3.74%）。默认 0=关闭；设 0.04 启用。
+    _max_vol20 = float(os.environ.get("BACKTEST_MAX_VOL20", "0"))
     if _inline_filter_enabled and len(df) > 0:
         sd_yyyymmdd = sd.strftime("%Y%m%d")
         idx_ret = _index_20d_return(sd_yyyymmdd)
@@ -233,10 +237,18 @@ def _backtest_one(path: Path, sd: date, hold_days: int, market_profile=None, por
                 liq_dropped += 1
                 _keep_mask.append(False)
                 continue
+            # 波动率上限（BACKTEST_MAX_VOL20>0 时启用）
+            if _max_vol20 > 0:
+                v20 = lv.get("vol20")
+                if v20 and v20 > _max_vol20:
+                    vol_dropped += 1
+                    _keep_mask.append(False)
+                    continue
             _keep_mask.append(True)
         df = df[_keep_mask].reset_index(drop=True)
-        if rs_dropped or liq_dropped:
-            print(f"  [内联过滤] RS剔除={rs_dropped} 流动性剔除={liq_dropped} 保留={len(df)}")
+        if rs_dropped or liq_dropped or vol_dropped:
+            print(f"  [内联过滤] RS剔除={rs_dropped} 流动性剔除={liq_dropped} "
+                  f"波动率剔除={vol_dropped} 保留={len(df)}")
 
     # 按综合评分取前 TOP_N，避免信号过多导致仓位被摊薄、权益曲线近乎不动
     if "综合评分" in df.columns:
