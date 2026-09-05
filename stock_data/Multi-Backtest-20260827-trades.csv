@@ -1,4 +1,3 @@
 ﻿code,buy_date,sell_date,buy_price,sell_price,qty,return_pct,exit_reason
 603236,2026-08-28,2026-08-31,56.446,61.578,100,9.09,take_partial_final
 300394,2026-08-28,2026-09-03,266.466,248.561,100,-6.72,trend_break
-601928,2026-08-28,2026-09-04,8.468,8.641,400,2.04,take_band

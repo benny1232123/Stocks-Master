@@ -390,6 +390,23 @@ def _backtest_one(path: Path, sd: date, hold_days: int, market_profile=None, por
     summary["start"] = sd.strftime("%Y-%m-%d")
     summary["end"] = (sd + timedelta(days=hold_days)).strftime("%Y-%m-%d")
 
+    # 基准对照（qlib 式 excess return）：同窗口沪深300 买入持有收益与策略超额。
+    # 口径：信号日收盘 → 信号日+hold_days（与 sleeve 的日历持有窗口一致）。
+    # 没有这列就无法回答「策略是否值得跑」——绝对收益好看可能只是同期市场在涨。
+    try:
+        _hs = _get_hs300_close()
+        if _hs is not None and len(_hs) > 0:
+            _t0 = pd.Timestamp(sd)
+            _t1 = _t0 + timedelta(days=hold_days)
+            _s0 = _hs[_hs.index <= _t0]
+            _s1 = _hs[_hs.index <= _t1]
+            if len(_s0) and len(_s1) and float(_s0.iloc[-1]) > 0:
+                _bench = (float(_s1.iloc[-1]) / float(_s0.iloc[-1]) - 1) * 100
+                summary["bench_return"] = round(_bench, 2)
+                summary["excess_return"] = round(float(summary["total_return"]) - _bench, 2)
+    except Exception:
+        pass
+
     pd.DataFrame([summary]).to_csv(f"{base}-summary.csv", index=False, encoding="utf-8-sig")
 
     # 补算回撤列（引擎返回的 equity 仅含 date/cash/holding_value/total），供前端回撤图展示

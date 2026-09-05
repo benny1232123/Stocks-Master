@@ -80,6 +80,7 @@ _BUILTIN_DEFAULTS = {
     "market_friction": {
         "model_limit_down": True,
         "limit_down_threshold": 0.095,
+        "model_limit_up": True,
     },
     "factor_scoring": {
         "enabled": False,
@@ -432,15 +433,18 @@ def compute_partial_exit_params() -> dict:
 
 
 def compute_market_friction_params() -> dict:
-    """A股交易摩擦建模配置：当前仅含「跌停卖不出」。
+    """A股交易摩擦建模配置：「跌停卖不出」+「一字涨停买不进」。
 
     model_limit_down=True 时，回测出场若在当日封跌停（近似日收益 ≤ -threshold 且收在最低），
-    卖单无法成交、顺延至下一交易日，去除回测虚高水分。threshold 来自 CONFIG，可热更新。
+    卖单无法成交、顺延至下一交易日，去除回测虚高水分。
+    model_limit_up=True 时，处理日开盘一字涨停（缺口 ≥ threshold 且开=高=低）的
+    买单无法成交，入场放弃。threshold 来自 CONFIG，可热更新。
     """
     cfg = CONFIG["market_friction"]
     return {
         "model_limit_down": bool(cfg["model_limit_down"]),
         "limit_down_threshold": float(cfg["limit_down_threshold"]),
+        "model_limit_up": bool(cfg.get("model_limit_up", True)),
     }
 
 
