@@ -28,6 +28,16 @@ jobs:
       - name: 安装依赖（仅 pandas）
         run: pip install --quiet pandas
 
+      # 幂等自举：告警 issue 依赖 monitoring/auto label，仓库里缺失会导致
+      # `gh issue create --label` 报 "could not add label" 而把整个监控 job 打红。
+      # --force 存在即更新，重复执行安全。
+      - name: 确保告警 label 存在（幂等自举）
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh label create monitoring --color D93F0B --description "自动监控告警" --force
+          gh label create auto --color C2E0C6 --description "由 CI 自动创建" --force
+
       - name: 策略衰减监控
         id: decay
         env:

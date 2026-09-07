@@ -63,6 +63,16 @@ jobs:
       - uses: actions/checkout@v4
         if: steps.gate.outputs.ok == 'true'
 
+      # 幂等自举：失败告警 issue 依赖 automated/daily-pick-failure label，
+      # 缺失会导致 `gh issue create --label` 报 "could not add label" 而失败。
+      - name: 确保告警 label 存在（幂等自举）
+        if: steps.gate.outputs.ok == 'true'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh label create automated --color BFD4F2 --description "CI 自动化产物" --force
+          gh label create daily-pick-failure --color D93F0B --description "每日选股链路失败告警" --force
+
       - uses: actions/setup-python@v5
         if: steps.gate.outputs.ok == 'true'
         with:
