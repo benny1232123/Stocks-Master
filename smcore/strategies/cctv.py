@@ -69,6 +69,9 @@ _SENT_MACRO_W = float(_CCFG.get("sentiment_macro_weight", 0.0))
 # 置信度档位阈值（走 config）
 _CONF_HIGH = float(_CCFG.get("confidence_high_threshold", 40))
 _CONF_MID = float(_CCFG.get("confidence_mid_threshold", 16))
+# 每条新闻最多命中的板块数（走 config）：正文深处偶现的弱关联板块截断，
+# 避免一条综合新闻挂上一串风马牛不相及的板块（如「服务贸易」挂「电力」）。
+_MAX_SECTORS_PER_NEWS = int(float(_CCFG.get("max_sectors_per_news", 3)))
 
 # —— NLP 增强（Tier-1）：情感修饰词与板块同义词 ——
 # 程度副词：放大其后相邻情感词的极性强度（×1.8）
@@ -394,6 +397,8 @@ _NONMARKET_PATTERNS = [
     # 时政活动类
     "调研", "会见", "会面", "会晤", "致信", "贺信", "致辞", "致电", "出访", "访问", "会谈", "考察",
     "专题片", "快评", "巡视", "纪检", "反腐", "党纪", "外交部",
+    # 时政宣传/宏观表态稿（「习近平总书记强调…」开头的栏目稿，正文常泛含行业词）
+    "习近平总书记强调", "总书记强调", "总书记指出",
     # 国际冲突/国际局势类
     "俄军", "乌军", "俄称", "乌称", "胡塞", "交火", "空袭", "袭击", "停火", "冲突",
     "加沙", "以色列", "巴勒斯坦", "导弹", "死伤", "阵亡",
@@ -735,9 +740,16 @@ def build_sector_heat(news_df, sector_keywords):
         matches = _match_sectors_detailed(title, text, sector_keywords)
         if not matches:
             continue
+        # 每条新闻最多保留 _MAX_SECTORS_PER_NEWS 个板块：strong 优先，其次命中词数。
+        # 正文深处的弱关联（顺带一提）排最后，先被截掉。
+        matches = sorted(
+            matches,
+            key=lambda m: (m[2] != "strong", -len(m[1])),
+        )[:_MAX_SECTORS_PER_NEWS]
         matched_news_count += 1
-        # 整段新闻的总结陈述（完整句，不截半句）；子条总结不删子标题前缀
-        preview = _make_preview(text, title="" if is_sub else title)
+        # 整段新闻的总结陈述（完整句，不截半句）；子条的正文以子标题开头，同样剥离，
+        # 避免「子标题正文黏连」（如「…景气水平提升记者从…」）
+        preview = _make_preview(text, title=title)
         for sec, hit_keywords, _strength in matches:
             info = stats.setdefault(sec, {"板块": sec, "提及次数": 0, "正向词命中": 0, "负向词命中": 0, "中性词命中": 0, "宏观词命中": 0, "舆论分": 0.0})
             info["提及次数"] += 1

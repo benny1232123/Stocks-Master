@@ -73,7 +73,7 @@
       "neutral": 60,
       "up": 90
     },
-    "hold_days": 10,
+    "hold_days": 12,
     "slippage": 0.001,
     "partial_take_profit": {
       "enabled": true,
@@ -92,7 +92,8 @@
   },
   "market_friction": {
     "model_limit_down": true,
-    "limit_down_threshold": 0.095
+    "limit_down_threshold": 0.095,
+    "model_limit_up": true
   },
   "factor_scoring": {
     "enabled": true,
@@ -256,7 +257,8 @@
         "纯碱",
         "钛白粉"
       ]
-    }
+    },
+    "max_sectors_per_news": 3
   },
   "calibration_significance": {
     "enabled": true,
