@@ -43,6 +43,7 @@ stock_data/fundamental_cache/spot_snapshot.csv
 stock_data/*.csv
 !stock_data/Daily-Action-List-*.csv
 !stock_data/Multi-Backtest-*.csv
+!stock_data/Portfolio-Curve-latest.csv
 !stock_data/Stock-Selection-*.csv
 !stock_data/CCTV-Sector-Stock-Pool-*.csv
 !stock_data/CCTV-Sector-News-Matched-*.csv
@@ -88,8 +89,8 @@ stock_data/replay_current_rules.md
 .env.*
 .workbuddy/
 
-# Local Cloudflare keepalive deploy dir (contains wrangler.toml with credentials; not source)
-cloudflare-keepalive/
+# 注：cloudflare-keepalive/ 已纳入版本管理（2026-09-08）——worker 是部署源码，
+# 令牌走 `wrangler secret put GH_DISPATCH_TOKEN`，库内无任何凭证。
 
 # Misc
 *.log
