@@ -62,9 +62,10 @@ NEGATIVE_WORDS = ["下滑", "下降", "承压", "收缩", "风险", "波动", "�
 NEUTRAL_WORDS = ["推进", "建设", "部署", "召开", "会议", "发布", "落实", "调研", "强调"]
 GENERIC_MACRO_WORDS = ["中国", "经济", "企业", "产业", "市场", "发展", "全国", "地方", "项目", "部门"]
 
-# 情感打分权重（走 config）
-_SENT_NEUTRAL_W = float(_CCFG.get("sentiment_neutral_weight", -0.3))
-_SENT_MACRO_W = float(_CCFG.get("sentiment_macro_weight", -0.2))
+# 情感打分权重（走 config）。中性词/宏观词只作诊断计数，不参与极性打分——
+# 旧版给它们负权重（-0.3/-0.2），导致时政类长文（中性词/宏观词密集）被系统性打成偏空。
+_SENT_NEUTRAL_W = float(_CCFG.get("sentiment_neutral_weight", 0.0))
+_SENT_MACRO_W = float(_CCFG.get("sentiment_macro_weight", 0.0))
 # 置信度档位阈值（走 config）
 _CONF_HIGH = float(_CCFG.get("confidence_high_threshold", 40))
 _CONF_MID = float(_CCFG.get("confidence_mid_threshold", 16))
@@ -294,6 +295,137 @@ def _get_news_text(row):
     return " ".join(parts)
 
 
+# CCTV 联播快讯/国际联播快讯一条标题下包含多条独立短新闻，按句拆分后每条子新闻
+# 独立做板块匹配 + 情感打分 + 总结，避免「一条聚合新闻命中 N 个板块 + 情感互相污染」。
+_BUNDLE_TITLES = {"国内联播快讯", "国际联播快讯"}
+# 子句最短保留长度；更短的补充短句（如「其中，……」）并入上一条子新闻
+_BUNDLE_MIN_SENT = 12
+# 无标点时的子标题最大长度
+_BUNDLE_HEAD_LEN = 24
+# 子新闻「标题句」与正文连写（无标点），正文以这些标志起始：在该处切出子标题
+_BUNDLE_BODY_MARKERS = ("记者从", "数据显示", "国铁集团", "由中", "《", "今天（", "近日，", "日前，", "昨日，", "今年", "记者")
+# 续写句开头词：以这些词开头的句段属于上一条子新闻，不另起新条
+_BUNDLE_CONTINUATIONS = ("其中", "该", "此前", "根据", "依据", "按照", "通过", "目前", "截至", "同时", "此外", "另外", "为此", "对此", "在此", "标准", "项目", "据", "并", "且", "而")
+
+
+def _sub_headline(sent: str) -> str:
+    """从子新闻首段切出子标题：优先在最早的正文起始标志处切，退而在主体重现/最近标点处收尾。"""
+    best = -1
+    for m in _BUNDLE_BODY_MARKERS:
+        i = sent.find(m, 6, 42)
+        if i >= 6 and (best == -1 or i < best):
+            best = i
+    if best >= 8:
+        return sent[:best]
+    # 主体重现兜底：标题句后紧跟以同一主体开头的正文（如「德国大众…重组」+「德国大众汽车集团…」）
+    prefix = sent[:4]
+    if len(prefix) >= 3:
+        rep = sent.find(prefix, 8, 42)
+        if rep >= 8:
+            return sent[:rep]
+    head = sent[:_BUNDLE_HEAD_LEN]
+    for j in range(len(head) - 1, 11, -1):
+        if head[j] in "，、,：:；;《（":
+            head = head[:j]
+            break
+    else:
+        if len(sent) > _BUNDLE_HEAD_LEN:
+            head += "…"
+    return head.rstrip("，、,：:；;")
+
+
+def _make_preview(text: str, title: str = "", max_len: int = PREVIEW_LEN) -> str:
+    """整段新闻的总结陈述：取导语前 1-2 个完整句，绝不截半句。
+
+    - 新闻联播为导语式写作，首句即全条摘要；首句过短（<40字）时补下一句；
+    - 联播快讯子条本身就是完整子新闻，直接全文作为总结（title 传空避免前缀误删）；
+    - 只有单句自身超过 max_len 时才在句内硬切（罕见）。
+    """
+    body = text or ""
+    if title and body.startswith(title):
+        body = body[len(title):]
+    body = re.sub(r"\s+", "", body)
+    parts = [s.strip() for s in body.split("。") if s.strip()]
+    if not parts:
+        return body[:max_len]
+    first = parts[0] + "。"
+    out = first if len(first) <= max_len else first[:max_len]
+    i = 1
+    while len(out) < 40 and i < len(parts) and len(out) + len(parts[i]) + 1 <= max_len:
+        out += parts[i] + "。"
+        i += 1
+    return out
+
+
+def _split_bundle(title: str, text: str) -> list[tuple[str, str]]:
+    """把 CCTV 联播快讯类 bundle 按句拆成 (子标题, 子文本) 列表。
+
+    - 子标题从子新闻首段切出（标题句与正文连写无标点，见 _sub_headline）；
+    - 过短的补充短句（<24字）或续写句（其中/该/此前/根据…开头）并入上一条，
+      避免把同一条子新闻的第 2、3 句拆成独立碎片；
+    - 子文本为完整子新闻原文（不含 bundle 总标题）。
+    """
+    body = text
+    if body.startswith(title):
+        body = body[len(title):].lstrip()
+    body = re.sub(r"\s+", "", body)
+    merged: list[str] = []
+    for raw in body.split("。"):
+        s = raw.strip()
+        if not s:
+            continue
+        if merged and (len(s) < _BUNDLE_MIN_SENT * 2 or s.startswith(_BUNDLE_CONTINUATIONS)):
+            merged[-1] += "。" + s
+        else:
+            merged.append(s)
+    out: list[tuple[str, str]] = []
+    for s in merged:
+        if len(s) < _BUNDLE_MIN_SENT:
+            continue
+        out.append((_sub_headline(s), s + "。"))
+    return out
+
+
+# —— 时政/国际要闻过滤 ——
+# 新闻联播大量条目是时政活动（领导调研/致辞/致信/会见）与国际冲突报道，其正文常
+# 顺带出现行业词（「党纪学习教育」→教育、「军用物流中心」→物流、「数据中心考察」→人工智能），
+# 误匹配板块且情感被误读。命中以下模式的新闻不计入板块热度与新闻流。
+_NONMARKET_PATTERNS = [
+    # 时政活动类
+    "调研", "会见", "会面", "会晤", "致信", "贺信", "致辞", "致电", "出访", "访问", "会谈", "考察",
+    "专题片", "快评", "巡视", "纪检", "反腐", "党纪", "外交部",
+    # 国际冲突/国际局势类
+    "俄军", "乌军", "俄称", "乌称", "胡塞", "交火", "空袭", "袭击", "停火", "冲突",
+    "加沙", "以色列", "巴勒斯坦", "导弹", "死伤", "阵亡",
+]
+_NONMARKET_RE = re.compile("|".join(f"({p})" for p in _NONMARKET_PATTERNS))
+
+
+def _is_nonmarket_news(title: str, text: str, lede_chars: int = 120) -> bool:
+    """时政/国际要闻判定：标题或正文导语命中时政/冲突模式即视为非市场新闻。"""
+    head = f"{title or ''} {(text or '')[:lede_chars]}"
+    return bool(_NONMARKET_RE.search(head))
+
+
+def _expand_news_items(news_df):
+    """把新闻 DataFrame 展开为 (标题, 正文, 是否联播快讯子条)；bundle 先拆分为子新闻。
+
+    is_sub=True 的子条，其标题是从正文切出的子标题——总结时不能再去掉该前缀。
+    """
+    items: list[tuple[str, str, bool]] = []
+    for _, row in news_df.iterrows():
+        text = _get_news_text(row)
+        if not text:
+            continue
+        title = _extract_title(row)
+        if title in _BUNDLE_TITLES:
+            for sub_title, sub_text in _split_bundle(title, text):
+                items.append((sub_title, sub_text, True))
+        else:
+            items.append((title, text, False))
+    return items
+
+
 def _sentiment_score(text):
     """加权情感打分（Tier-1）：jieba 分词 + 程度副词放大 + 否定词翻转。
 
@@ -361,6 +493,39 @@ def _match_sectors(text, sector_keywords):
         if tok in mapping:
             matched.setdefault(mapping[tok], []).append(tok)
     return [(s, sorted(set(h))) for s, h in matched.items()]
+
+
+def _match_sectors_detailed(title: str, body: str, sector_keywords):
+    """带强度分级的板块匹配。
+
+    - strong：命中词出现在标题或正文导语（前 120 字）中——新闻主题即该板块，保留；
+    - body：命中词仅在正文深处——单次出现多为顺带一提（如「党纪学习教育」），
+      需该板块 token 累计出现 ≥2 次才保留。
+    返回 [(板块, 命中词列表, 强度)]。
+    """
+    mapping = _build_token_sector_map(sector_keywords)
+    title_tokens = {t.lower() for t in _tokenize(title or "")}
+    lede_tokens = {t.lower() for t in _tokenize((body or "")[:120])}
+    body_counts = {}
+    for tok in _tokenize(body or ""):
+        tl = tok.lower()
+        body_counts[tl] = body_counts.get(tl, 0) + 1
+
+    matched: dict[str, dict] = {}
+    for tok, sector in mapping.items():
+        cnt = body_counts.get(tok, 0)
+        if not cnt:
+            continue
+        info = matched.setdefault(sector, {"hits": set(), "count": 0, "strong": False})
+        info["hits"].add(tok)
+        info["count"] += cnt
+        if tok in title_tokens or tok in lede_tokens:
+            info["strong"] = True
+    out = []
+    for sec, info in matched.items():
+        if info["strong"] or info["count"] >= 2:
+            out.append((sec, sorted(info["hits"]), "strong" if info["strong"] else "body"))
+    return out
 
 
 def _normalize_news_df(df):
@@ -556,21 +721,24 @@ def build_sector_heat(news_df, sector_keywords):
     rows = []
     stats = {}
     matched_news_count = 0
-    total = len(news_df)
-    for idx, (_, row) in enumerate(news_df.iterrows(), start=1):
+    items = _expand_news_items(news_df)
+    total = len(items)
+    for idx, (title, text, is_sub) in enumerate(items, start=1):
         if _should_log_progress(idx, total):
             _log_step(_progress_label("CCTV新闻解析", idx, total))
-        text = _get_news_text(row)
         if not text:
             continue
+        # 时政/国际要闻：不计入板块热度（其正文常误挂行业词）
+        if _is_nonmarket_news(title, text):
+            continue
         score, pos, neg, neutral, macro = _sentiment_score(text)
-        matches = _match_sectors(text, sector_keywords)
+        matches = _match_sectors_detailed(title, text, sector_keywords)
         if not matches:
             continue
         matched_news_count += 1
-        title = _extract_title(row)
-        preview = re.sub(r"\s+", " ", text)[:PREVIEW_LEN]
-        for sec, hit_keywords in matches:
+        # 整段新闻的总结陈述（完整句，不截半句）；子条总结不删子标题前缀
+        preview = _make_preview(text, title="" if is_sub else title)
+        for sec, hit_keywords, _strength in matches:
             info = stats.setdefault(sec, {"板块": sec, "提及次数": 0, "正向词命中": 0, "负向词命中": 0, "中性词命中": 0, "宏观词命中": 0, "舆论分": 0.0})
             info["提及次数"] += 1
             info["正向词命中"] += pos
@@ -636,13 +804,14 @@ def extract_emerging_keywords(news_df, sector_keywords, top_n):
     return df.sort_values(["出现次数", "候选关键词"], ascending=[False, True]).head(top_n).reset_index(drop=True)
 
 
-def _build_auto_sector_keywords(news_df, top_n):
+def _build_auto_sector_keywords(news_df, top_n, use_sw_industry=True):
     """构建板块关键词词表。
 
     设计原则（修复「申万接口失败→整池为空」根因）：
     1) 始终以内置板块词库为**基础词表**——绝不依赖网络，保证板块发现可用；
-    2) 叠加申万行业（网络可用时提供更细粒度覆盖）；
-    3) 即使申万接口彻底失败，也能从新闻内容直接发现热点板块。
+    2) 叠加申万行业（仅当 use_sw_industry=True 时）；
+    3) 申万行业名叠加默认关闭：任意行业名（如「综合」「电子」）作为关键词会
+       在正文顺带提及时制造噪声板块（「综合频道」→综合）。
     """
     sector_keywords = {}
     # 1) 内置板块词库（兜底）
@@ -651,16 +820,16 @@ def _build_auto_sector_keywords(news_df, top_n):
         for k in kws:
             if k and k not in bucket:
                 bucket.append(k)
-    # 2) 叠加申万行业（失败则为空，不影响板块发现）
-    sw_index = _load_sw_industry_index()
-    sw_ok = bool(sw_index)
-    for item in sw_index:
-        name = _safe_text(item.get("行业名称"))
-        if not name:
-            continue
-        sector_keywords.setdefault(name, [name])
-    if not sw_ok:
-        print("[cctv] 申万行业接口不可用 → 已用内置板块词库兜底（板块发现不受影响）")
+    # 2) 叠加申万行业（受开关控制；失败则为空，不影响板块发现）
+    if use_sw_industry:
+        sw_index = _load_sw_industry_index()
+        for item in sw_index:
+            name = _safe_text(item.get("行业名称"))
+            if not name:
+                continue
+            sector_keywords.setdefault(name, [name])
+    else:
+        print("[cctv] use_sw_industry=false → 仅用内置板块词库（跳过申万行业名叠加）")
 
     emerging_df = extract_emerging_keywords(news_df, sector_keywords, top_n)
     return sector_keywords, emerging_df
@@ -1063,7 +1232,8 @@ def run_cctv():
             print(f"已保存: {extra_path}")
 
     _log_step("开始构建关键词和板块热度")
-    sector_keywords, emerging_df = _build_auto_sector_keywords(keyword_news_df, args.emerging_top_n)
+    use_sw = (not args.disable_sw_industry) and bool(_CCFG.get("use_sw_industry", True))
+    sector_keywords, emerging_df = _build_auto_sector_keywords(keyword_news_df, args.emerging_top_n, use_sw_industry=use_sw)
     sector_df, matched_df, _ = build_sector_heat(keyword_news_df, sector_keywords)
     if sector_df.empty:
         print("未匹配到板块关键词，可扩展词库")

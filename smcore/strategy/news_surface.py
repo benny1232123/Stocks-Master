@@ -18,9 +18,11 @@ import pandas as pd
 
 from smcore.config.defaults import STOCK_DATA_DIR
 
-# 舆论分阈值（同前端 A股 涨红跌绿约定：偏多=红 / 偏空=绿 / 中性=蓝）
-BULL_THRESHOLD = 3.0
-BEAR_THRESHOLD = -3.0
+# 舆论分阈值（同前端 A股 涨红跌绿约定：偏多=红 / 偏空=绿 / 中性=蓝）。
+# 打分端已去掉中性词/宏观词的负权重（纯 正向-负向 加权净分），单条新闻的典型得分
+# 是 0/±1/±2，故阈值从 ±3.0 收紧到 ±2.0，避免真实偏多新闻被标成中性。
+BULL_THRESHOLD = 2.0
+BEAR_THRESHOLD = -2.0
 
 
 def _num(v):
@@ -112,8 +114,9 @@ def _read_news_items(sectors: list[str] | None, max_news: int = 12) -> tuple[lis
     if df.empty or "标题" not in df.columns or "板块" not in df.columns:
         return [], date_tag
 
-    # 按标题去重：同一 CCTV 新闻常命中多个板块，只保留情感强度最大的一条，避免 UI 重复刷屏。
-    # preview 同时去掉开头的标题重复、缩短到 80 字，实现「简要提取关键内容」。
+    # 按标题去重：同一新闻命中多个板块时只保留一条，避免 UI 重复刷屏。
+    # 新闻片段由生成端保证为「整段新闻的总结陈述」（完整句，不含标题前缀），原样透传；
+    # 仅对旧格式数据（无句号边界的硬切片段）兜底截到 120 字。
     seen: dict[str, dict] = {}
     for _, r in df.iterrows():
         sector = _safe(r.get("板块")) or ""
@@ -121,10 +124,9 @@ def _read_news_items(sectors: list[str] | None, max_news: int = 12) -> tuple[lis
             continue
         s = _num(r.get("舆论分"))
         title = _safe(r.get("标题")) or "(无标题)"
-        preview_raw = _safe(r.get("新闻片段")) or ""
-        if preview_raw.startswith(title):
-            preview_raw = preview_raw[len(title):].lstrip()
-        preview = preview_raw[:80]
+        preview = _safe(r.get("新闻片段")) or ""
+        if preview and not preview.endswith(("。", "！", "？", "”", "…")):
+            preview = preview[:120]
         rec = {
             "title": title,
             "preview": preview,
