@@ -11,6 +11,8 @@ from __future__ import annotations
 
 from unittest import mock
 
+import os
+
 import pandas as pd
 
 import smcore.strategy.risk_rules as rr
@@ -139,6 +141,11 @@ def test_limit_down_defers_sell():
     closes = [10.0] * n
     closes[idx] = 9.0
     closes[idx + 1] = 8.95
+    # 跌停后逐日小幅回升，而非一步跳回 10.0：主板单日涨跌幅受 ±10% 约束，
+    # 8.95→10.0 是 +11.7% 的不可达路径，会被引擎数据守卫
+    # （_sanitize_board_limit，超涨跌停约束的坏 bar → 整只剔除）判为脏数据。
+    closes[idx + 2] = 9.4
+    closes[idx + 3] = 9.7
     price_map = {"600300": _make_prices(closes, limit_down_idx=idx)}
     sig = _signals([{"日期": "2024-01-10", "代码": "600300", "来源策略": "boll", "stop_pct": 0.05}])
 
@@ -179,3 +186,41 @@ def test_risk_rules_vol_target_config_driven():
         assert rr.vol_target_scale(None) == 1.0
     finally:
         rr.CONFIG = orig
+
+
+def _impossible_series() -> pd.DataFrame:
+    """主板票：前 15 根平稳在 10 元，第 16 根直接 +50%（超出 ±10% 涨跌停约束）。"""
+    closes = [10.0] * 15 + [15.0] + [15.0] * 5
+    return pd.DataFrame(
+        {
+            "date": [d.strftime("%Y-%m-%d") for d in pd.date_range("2024-01-01", periods=len(closes))],
+            "open": closes,
+            "high": [c * 1.01 for c in closes],
+            "low": [c * 0.99 for c in closes],
+            "close": closes,
+            "volume": [1_000_000] * len(closes),
+        }
+    )
+
+
+def test_board_guard_drops_impossible_bar():
+    """超涨跌停约束的坏 bar（复权跳变/脏点）→ 整只剔除，脏收益不能进回测。"""
+    from smcore.backtest.engine import _sanitize_board_limit
+
+    assert _sanitize_board_limit(_impossible_series(), "600300") is None
+
+
+def test_board_guard_env_toggle_and_boards():
+    """守卫开关走 env（BACKTEST_BOARD_GUARD），创业板 ±20% 与主板 ±10% 分别生效。"""
+    from smcore.backtest.engine import _sanitize_board_limit
+
+    # 主板 +50% 不可达；创业板(300xxx) ±20% 下 +50% 同样不可达
+    assert _sanitize_board_limit(_impossible_series(), "300750") is None
+
+    # 关掉开关 → 原样返回（配置驱动，无硬编码）
+    with mock.patch.dict(os.environ, {"BACKTEST_BOARD_GUARD": "0"}):
+        assert _sanitize_board_limit(_impossible_series(), "600300") is not None
+
+    # 放宽容差到 2 倍 → +50% 落在容差内，不剔除
+    with mock.patch.dict(os.environ, {"BACKTEST_BOARD_GUARD_TOL": "5.0"}):
+        assert _sanitize_board_limit(_impossible_series(), "600300") is not None

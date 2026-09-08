@@ -9,6 +9,7 @@ from datetime import date, timedelta
 from typing import Any, Optional
 
 import math
+import os
 import numpy as np
 import pandas as pd
 
@@ -32,6 +33,53 @@ def _buy_cost(amount: float) -> float:
 def _sell_cost(amount: float) -> float:
     """卖出费用（佣金 + 印花税）。"""
     return max(amount * _COMM_RATE, _COMM_MIN) + amount * _STAMP_RATE
+
+
+# ── 数据守卫旋钮（全部走 env，禁硬编码；默认值仅作兜底）──────────────────
+# BACKTEST_BOARD_GUARD            : 1/0，总开关（默认开）
+# BACKTEST_BOARD_GUARD_TOL        : 涨跌停容差倍数，1.01 = 允许 1% 浮点/四舍五入误差
+# BACKTEST_BOARD_GUARD_SKIP_BARS  : 序列前 N 根豁免（新股上市初期无涨跌幅限制）
+def _env_flag(name: str, default: bool) -> bool:
+    v = os.getenv(name)
+    if v is None or str(v).strip() == "":
+        return default
+    return str(v).strip().lower() in ("1", "true", "yes", "on")
+
+
+def _env_float(name: str, default: float) -> float:
+    try:
+        return float(str(os.getenv(name)).strip())
+    except (TypeError, ValueError):
+        return default
+
+
+def _sanitize_board_limit(df: pd.DataFrame, code: str) -> pd.DataFrame | None:
+    """数据可行性守卫：区间内存在超涨跌停约束的坏 bar（复权跳变/坏点）→ 整只剔除 + 告警。
+
+    背景（20260905）：前复权数据偶发损坏（如 300192 某日 +221%、多只主板票单日
+    +11~19%），回测把幽灵收益当真。不做原地修复——单 bar 修复会让相邻 bar 的跳变
+    残留，半修比不修更隐蔽。科创/创业(300/301/688) ±20%、主板 ±10%；
+
+    注意：判定的是"单日涨跌幅超过涨跌停约束"，因此**价格序列必须真实可达**——
+    合成/夹具数据里 10→9→10 这类 V 形反弹在主板等于 +11.7%，会被正确判为坏数据。
+    """
+    if not _env_flag("BACKTEST_BOARD_GUARD", True):
+        return df
+    try:
+        limit = 0.20 if str(code).startswith(("300", "301", "688")) else 0.10
+        tol = _env_float("BACKTEST_BOARD_GUARD_TOL", 1.01)
+        skip = int(_env_float("BACKTEST_BOARD_GUARD_SKIP_BARS", 10))
+        c = pd.to_numeric(df["close"], errors="coerce")
+        ret = c / c.shift(1) - 1
+        bar_count = c.notna().cumsum()
+        bad = (ret.abs() > limit * tol) & (bar_count > skip)
+        if not bad.any():
+            return df
+        print(f"[数据守卫] {code} 检出 {int(bad.sum())} 根超涨跌停约束的坏 bar，"
+              f"整只剔除该回测候选（疑似复权跳变/坏数据）")
+        return None
+    except Exception:
+        return df
 
 
 def _build_summary(equity_df: pd.DataFrame, trades_df: pd.DataFrame, initial_capital: float) -> dict[str, Any]:
@@ -208,6 +256,7 @@ def run_forward_signal_backtest(
     vol_target: Optional[bool] = None,
     partial_take_profit: Optional[bool] = None,
     model_limit_down: Optional[bool] = None,
+    model_limit_up: Optional[bool] = None,
 ) -> "BacktestResult":
     """前向信号回测：锁定历史某天的信号清单，从信号日起往后持有，回测真实表现。
 
@@ -262,6 +311,8 @@ def run_forward_signal_backtest(
         pt_enabled = _pt_cfg["enabled"] if partial_take_profit is None else partial_take_profit
         ld_enabled = _mf_cfg["model_limit_down"] if model_limit_down is None else model_limit_down
         _ld_thr = _mf_cfg["limit_down_threshold"]
+        lu_enabled = _mf_cfg.get("model_limit_up", True) if model_limit_up is None else model_limit_up
+        _lu_thr = _mf_cfg["limit_down_threshold"]  # 对称复用同一缺口阈值（主板 9.5%）
     except Exception:
         _vt_cfg = {"target_annual_vol": 0.30, "window": 20, "min_scale": 0.3, "max_scale": 2.0}
         _pt_cfg = {"trigger_pct": 0.04, "tranche_pct": 0.33, "trailing_tighten": 0.5, "max_tranches": 2}
@@ -269,6 +320,8 @@ def run_forward_signal_backtest(
         pt_enabled = bool(partial_take_profit) if partial_take_profit is not None else True
         ld_enabled = bool(model_limit_down) if model_limit_down is not None else True
         _ld_thr = 0.095
+        lu_enabled = bool(model_limit_up) if model_limit_up is not None else True
+        _lu_thr = 0.095
 
         def vol_target_scale(v, p=None):
             return 1.0
@@ -346,6 +399,9 @@ def run_forward_signal_backtest(
     for code in norm["code"].astype(str).str.strip().unique():
         df = fetch_daily_k(code, _hist_start, end_pad)
         if df is not None and not df.empty:
+            df = _sanitize_board_limit(df, code)
+            if df is None:
+                continue
             df = df.copy()
             df["_dt"] = pd.to_datetime(df["date"])
             price_cache[code] = df.set_index("_dt").sort_index()
@@ -422,6 +478,36 @@ def run_forward_signal_backtest(
         pinned = abs(lo - c0) <= max(0.01, abs(c0) * 0.002)
         return ret <= -_ld_thr and pinned
 
+    def _at_limit_up_open(code: str, d: date) -> bool:
+        """近似判断处理日开盘是否一字涨停（A股买单无法成交，入场放弃）。
+
+        开盘缺口 ≥ +threshold 且 开盘=最高=最低（全天钉死一字板，无对手盘可成交）。
+        对称于 _at_limit_down 的保守近似：阈值统一 0.095，科创/创业 20% 板大幅高开
+        但非一字仍视为可成交（实际可排队）。当日无数据（停牌）→ 无法判定，放行。
+        """
+        p = price_cache.get(code)
+        if p is None or p.empty:
+            return False
+        rows = p.loc[p.index.date <= d]
+        if len(rows) < 2:
+            return False
+        cur = rows.iloc[-1]
+        if rows.index[-1].date() != d:
+            return False
+        prev = rows.iloc[-2]
+        try:
+            o = float(cur["open"])
+            h = float(cur["high"])
+            lo = float(cur["low"])
+            c1 = float(prev["close"])
+        except (TypeError, ValueError):
+            return False
+        if c1 <= 0 or o is None:
+            return False
+        gap = o / c1 - 1
+        flat = abs(h - o) <= max(0.01, o * 0.002) and abs(lo - o) <= max(0.01, o * 0.002)
+        return gap >= _lu_thr and flat
+
     # 买入调度：每个信号日 → 其「之后第一个交易日」作为买入处理日（即信号日次日开盘买入）。
     # 信号日本身可能不是交易日（周末/休市），不能直接用信号日作为交易日历中的 key。
     buy_schedule: dict[date, list[tuple[date, str, str]]] = defaultdict(list)
@@ -473,6 +559,11 @@ def run_forward_signal_backtest(
             _cs = max(0.0, min(1.0, capital_scale))
             _budget = cash * _cs
             for sd, c, w, row_stop, _st, scaled_w in _scaled:
+                # 一字涨停开盘买不进：放弃该笔入场（对称于跌停卖不出的顺延处理；
+                # 放弃而非顺延——涨停开板的次日再入场属于新决策，不归本信号管）
+                if lu_enabled and _at_limit_up_open(c, d):
+                    _total_scaled -= scaled_w
+                    continue
                 buy_price = _px(c, d, "open")
                 if buy_price is None:
                     _total_scaled -= scaled_w

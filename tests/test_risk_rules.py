@@ -65,7 +65,8 @@ def test_exit_baseline_in_neutral():
     assert e["take_profit_pct"] == 0.06
     assert e["trailing_stop_pct"] == 0.05
     assert e["trend_exit_ma"] == 60
-    assert e["hold_days"] == 10
+    # hold_days 基线 10→12：出场参数 A/B 实验结论落地（commit 9d9546a）后同步期望值
+    assert e["hold_days"] == 12
     assert e["slippage"] == 0.001
 
 
