@@ -8,15 +8,22 @@ compatibility_date = "2026-08-01"
 crons = ["*/5 * * * *"]
 
 [vars]
-# 定时触发目标：Stocks-Master 的「每日持仓分析推送」workflow
 GITHUB_OWNER = "benny1232123"
 GITHUB_REPO = "Stocks-Master"
-GITHUB_WORKFLOW = "daily-holdings.yml"
 GITHUB_REF = "master"
 
+# 触发目标之一：「每日持仓分析推送」
+GITHUB_WORKFLOW = "daily-holdings.yml"
+# 触发目标之二：「每日选股」
+DAILY_PICK_WORKFLOW = "daily-pick.yml"
+
 # 触发窗口（北京时间 HHMM，含起不含止）。
-# 下限 18:30 = 等 A 股当日收盘数据落地；上限 19:00 = 只在该半小时内尝试，
-# 避免 5 分钟轮询反复触发（另由 artifact 防重 + 最近 run 守卫双重兜底）。
+# 选股 16:30 起：等 A 股当日收盘数据落地（与 workflow 内窗口下限一致）。
+# 持仓 18:30 起：等当日 K 线/消息面产物齐备。
+# 上限各留 30 分钟 = 只在半小时内尝试，避免 5 分钟轮询反复触发
+# （另由「当日已完成」判定 + 最近 run 守卫双重兜底）。
+DISPATCH_PICK_WINDOW_START = "1630"
+DISPATCH_PICK_WINDOW_END = "1700"
 DISPATCH_HOLDINGS_WINDOW_START = "1830"
 DISPATCH_HOLDINGS_WINDOW_END = "1900"
 
