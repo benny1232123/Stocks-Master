@@ -65,52 +65,67 @@ def _code_of(path: Path) -> str:
     return path.name.split("_")[0]
 
 
-def scan_file(path: Path) -> dict:
-    """扫描单个缓存文件，返回问题描述（无问题时 breaks/dups 为空）。"""
-    code = _code_of(path)
-    out = {"code": code, "file": path.name, "breaks": [], "dups": 0, "rows": 0}
-    try:
-        df = pd.read_csv(path, usecols=["date", "close"])
-    except Exception as exc:  # noqa: BLE001
-        out["error"] = f"{type(exc).__name__}: {exc}"
+def scan_frame(code: str, df: pd.DataFrame) -> dict:
+    """对单只股票的 K 线 DataFrame 跑复权断层/重复检测（parquet / CSV 通用）。"""
+    out = {"code": code, "file": "", "breaks": [], "dups": 0, "rows": 0}
+    if df is None or len(df) < 2:
+        out["rows"] = 0 if df is None else len(df)
         return out
-    if len(df) < 2:
+    if "date" not in df.columns or "close" not in df.columns:
         out["rows"] = len(df)
         return out
-
-    df = df.dropna(subset=["date"]).copy()
-    df["close"] = pd.to_numeric(df["close"], errors="coerce")
-    df = df.dropna(subset=["close"]).sort_values("date").reset_index(drop=True)
-    out["rows"] = len(df)
-    out["dups"] = int(df["date"].duplicated().sum())
-    if len(df) < 2:
+    d = df[["date", "close"]].dropna(subset=["date"]).copy()
+    d["close"] = pd.to_numeric(d["close"], errors="coerce")
+    d = d.dropna(subset=["close"]).sort_values("date").reset_index(drop=True)
+    out["rows"] = len(d)
+    out["dups"] = int(d["date"].duplicated().sum())
+    if len(d) < 2:
         return out
 
     limit = _price_limit_pct(code) * LIMIT_MARGIN / 100.0
     up, dn = 1 + limit, 1 / (1 + limit)
-    ratio = df["close"] / df["close"].shift(1)
+    ratio = d["close"] / d["close"].shift(1)
     flagged = ratio[(ratio > up) | (ratio < dn)]
     for i in flagged.index:
         if i < SKIP_HEAD_BARS:
             continue  # 新股上市初期无涨跌幅限制
         out["breaks"].append({
-            "date": str(df["date"].iloc[i]),
-            "prev_close": round(float(df["close"].iloc[i - 1]), 4),
-            "close": round(float(df["close"].iloc[i]), 4),
+            "date": str(d["date"].iloc[i]),
+            "prev_close": round(float(d["close"].iloc[i - 1]), 4),
+            "close": round(float(d["close"].iloc[i]), 4),
             "ratio": round(float(ratio.iloc[i]), 4),
         })
     return out
 
 
+def scan_file(path: Path) -> dict:
+    """扫描单个 legacy CSV 缓存文件（过渡期/测试兼容）。"""
+    code = _code_of(path)
+    try:
+        df = pd.read_csv(path, usecols=["date", "close"])
+    except Exception as exc:  # noqa: BLE001
+        return {"code": code, "file": path.name, "breaks": [], "dups": 0,
+                "rows": 0, "error": f"{type(exc).__name__}: {exc}"}
+    out = scan_frame(code, df)
+    out["file"] = path.name
+    return out
+
+
 def scan_all(limit_files: int = 0) -> dict:
-    files = sorted(K_DATA_DIR.glob("*_qfq_full.csv"))
+    from smcore.data.kline import list_kline_codes, read_kline_cache
+    codes = list_kline_codes(base_dir=K_DATA_DIR)
     if limit_files:
-        files = files[:limit_files]
+        codes = codes[:limit_files]
     results, dirty, errors = [], [], []
     break_days: Counter = Counter()
     dup_files = []
-    for p in files:
-        r = scan_file(p)
+    for code in codes:
+        try:
+            df = read_kline_cache(code, base_dir=K_DATA_DIR)
+        except Exception as exc:  # noqa: BLE001
+            errors.append({"code": code, "error": f"{type(exc).__name__}: {exc}"})
+            continue
+        r = scan_frame(code, df)
         results.append(r)
         if r.get("error"):
             errors.append({"code": r["code"], "error": r["error"]})
@@ -120,9 +135,9 @@ def scan_all(limit_files: int = 0) -> dict:
             for b in r["breaks"]:
                 break_days[b["date"]] += 1
         if r["dups"]:
-            dup_files.append({"code": r["code"], "dups": r["dups"]})
+            dup_files.append({"code": code, "dups": r["dups"]})
     return {
-        "scanned": len(files),
+        "scanned": len(codes),
         "dirty_count": len(dirty),
         "break_points": sum(len(d["breaks"]) for d in dirty),
         "dirty": dirty,
@@ -135,18 +150,18 @@ def scan_all(limit_files: int = 0) -> dict:
 
 def refetch(codes: list[str], verbose: bool = True) -> dict:
     """对指定股票全量重拉 qfq 缓存（force_refresh 绕过增量追加）。"""
-    from smcore.data.kline import fetch_daily_k
+    from smcore.data.kline import fetch_daily_k, read_kline_cache
 
     ok, failed = [], []
     total = len(codes)
     for i, code in enumerate(codes, 1):
-        path = K_DATA_DIR / f"{code}_qfq_full.csv"
         # 保留原始覆盖区间，避免重拉后历史变短
         start = date(2015, 1, 1)
         try:
-            old = pd.read_csv(path, usecols=["date"])
-            first = str(old["date"].min())[:10]
-            start = min(start, pd.to_datetime(first).date())
+            old = read_kline_cache(code, base_dir=K_DATA_DIR)
+            if not old.empty:
+                first = str(old["date"].min())[:10]
+                start = min(start, pd.to_datetime(first).date())
         except Exception:
             pass
         t0 = time.time()
@@ -194,7 +209,7 @@ def run(fix: bool = False, limit: int = 0, verbose: bool = True) -> dict:
     # 复检：只重扫刚修过的票
     still = []
     for code in res["ok"]:
-        r = scan_file(K_DATA_DIR / f"{code}_qfq_full.csv")
+        r = scan_frame(code, read_kline_cache(code, base_dir=K_DATA_DIR))
         if r["breaks"]:
             still.append({"code": code, "breaks": len(r["breaks"])})
     report["fixed"] = {

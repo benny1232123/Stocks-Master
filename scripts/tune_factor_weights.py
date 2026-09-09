@@ -94,13 +94,8 @@ _KDATA_CACHE: dict[str, pd.DataFrame] = {}
 def _load_cached_kdata(code: str) -> pd.DataFrame:
     if code in _KDATA_CACHE:
         return _KDATA_CACHE[code]
-    cache = STOCK_DATA_DIR / "k_data" / f"{format_stock_code(code)}_qfq_full.csv"
-    df = pd.DataFrame()
-    if cache.exists():
-        try:
-            df = pd.read_csv(cache)
-        except Exception:
-            df = pd.DataFrame()
+    from smcore.data.kline import read_kline_cache
+    df = read_kline_cache(code, base_dir=STOCK_DATA_DIR / "k_data")
     if not df.empty:
         for col in ("open", "high", "low", "close"):
             if col in df.columns:

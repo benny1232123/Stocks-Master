@@ -172,9 +172,98 @@ def _normalize(df: pd.DataFrame) -> pd.DataFrame:
     return out[DAILY_K_COLUMNS]
 
 
-def _cache_path(code: str, adjust: str) -> Path:
-    K_DATA_CACHE_DIR.mkdir(parents=True, exist_ok=True)
-    return K_DATA_CACHE_DIR / f"{format_stock_code(code)}_{adjust}_full.csv"
+def _bucket_of(code6: str) -> str:
+    """股票代码前缀分桶（前 2 位），决定其 K 线落在哪个 parquet 文件。"""
+    return code6[:2]
+
+
+def _bucket_path(code6: str, adjust: str, base_dir=None) -> Path:
+    base = base_dir or K_DATA_CACHE_DIR
+    return base / f"{adjust}_b{_bucket_of(code6)}.parquet"
+
+
+def read_kline_cache(code, adjust: str = DEFAULT_ADJUST, base_dir=None) -> pd.DataFrame:
+    """读单只股票的全量归一化 K 线（DAILY_K_COLUMNS，date 为字符串 YYYY-MM-DD）。
+
+    优先读分桶 parquet 数据集（按 code 谓词下推，pyarrow 行组跳过）；
+    若该股票不在 parquet 中，则兜底读 legacy 每股票 CSV（迁移过渡期 / 测试）。
+    """
+    code6 = format_stock_code(code)
+    if not code6:
+        return _empty_df()
+    base = Path(base_dir) if base_dir else K_DATA_CACHE_DIR
+    frames: list[pd.DataFrame] = []
+    pf = _bucket_path(code6, adjust, base)
+    if pf.exists():
+        try:
+            sub = pd.read_parquet(
+                pf, columns=DAILY_K_COLUMNS + ["code"], filters=[("code", "==", code6)]
+            )
+            if not sub.empty:
+                frames.append(sub)
+        except Exception:
+            pass
+    legacy = base / f"{code6}_{adjust}_full.csv"
+    if legacy.exists():
+        try:
+            lf = _normalize(pd.read_csv(legacy))
+            if not lf.empty:
+                lf = lf.copy()
+                lf.insert(0, "code", code6)
+                frames.append(lf)
+        except Exception:
+            pass
+    if not frames:
+        return _empty_df()
+    return _normalize(pd.concat(frames, ignore_index=True))
+
+
+def write_kline_cache(df: pd.DataFrame, code, adjust: str = DEFAULT_ADJUST, base_dir=None) -> None:
+    """把单只股票的行 upsert 进分桶 parquet（删除该股旧行后并入新行，按 code,date 排序写回）。"""
+    code6 = format_stock_code(code)
+    if not code6:
+        return
+    base = Path(base_dir) if base_dir else K_DATA_CACHE_DIR
+    base.mkdir(parents=True, exist_ok=True)
+    out = _normalize(df).copy()
+    if out.empty:
+        return
+    out.insert(0, "code", code6)
+    out["date"] = out["date"].astype(str)
+    pf = _bucket_path(code6, adjust, base)
+    existing = pd.read_parquet(pf) if pf.exists() else None
+    if existing is not None and not existing.empty:
+        existing = existing[existing["code"] != code6]
+        merged = pd.concat([existing, out], ignore_index=True)
+    else:
+        merged = out
+    merged = merged.sort_values(["code", "date"]).reset_index(drop=True)
+    merged.to_parquet(pf, index=False)
+    # 迁移完成后 legacy CSV 应被清掉；这里顺手删除避免双份数据分歧
+    legacy = base / f"{code6}_{adjust}_full.csv"
+    if legacy.exists():
+        try:
+            legacy.unlink()
+        except Exception:
+            pass
+
+
+def list_kline_codes(adjust: str = DEFAULT_ADJUST, base_dir=None) -> list[str]:
+    """返回数据集中出现过的全部股票代码（parquet 优先，legacy CSV 兜底）。"""
+    base = Path(base_dir) if base_dir else K_DATA_CACHE_DIR
+    codes: set[str] = set()
+    for pf in sorted(base.glob(f"{adjust}_b*.parquet")):
+        try:
+            c = pd.read_parquet(pf, columns=["code"])["code"].astype(str).unique().tolist()
+            codes.update(c)
+        except Exception:
+            pass
+    for csv in base.glob(f"*_{adjust}_full.csv"):
+        try:
+            codes.add(csv.name.split("_")[0])
+        except Exception:
+            pass
+    return sorted(codes)
 
 
 def _is_fresh(path: Path, max_age_hours: float) -> bool:
@@ -247,11 +336,10 @@ def fetch_daily_k(
     if request_start > request_end:
         return _empty_df()
 
-    cache = _cache_path(code6, adjust)
     cached = pd.DataFrame()
-    if use_cache and not force_refresh and cache.exists():
+    if use_cache and not force_refresh:
         try:
-            cached = _normalize(pd.read_csv(cache))
+            cached = read_kline_cache(code6, adjust)
         except Exception:
             cached = pd.DataFrame()
 
@@ -262,7 +350,8 @@ def fetch_daily_k(
             cache_min, cache_max = dt.min().date(), dt.max().date()
 
     covers = bool(cache_min and cache_max and cache_min <= request_start and cache_max >= request_end)
-    fresh = _is_fresh(cache, max_cache_age_hours)
+    bucket_file = _bucket_path(code6, adjust)
+    fresh = _is_fresh(bucket_file, max_cache_age_hours) if bucket_file.exists() else False
     if covers and (fresh or request_end < date.today() - timedelta(days=1)):
         return _slice(cached, request_start, request_end)
 
@@ -400,7 +489,7 @@ def fetch_daily_k(
             )
 
     if use_cache and not merged.empty:
-        merged.to_csv(cache, index=False, encoding=CSV_ENCODING)
+        write_kline_cache(merged, code6, adjust)
     return _slice(merged, request_start, request_end) if not merged.empty else _empty_df()
 
 

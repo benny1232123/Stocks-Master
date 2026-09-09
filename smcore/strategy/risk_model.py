@@ -37,14 +37,13 @@ _ANNUAL = 252
 
 # ── 数据读取 ────────────────────────────────────────────────────────────
 def _load_kdata(code: str) -> pd.DataFrame:
-    """本地前复权 K 线（date 索引，close/amount）。缺文件/损坏返回空。"""
-    f = STOCK_DATA_DIR / "k_data" / f"{code}_qfq_full.csv"
-    if not f.exists():
-        return pd.DataFrame()
+    """本地前复权 K 线（date 索引，close/amount）。缺数据/损坏返回空。"""
+    from smcore.data.kline import read_kline_cache
     try:
-        d = pd.read_csv(f)
-        if "date" not in d.columns:
+        d = read_kline_cache(code, base_dir=STOCK_DATA_DIR / "k_data")
+        if d.empty or "date" not in d.columns:
             return pd.DataFrame()
+        d = d.copy()
         d["date"] = pd.to_datetime(d["date"])
         return d.set_index("date").sort_index()
     except Exception:

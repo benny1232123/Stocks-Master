@@ -7,6 +7,10 @@ uvicorn~=0.30.0
 pandas>=2.0
 python-dotenv~=1.0.0
 
+# K 线存储：k_data 按代码前缀分桶 parquet（替代每股票一个 CSV；文件数 4372→~4、体积 ~3x 压缩）
+# 读取按 code 谓词下推，回测全市场扫描仍≈每股票一次文件读取。
+pyarrow>=15.0
+
 # 数据源（滚动发布，保留 >=）
 akshare
 baostock

@@ -141,13 +141,12 @@ def child_order_schedule(side: str, total_shares: float, algo: str = "VWAP",
 
 # ── 数据读取 ──────────────────────────────────────────────────────────────
 def _load_kdata(code: str) -> pd.DataFrame:
-    f = STOCK_DATA_DIR / "k_data" / f"{code}_qfq_full.csv"
-    if not f.exists():
-        return pd.DataFrame()
+    from smcore.data.kline import read_kline_cache
     try:
-        d = pd.read_csv(f)
-        if "date" not in d.columns:
+        d = read_kline_cache(code, base_dir=STOCK_DATA_DIR / "k_data")
+        if d.empty or "date" not in d.columns:
             return pd.DataFrame()
+        d = d.copy()
         d["date"] = pd.to_datetime(d["date"])
         return d.set_index("date").sort_index()
     except Exception:

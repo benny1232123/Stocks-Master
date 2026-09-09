@@ -48,13 +48,8 @@ IMPROVE_THRESH_PP = 0.10  # 整体改进至少 +0.10pp 才算有意义
 
 
 def _cached_exists(code: str) -> bool:
-    cache = STOCK_DATA_DIR / "k_data" / f"{format_stock_code(code)}_qfq_full.csv"
-    if not cache.exists():
-        return False
-    try:
-        return not pd.read_csv(cache).empty
-    except Exception:
-        return False
+    from smcore.data.kline import read_kline_cache
+    return not read_kline_cache(code, base_dir=STOCK_DATA_DIR / "k_data").empty
 
 
 def _read_dal(dal_path: Path) -> list[tuple[str, str]]:

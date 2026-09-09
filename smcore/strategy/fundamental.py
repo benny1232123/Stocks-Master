@@ -100,9 +100,8 @@ def _fetch_spot_online(codes: Optional[list] = None) -> Optional[pd.DataFrame]:
     sample: list[str] = list(codes) if codes else []
     if not sample:
         try:
-            import glob
-            kdir = PROJECT_ROOT / "stock_data" / "k_data"
-            sample = [p.name.split("_")[0] for p in kdir.glob("*_qfq_full.csv")]
+            from smcore.data.kline import list_kline_codes
+            sample = list_kline_codes()
         except Exception:
             sample = []
     if not sample:

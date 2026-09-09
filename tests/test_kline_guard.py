@@ -92,7 +92,7 @@ def test_guard_self_heals_dirty_cache(monkeypatch, tmp_path):
     res = kl.fetch_daily_k("600900", "2026-08-01", "2026-12-31",
                            adjust="qfq", use_cache=True, force_refresh=False)
     assert not res.empty
-    cached = pd.read_csv(tmp_path / "600900_qfq_full.csv")
+    cached = kl.read_kline_cache("600900", "qfq", base_dir=tmp_path)
     v = cached[cached["date"] == "2026-02-10"]["close"].values[0]
     assert abs(v - 17.619) < 0.01, f"未自愈，仍为 {v}"
     # 接缝漂移 + 整段自洽性双重守卫至少触发一次重拉（尾段 + 全量）
@@ -127,7 +127,7 @@ def test_guard_no_infinite_recursion(monkeypatch, tmp_path):
     res = kl.fetch_daily_k("600900", "2026-08-01", "2026-12-31",
                            adjust="qfq", use_cache=True, force_refresh=False)
     assert not res.empty  # 不抛 RecursionError / 不卡死
-    cached = pd.read_csv(tmp_path / "600900_qfq_full.csv")
+    cached = kl.read_kline_cache("600900", "qfq", base_dir=tmp_path)
     v = cached[cached["date"] == "2026-02-10"]["close"].values[0]
     # 收敛到单一源基准（2x）
     assert abs(v - 17.619 * 2) < 0.1, f"未收敛到单一源基准：{v}"

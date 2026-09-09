@@ -183,17 +183,16 @@ def _warm_mem_cache(code: str) -> None:
     """
     if code in _KLINE_MEM_CACHE:
         return
-    cache_path = STOCK_DATA_DIR / "k_data" / f"{code}_qfq_full.csv"
-    if cache_path.exists():
-        try:
-            df = pd.read_csv(cache_path, encoding="utf-8-sig")
-            if not df.empty and "date" in df.columns and "close" in df.columns:
-                df = df.copy()
-                df["date"] = df["date"].astype(str)
-                _KLINE_MEM_CACHE[code] = df
-                return
-        except Exception:
-            pass
+    try:
+        from smcore.data.kline import read_kline_cache
+        df = read_kline_cache(code, base_dir=STOCK_DATA_DIR / "k_data")
+        if not df.empty and "date" in df.columns and "close" in df.columns:
+            df = df.copy()
+            df["date"] = df["date"].astype(str)
+            _KLINE_MEM_CACHE[code] = df
+            return
+    except Exception:
+        pass
     try:
         df = fetch_daily_k(code, "2015-01-01", datetime.now().strftime("%Y-%m-%d"), adjust="qfq")
     except Exception:

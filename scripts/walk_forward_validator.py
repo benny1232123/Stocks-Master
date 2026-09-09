@@ -111,14 +111,12 @@ def _parse_signal_date_from_name(name: str) -> str | None:
 
 
 def _load_cached_kdata(code: str) -> pd.DataFrame:
-    """只读本地 k_data 缓存，不联网；缺失或异常返回空表。"""
-    cache = STOCK_DATA_DIR / "k_data" / f"{format_stock_code(code)}_qfq_full.csv"
-    if not cache.exists():
-        return pd.DataFrame(columns=["date", "open", "high", "low", "close", "volume", "amount"])
-    try:
-        df = pd.read_csv(cache)
-    except Exception:
-        return pd.DataFrame(columns=["date", "open", "high", "low", "close", "volume", "amount"])
+    """只读本地 k_data 缓存（分桶 parquet），不联网；缺失或异常返回空表。"""
+    from smcore.data.kline import read_kline_cache
+    df = read_kline_cache(code, base_dir=STOCK_DATA_DIR / "k_data")
+    if df.empty:
+        return df  # read_kline_cache 缺失时已是 DAILY_K_COLUMNS 形状的空表
+    df = df.copy()
     for col in ("open", "high", "low", "close"):
         if col in df.columns:
             df[col] = pd.to_numeric(df[col], errors="coerce")

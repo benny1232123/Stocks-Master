@@ -45,14 +45,8 @@ TOPN = int(os.environ.get("VE_TOPN", "10"))
 
 
 def _cached_exists(code: str) -> bool:
-    cache = STOCK_DATA_DIR / "k_data" / f"{format_stock_code(code)}_qfq_full.csv"
-    if not cache.exists():
-        return False
-    try:
-        df = pd.read_csv(cache)
-    except Exception:
-        return False
-    return not df.empty
+    from smcore.data.kline import read_kline_cache
+    return not read_kline_cache(code, base_dir=STOCK_DATA_DIR / "k_data").empty
 
 
 def _read_dal(dal_path: Path) -> list[str]:

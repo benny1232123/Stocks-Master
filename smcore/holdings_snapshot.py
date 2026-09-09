@@ -36,26 +36,16 @@ def last_close_from_kdata(code: str) -> tuple[float | None, str | None]:
 
     返回 ``(收盘价, 该收盘价对应日期)``；读不到则 ``(None, None)``。
     """
-    path = KDATA_DIR / f"{code}_qfq_full.csv"
-    if not path.exists():
-        return None, None
+    from smcore.data.kline import read_kline_cache
     try:
-        with path.open("r", encoding="utf-8-sig", newline="") as fh:
-            rows = [r for r in csv.reader(fh) if r and any(c.strip() for c in r)]
-        if len(rows) < 2:
+        d = read_kline_cache(code, base_dir=STOCK_DATA_DIR / "k_data")
+        if d is None or d.empty or "close" not in d.columns:
             return None, None
-        header = [c.strip().lstrip("\ufeff") for c in rows[0]]
-        if "close" not in header:
+        last = d.iloc[-1]
+        try:
+            return float(last["close"]), str(last["date"]).strip()
+        except (TypeError, ValueError):
             return None, None
-        ci = header.index("close")
-        # 从末尾往回找第一条能解析出价格的记录（跳过可能的空行/坏行）
-        for row in reversed(rows[1:]):
-            if len(row) <= ci:
-                continue
-            try:
-                return float(row[ci]), str(row[0]).strip()
-            except (TypeError, ValueError):
-                continue
     except Exception:
         return None, None
     return None, None

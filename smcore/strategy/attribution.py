@@ -98,15 +98,13 @@ def forward_returns(codes, as_of_yyyymmdd: str, horizon: int = 10) -> dict:
         if not c6:
             out[c6] = None
             continue
-        p = STOCK_DATA_DIR / "k_data" / f"{c6}_qfq_full.csv"
-        if not p.exists():
-            out[c6] = None
-            continue
         try:
-            d = pd.read_csv(p)
-            if "date" not in d.columns or "close" not in d.columns:
+            from smcore.data.kline import read_kline_cache
+            d = read_kline_cache(c6, base_dir=STOCK_DATA_DIR / "k_data")
+            if d.empty or "date" not in d.columns or "close" not in d.columns:
                 out[c6] = None
                 continue
+            d = d.copy()
             d["date"] = pd.to_datetime(d["date"], errors="coerce")
             d = d.dropna(subset=["date"]).sort_values("date").reset_index(drop=True)
             target = pd.Timestamp(as_of_yyyymmdd)

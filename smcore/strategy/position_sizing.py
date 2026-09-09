@@ -87,14 +87,12 @@ def _estimate_betas(codes, as_of_yyyymmdd: str, window: int = BETA_WINDOW) -> di
         if not c6:
             continue
         try:
-            p = STOCK_DATA_DIR / "k_data" / f"{c6}_qfq_full.csv"
-            if not p.exists():
+            from smcore.data.kline import read_kline_cache
+            d = read_kline_cache(c6, base_dir=STOCK_DATA_DIR / "k_data")
+            if d.empty or "date" not in d.columns or "close" not in d.columns or len(d) < 3:
                 out[c6] = BETA_FALLBACK
                 continue
-            d = pd.read_csv(p)
-            if "date" not in d.columns or "close" not in d.columns or len(d) < 3:
-                out[c6] = BETA_FALLBACK
-                continue
+            d = d.copy()
             d["date"] = pd.to_datetime(d["date"], errors="coerce")
             d = d.dropna(subset=["date"]).set_index("date").sort_index()
             close = pd.to_numeric(d["close"], errors="coerce").dropna()
@@ -125,14 +123,12 @@ def _estimate_vol20(codes, window: int = 20) -> dict[str, Optional[float]]:
             out[c6] = None
             continue
         try:
-            p = STOCK_DATA_DIR / "k_data" / f"{c6}_qfq_full.csv"
-            if not p.exists():
+            from smcore.data.kline import read_kline_cache
+            d = read_kline_cache(c6, base_dir=STOCK_DATA_DIR / "k_data")
+            if d.empty or "date" not in d.columns or "close" not in d.columns or len(d) < window + 2:
                 out[c6] = None
                 continue
-            d = pd.read_csv(p)
-            if "date" not in d.columns or "close" not in d.columns or len(d) < window + 2:
-                out[c6] = None
-                continue
+            d = d.copy()
             d["date"] = pd.to_datetime(d["date"], errors="coerce")
             d = d.dropna(subset=["date"]).set_index("date").sort_index()
             close = pd.to_numeric(d["close"], errors="coerce").dropna()

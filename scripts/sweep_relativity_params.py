@@ -62,27 +62,37 @@ def _load_close_map(only_a_shares: bool = False) -> dict[str, "object"]:
     import pandas as pd
 
     out: dict[str, pd.DataFrame] = {}
-    for p in sorted(STOCK_DATA_DIR.glob("k_data/*_qfq_full.csv")):
-        code = format_stock_code(p.name.split("_")[0])
-        if not code or not code.isdigit():
-            continue
-        if only_a_shares:
-            if code[0] not in ("6", "0", "3"):
-                continue
-            if code[:3] in ("999", "399", "880"):
-                continue
-            # 注意：指数代理 INDEX_PROXY(000001) 首字符为 "0" 且前缀不在排除集，
-            # 会被保留进 close_map 用作基准（不在此剔除）；仅在评估循环里跳过它作候选股。
+    kdir = STOCK_DATA_DIR / "k_data"
+    # 分桶 parquet 一次性整读、按 code 切分（避免逐股读 150MB 大文件）：
+    # 全宇宙扫描从「逐股读大文件」降到「只读 4 个桶」，秒级完成。
+    for pf in sorted(kdir.glob("qfq_b*.parquet")):
         try:
-            df = pd.read_csv(p, usecols=["date", "open", "close"])
+            full = pd.read_parquet(pf)
         except Exception:
             continue
-        df["date"] = pd.to_datetime(df["date"], errors="coerce")
-        for c in ("open", "close"):
-            df[c] = pd.to_numeric(df[c], errors="coerce")
-        df = df.dropna(subset=["date", "close"]).sort_values("date").set_index("date")
-        if len(df) >= MIN_OVERLAP_DAYS:
-            out[code] = df
+        if "code" not in full.columns:
+            continue
+        for code, g in full.groupby("code"):
+            code = format_stock_code(code)
+            if not code or not code.isdigit():
+                continue
+            if only_a_shares:
+                if code[0] not in ("6", "0", "3"):
+                    continue
+                if code[:3] in ("999", "399", "880"):
+                    continue
+                # 注意：指数代理 INDEX_PROXY(000001) 首字符为 "0" 且前缀不在排除集，
+                # 会被保留进 close_map 用作基准（不在此剔除）；仅在评估循环里跳过它作候选股。
+            try:
+                df = g[["date", "open", "close"]].copy()
+            except Exception:
+                continue
+            df["date"] = pd.to_datetime(df["date"], errors="coerce")
+            for c in ("open", "close"):
+                df[c] = pd.to_numeric(df[c], errors="coerce")
+            df = df.dropna(subset=["date", "close"]).sort_values("date").set_index("date")
+            if len(df) >= MIN_OVERLAP_DAYS:
+                out[code] = df
     return out
 
 
