@@ -172,14 +172,40 @@ def _normalize(df: pd.DataFrame) -> pd.DataFrame:
     return out[DAILY_K_COLUMNS]
 
 
-def _bucket_of(code6: str) -> str:
-    """股票代码前缀分桶（前 2 位），决定其 K 线落在哪个 parquet 文件。"""
-    return code6[:2]
+def _bucket_prefix(code6: str, adjust: str) -> str:
+    """桶文件前缀：{adjust}_b{code[:2]}（前 2 位决定物理文件）。"""
+    return f"{adjust}_b{code6[:2]}"
 
 
-def _bucket_path(code6: str, adjust: str, base_dir=None) -> Path:
-    base = base_dir or K_DATA_CACHE_DIR
-    return base / f"{adjust}_b{_bucket_of(code6)}.parquet"
+def _bucket_files(code6: str, adjust: str, base_dir=None) -> list[Path]:
+    """返回某代码 K 线可能所在的全部 parquet 路径（主文件 + 分片）。
+
+    单文件桶（00/30/68）只有 `qfq_bXX.parquet`；
+    超大桶（如 b60）被拆成 `qfq_b60_{d}.parquet` 分片、按代码第 3 位路由，
+    以绕过 GitHub 单文件 100MB 硬限（GH001）。读时扫全部候选，写时只落对应分片。
+    """
+    base = Path(base_dir) if base_dir else K_DATA_CACHE_DIR
+    prefix = _bucket_prefix(code6, adjust)
+    main = base / f"{prefix}.parquet"
+    parts = sorted(base.glob(f"{prefix}_*.parquet"))
+    out: list[Path] = []
+    if main.exists():
+        out.append(main)
+    out.extend(p for p in parts if p not in out)
+    return out
+
+
+def _write_bucket_file(code6: str, adjust: str, base_dir=None) -> Path:
+    """返回某代码 K 行应写入的 parquet 文件。
+
+    若该桶已存在分片（说明被拆过），按代码第 3 位路由到对应分片；否则单文件。
+    """
+    base = Path(base_dir) if base_dir else K_DATA_CACHE_DIR
+    prefix = _bucket_prefix(code6, adjust)
+    parts = sorted(base.glob(f"{prefix}_*.parquet"))
+    if parts:
+        return base / f"{prefix}_{code6[2]}.parquet"
+    return base / f"{prefix}.parquet"
 
 
 def read_kline_cache(code, adjust: str = DEFAULT_ADJUST, base_dir=None) -> pd.DataFrame:
@@ -193,8 +219,7 @@ def read_kline_cache(code, adjust: str = DEFAULT_ADJUST, base_dir=None) -> pd.Da
         return _empty_df()
     base = Path(base_dir) if base_dir else K_DATA_CACHE_DIR
     frames: list[pd.DataFrame] = []
-    pf = _bucket_path(code6, adjust, base)
-    if pf.exists():
+    for pf in _bucket_files(code6, adjust, base):
         try:
             sub = pd.read_parquet(
                 pf, columns=DAILY_K_COLUMNS + ["code"], filters=[("code", "==", code6)]
@@ -230,7 +255,7 @@ def write_kline_cache(df: pd.DataFrame, code, adjust: str = DEFAULT_ADJUST, base
         return
     out.insert(0, "code", code6)
     out["date"] = out["date"].astype(str)
-    pf = _bucket_path(code6, adjust, base)
+    pf = _write_bucket_file(code6, adjust, base)
     existing = pd.read_parquet(pf) if pf.exists() else None
     if existing is not None and not existing.empty:
         existing = existing[existing["code"] != code6]
@@ -238,7 +263,8 @@ def write_kline_cache(df: pd.DataFrame, code, adjust: str = DEFAULT_ADJUST, base
     else:
         merged = out
     merged = merged.sort_values(["code", "date"]).reset_index(drop=True)
-    merged.to_parquet(pf, index=False)
+    # 与迁移落盘的 zstd 分桶保持一致，避免增量写入把分片重新压成 snappy 而膨胀越界（GH001 100MB 硬限）。
+    merged.to_parquet(pf, index=False, compression="zstd")
     # 迁移完成后 legacy CSV 应被清掉；这里顺手删除避免双份数据分歧
     legacy = base / f"{code6}_{adjust}_full.csv"
     if legacy.exists():
@@ -350,7 +376,7 @@ def fetch_daily_k(
             cache_min, cache_max = dt.min().date(), dt.max().date()
 
     covers = bool(cache_min and cache_max and cache_min <= request_start and cache_max >= request_end)
-    bucket_file = _bucket_path(code6, adjust)
+    bucket_file = _write_bucket_file(code6, adjust)
     fresh = _is_fresh(bucket_file, max_cache_age_hours) if bucket_file.exists() else False
     if covers and (fresh or request_end < date.today() - timedelta(days=1)):
         return _slice(cached, request_start, request_end)
