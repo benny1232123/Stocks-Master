@@ -33,6 +33,7 @@ import json
 import math
 import os
 import sys
+from datetime import datetime
 from pathlib import Path
 from typing import Optional
 
@@ -57,6 +58,22 @@ _BUILTIN_DEFAULTS = {
     "cash_from_volatility": {"k": 12.0, "midpoint": 0.55},
     "cash_from_drawdown": {"threshold": 8.0, "cap": 50.0, "deep": 20.0},
     "cash_from_regime": {"down_mult": 2.0, "down_floor": 20.0, "down_cap": 70.0, "up_mult": 0.33},
+    # ── edge 归因口径（2026-09-09 修复「选择偏差」）──
+    # backtest = 旧口径，只在「回测成交子集」上算（已被资金/排序截断到头部）；
+    # universe = 新口径，在「候选全集」的真实前向收益上算（默认，推荐）；
+    # blend    = 两者加权。
+    # 背景：momentum 在成交子集(n=27)上 edge=+0.99%，在候选全集(n=185)上 -3.46%，
+    # 方向相反 → 用旧口径会把权重往错误的方向调。
+    "edge": {
+        "source": "universe",
+        "window": 30,
+        "hold_days": 10,
+        "benchmark": "hs300",
+        "blend_w_backtest": 0.5,
+        # 样本置信度折扣：n < min_n_confident 的策略 edge 乘以 sqrt(n/min_n_confident)，
+        # 抑制「小样本高胜率」把权重顶到 50%+（实测 boll n=6/胜率100% → 58%）。
+        "min_n_confident": 30,
+    },
 }
 
 
@@ -74,8 +91,14 @@ def _load_config() -> dict:
                 cfg[k] = merged
             else:
                 cfg[k] = v
-    except Exception:
-        pass
+    except FileNotFoundError:
+        pass  # 配置文件不存在属预期（内置默认即可跑），不必告警
+    except Exception as exc:
+        # 配置文件存在但解析失败 = 有人改坏了 JSON，静默回退会让调参"看起来没生效"
+        print(
+            f"[adaptive_weights] WARN: 配置解析失败，回退内置默认（{exc!r}）",
+            file=sys.stderr,
+        )
     return cfg
 
 
@@ -147,14 +170,21 @@ def compute_strategy_edge(window: int = 30) -> dict:
                         code2strat[_norm_code(r["股票代码"])] = _norm_strategies(r["来源策略"])
                 else:
                     dal_col_missing_days += 1
-            except Exception:
-                pass
+            except Exception as exc:
+                print(
+                    f"[adaptive_weights] WARN: 读 {dal.name} 失败，该信号日归因缺失（{exc!r}）",
+                    file=sys.stderr,
+                )
         tr = STOCK_DATA_DIR / f"Multi-Backtest-{sd}-trades.csv"
         if not tr.exists():
             continue
         try:
             t = pd.read_csv(tr)
-        except Exception:
+        except Exception as exc:
+            print(
+                f"[adaptive_weights] WARN: 读 {tr.name} 失败，该信号日交易缺失（{exc!r}）",
+                file=sys.stderr,
+            )
             continue
         for _, r in t.iterrows():
             c = _norm_code(r.get("code"))
@@ -182,7 +212,7 @@ def compute_strategy_edge(window: int = 30) -> dict:
     edge: dict[str, dict] = {}
     for s, rs in strat_rets.items():
         if not rs:
-            edge[s] = {"n": 0, "avg_return": None, "win_rate": None, "edge": 0.0}
+            edge[s] = {"n": 0, "avg_return": None, "win_rate": None, "edge": 0.0, "std": 0.0}
             continue
         n = len(rs)
         avg = sum(rs) / n
@@ -192,8 +222,248 @@ def compute_strategy_edge(window: int = 30) -> dict:
             "avg_return": round(avg, 3),
             "win_rate": round(win * 100, 1),
             "edge": avg,
+            "std": _sd(rs),
         }
     return edge
+
+
+def _recent_signal_days(window: int, hold_days: int = 0) -> list[str]:
+    """最近 ``window + hold_days`` 个存在 Daily-Action-List 的信号日（升序）。
+
+    多取 ``hold_days`` 个是因为**最近的信号日还没有走完前向窗口**——若只取
+    window 个，其中最近 hold_days 个会因未来 K 线不足被整段丢弃，有效样本只剩
+    window - hold_days 个（实测 window=20/hold=10 时只剩 10 个有效日，归因失真）。
+    多取后在聚合阶段自然跳过不足者，保证有效样本≈window。
+    """
+    files = sorted(glob.glob(str(STOCK_DATA_DIR / "Daily-Action-List-*.csv")))
+    out = []
+    for f in files:
+        name = os.path.basename(f)
+        sd = name[len("Daily-Action-List-"):-len(".csv")]
+        if len(sd) == 8 and sd.isdigit():
+            out.append(sd)
+    n = window + max(0, hold_days)
+    return out[-n:] if n > 0 else []
+
+
+def _benchmark_forward_ret(sig_date: str, hold_days: int) -> Optional[float]:
+    """基准（沪深300）在信号日之后 hold_days 个交易日的收益（百分数）。
+
+    拿不到基准时返回 None → 调用方退化为「绝对收益」口径（不阻塞归因）。
+    """
+    try:
+        from smcore.strategy.regime_filter import _get_hs300_close
+    except Exception:
+        return None
+    try:
+        s = _get_hs300_close()
+        if s is None or len(s) == 0:
+            return None
+        idx = [d.strftime("%Y%m%d") for d in s.index]
+        if sig_date not in idx:
+            return None
+        i = idx.index(sig_date)
+        if i + hold_days >= len(s):
+            return None  # 基准未来数据不足（近期信号）
+        p0 = float(s.iloc[i])
+        p1 = float(s.iloc[i + hold_days])
+        if p0 <= 0:
+            return None
+        return (p1 / p0 - 1) * 100.0
+    except Exception:
+        return None
+
+
+def compute_universe_edge(
+    window: Optional[int] = None,
+    hold_days: Optional[int] = None,
+    use_benchmark: bool = True,
+) -> dict:
+    """在「候选全集」上算各策略 edge（相对基准的超额收益，百分数）。
+
+    与 :func:`compute_strategy_edge`（回测成交子集）的区别
+    ──────────────────────────────────────────────────────
+    旧口径只统计「回测中真正成交的交易」，这些交易已经被资金约束与排序截断到
+    每个信号日的头部少数几只。但**权重影响的是候选全集的分布**——momentum 在
+    成交子集里 n=27、edge +0.99%，在候选全集里 n=185、-3.46%，两者方向相反。
+
+    用成交子集做反馈，等于只拿"尖子生的成绩"给整个班级排权重，会把权重往
+    错误的方向调。本函数直接对 Daily-Action-List 的**每一条候选**计算信号日
+    之后 hold_days 个交易日的真实前向收益，减去同期基准收益得到超额。
+
+    样本量比回测子集大一个量级，且无截断偏差。多策略命中的票计入每个命中
+    策略（与综合评分叠加口径一致）。
+
+    基准不可用时自动退化为绝对收益（仍远优于被截断的子集），不阻塞流程。
+    """
+    cfg = CONFIG.get("edge", {})
+    if window is None:
+        window = int(cfg.get("window", 30))
+    if hold_days is None:
+        hold_days = int(cfg.get("hold_days", 10))
+
+    try:
+        from smcore.data.kline import read_kline_cache
+    except Exception:
+        return {s: {"n": 0, "avg_return": None, "win_rate": None, "edge": 0.0, "std": 0.0} for s in ALL_STRATEGIES}
+
+    sig_days = _recent_signal_days(window, hold_days)
+    bench_cache: dict[str, Optional[float]] = {}
+    kline_cache: dict[str, Optional[pd.DataFrame]] = {}
+    strat_rets: dict[str, list[float]] = {s: [] for s in ALL_STRATEGIES}
+    skipped_short = 0
+
+    for sd in sig_days:
+        dal = STOCK_DATA_DIR / f"Daily-Action-List-{sd}.csv"
+        try:
+            d = pd.read_csv(dal)
+        except Exception:
+            continue
+        if not {"股票代码", "来源策略"}.issubset(d.columns) or d.empty:
+            continue
+
+        b = None
+        if use_benchmark:
+            if sd not in bench_cache:
+                bench_cache[sd] = _benchmark_forward_ret(sd, hold_days)
+            b = bench_cache[sd]
+
+        for _, r in d.iterrows():
+            code = _norm_code(r["股票代码"])
+            strats = _norm_strategies(r["来源策略"]) & set(ALL_STRATEGIES)
+            if not strats:
+                continue
+            if code not in kline_cache:
+                try:
+                    k = read_kline_cache(code)
+                    kline_cache[code] = None if (k is None or k.empty) else k
+                except Exception:
+                    kline_cache[code] = None
+            k = kline_cache[code]
+            if k is None:
+                continue
+            try:
+                dates = k["date"].astype(str).str.replace("-", "").tolist()
+                if sd not in dates:
+                    continue
+                i = dates.index(sd)
+                if i + hold_days >= len(k):
+                    skipped_short += 1  # 信号日太近，未来 K 线不足
+                    continue
+                p0 = float(k.iloc[i]["close"])
+                p1 = float(k.iloc[i + hold_days]["close"])
+                if p0 <= 0:
+                    continue
+                ret = (p1 / p0 - 1) * 100.0
+            except Exception:
+                continue
+            excess = ret - b if b is not None else ret
+            for s in strats:
+                strat_rets[s].append(excess)
+
+    edge: dict[str, dict] = {}
+    for s, rs in strat_rets.items():
+        if not rs:
+            edge[s] = {"n": 0, "avg_return": None, "win_rate": None, "edge": 0.0, "std": 0.0}
+            continue
+        n = len(rs)
+        avg = sum(rs) / n
+        win = sum(1 for x in rs if x > 0) / n
+        edge[s] = {"n": n, "avg_return": round(avg, 3), "win_rate": round(win * 100, 1), "edge": avg, "std": _sd(rs)}
+
+    edge["__meta__"] = {  # type: ignore[assignment]  # 诊断用，不参与权重计算
+        "source": "universe",
+        "window": window,
+        "hold_days": hold_days,
+        "signal_days": len(sig_days),
+        "benchmark": "hs300" if use_benchmark else "none",
+        "skipped_future_insufficient": skipped_short,
+    }
+    return edge
+
+
+def compute_edge(window: Optional[int] = None, **kw) -> dict:
+    """按配置 ``edge.source`` 选择归因口径，返回各策略 edge。
+
+    - ``universe``（默认）：候选全集真实前向收益（无截断偏差）
+    - ``backtest``：回测成交子集（旧口径）
+    - ``blend``：两者按 ``blend_w_backtest`` 加权融合
+    """
+    cfg = CONFIG.get("edge", {})
+    source = str(cfg.get("source", "universe")).lower()
+    w = window if window is not None else int(cfg.get("window", 30))
+
+    if source == "backtest":
+        return compute_strategy_edge(w)
+    if source == "blend":
+        wb = float(cfg.get("blend_w_backtest", 0.5))
+        bt = compute_strategy_edge(w)
+        uv = compute_universe_edge(window=w)
+        out: dict = {}
+        for s in ALL_STRATEGIES:
+            a, b = bt.get(s, {}), uv.get(s, {})
+            na, nb = a.get("n", 0), b.get("n", 0)
+            ea, eb = a.get("edge", 0.0), b.get("edge", 0.0)
+            if na and nb:
+                out[s] = {
+                    "n": nb,
+                    "avg_return": round(wb * (a.get("avg_return") or 0) + (1 - wb) * (b.get("avg_return") or 0), 3),
+                    "win_rate": round(wb * (a.get("win_rate") or 0) + (1 - wb) * (b.get("win_rate") or 0), 1),
+                    "edge": wb * ea + (1 - wb) * eb,
+                    # std 取样本量较大一方的离散度（证据强度主要看 n 与 edge）
+                    "std": (a.get("std") or 0.0) if na >= nb else (b.get("std") or 0.0),
+                }
+            else:
+                out[s] = (b if nb else a) or {"n": 0, "avg_return": None, "win_rate": None, "edge": 0.0, "std": 0.0}
+        out["__meta__"] = {"source": "blend", "w_backtest": wb}
+        return out
+    return compute_universe_edge(window=w)
+
+
+def _sd(vals: list) -> float:
+    """总体标准差；不足 2 个样本返回 0.0（离散度未知 → 视为无证据）。"""
+    n = len(vals)
+    if n < 2:
+        return 0.0
+    m = sum(vals) / n
+    return math.sqrt(sum((x - m) ** 2 for x in vals) / n)
+
+
+def compute_dynamic_shrinkage(
+    edge: dict,
+    *,
+    base: float = 0.4,
+    pseudo: float = 15.0,
+    t_target: float = 2.0,
+) -> dict:
+    """按证据强度给每策略算「向等权收缩」系数，替代固定 shrinkage。
+
+    - 置信度 ``c = n / (n + pseudo)``：样本量越大越可信
+    - 显著度 ``sig = min(1, |t| / t_target)``：|t| 越大 edge 越不像噪声
+    - ``shrinkage_s = base * (1 - c * sig)``：证据强 → 0（全信自适应权重）；
+      证据弱或样本小 → 接近 ``base``（≈ 等权）
+
+    返回 {strategy: float}，全部位于 [0, base]。n<=1 或 sd<=0 → base。
+    """
+    out: dict[str, float] = {}
+    for s, e in edge.items():
+        if s == "__meta__" or not isinstance(e, dict):
+            continue
+        n = max(int(e.get("n", 0) or 0), 0)
+        avg = float(e.get("edge", 0.0) or 0.0)
+        sd = float(e.get("std", 0.0) or 0.0)
+        if n <= 1 or sd <= 0:
+            out[s] = base
+            continue
+        se = sd / math.sqrt(n)
+        if se <= 0:
+            out[s] = base
+            continue
+        t = avg / se
+        c = n / (n + pseudo)
+        sig = min(1.0, abs(t) / t_target)
+        out[s] = round(max(0.0, base * (1.0 - c * sig)), 6)
+    return out
 
 
 def adaptive_weights(
@@ -248,12 +518,20 @@ def adaptive_weights(
         min_evidence_n = max(3, total_samples // len(strs) // 4)
 
     # 1) 经验贝叶斯收缩：样本越少，edge 越不可信 → 越靠近 0
+    #    再叠一层样本置信度折扣 sqrt(n / min_n_confident)（上限 1.0）：
+    #    2026-09-09 实测 boll 仅 n=6、胜率 100% 就靠 pseudo 收缩后仍拿到 58% 权重，
+    #    典型「小样本高胜率」过拟合。伪计数只能压低 edge，压不住 softmax 里的
+    #    相对优势；置信度折扣专门治这个。
+    min_n_conf = float(cfg.get("edge", {}).get("min_n_confident", 30))
     shrunk: dict[str, float] = {}
     n_map: dict[str, int] = {}
     for s in strs:
         e = float(edge.get(s, {}).get("edge", 0.0) or 0.0)
         n = max(int(edge.get(s, {}).get("n", 0) or 0), 0)
-        shrunk[s] = e * (n / (n + pseudo))
+        conf = 1.0
+        if min_n_conf > 0 and n > 0:
+            conf = min(1.0, math.sqrt(n / min_n_conf))
+        shrunk[s] = e * (n / (n + pseudo)) * conf
         n_map[s] = n
 
     # 2) softmax（相对最大值缩放，避免溢出）
@@ -382,8 +660,9 @@ def compute_adaptive_allocation(
     if shrinkage is None:
         shrinkage = CONFIG["shrinkage"]
     eff_floor = floor if (floor is not None and zero_negative_edge) else (CONFIG["FLOOR"] if zero_negative_edge else 0.0)
-    edge = compute_strategy_edge(edge_window)
-    total_n = sum(e["n"] for e in edge.values())
+    # 口径由 CONFIG["edge"]["source"] 决定（默认 universe = 候选全集，无截断偏差）
+    edge = compute_edge(edge_window)
+    total_n = sum(e.get("n", 0) for e in edge.values() if isinstance(e, dict) and "n" in e)
     if total_n < min_n:
         if total_n == 0:
             print(
@@ -406,21 +685,41 @@ def compute_adaptive_allocation(
     return edge, weights, 0, False
 
 
-def save_regime_snapshot(payload: dict) -> Optional[str]:
-    """把市场状态 + 自适应权重快照落盘到 stock_data/regime-latest.json。
+def save_regime_snapshot(payload: dict, source: str = "live") -> Optional[str]:
+    """把市场状态 + 自适应权重快照落盘。
 
     原子写（临时文件 + os.replace）：非原子写曾因进程中断留下 0 字节 JSON，
     导致下游 json.load 直接失败。
+
+    ``source="live"``（当日信号）写 ``regime-latest.json``；
+    ``source="replay"``（历史回放/补跑）只写 ``regime_history/<信号日>.json``。
+
+    ⚠️ 这是 2026-09-09 修复的「快照被回放污染」问题：此前回放按日期升序跑完，
+    最后一个历史信号日会覆盖 regime-latest.json，使「最新市场状态」停留在
+    数周前的回放日期（当时停在 20260729，实际已到 20260909），前端/接口据此
+    展示的是陈旧 regime 与等权权重。
     """
     try:
         import os as _os
 
-        path = STOCK_DATA_DIR / "regime-latest.json"
+        payload = dict(payload)
+        payload["source"] = source
+        payload["generated_at"] = datetime.now().isoformat(timespec="seconds")
+
+        if source == "replay":
+            sig_date = str(payload.get("date") or "unknown")
+            hist_dir = STOCK_DATA_DIR / "regime_history"
+            hist_dir.mkdir(parents=True, exist_ok=True)
+            path = hist_dir / f"{sig_date}.json"
+        else:
+            path = STOCK_DATA_DIR / "regime-latest.json"
+
         path.parent.mkdir(parents=True, exist_ok=True)
         tmp = path.with_suffix(".json.tmp")
         with open(tmp, "w", encoding="utf-8") as f:
             json.dump(payload, f, ensure_ascii=False, indent=2)
         _os.replace(tmp, path)
         return str(path)
-    except Exception:
+    except Exception as exc:  # 不再静默：写失败必须可见（此前 pass 导致问题潜伏数周）
+        print(f"[adaptive_weights] WARN: regime 快照写入失败（{exc}）", file=sys.stderr)
         return None
