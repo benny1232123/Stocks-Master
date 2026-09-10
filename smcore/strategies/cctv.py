@@ -69,6 +69,9 @@ _SENT_MACRO_W = float(_CCFG.get("sentiment_macro_weight", 0.0))
 # 置信度档位阈值（走 config）
 _CONF_HIGH = float(_CCFG.get("confidence_high_threshold", 40))
 _CONF_MID = float(_CCFG.get("confidence_mid_threshold", 16))
+# 置信度信号合成权重（2026-09-09 从函数内字面量迁入配置，值不变）
+_CONF_W_MENTION = float(_CCFG.get("confidence_mention_weight", 0.5))
+_CONF_W_SENTIMENT = float(_CCFG.get("confidence_sentiment_weight", 0.3))
 # 每条新闻最多命中的板块数（走 config）：正文深处偶现的弱关联板块截断，
 # 避免一条综合新闻挂上一串风马牛不相及的板块（如「服务贸易」挂「电力」）。
 _MAX_SECTORS_PER_NEWS = int(float(_CCFG.get("max_sectors_per_news", 3)))
@@ -935,7 +938,7 @@ def build_n_day_sector_board(current_date_str, unit_days):
 
 
 def _confidence_tier(heat_score, mention, sentiment):
-    signal = heat_score + mention * 0.5 + max(sentiment, 0) * 0.3
+    signal = heat_score + mention * _CONF_W_MENTION + max(sentiment, 0) * _CONF_W_SENTIMENT
     if signal >= _CONF_HIGH:
         return "高"
     if signal >= _CONF_MID:

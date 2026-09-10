@@ -157,6 +157,19 @@ def health() -> dict[str, str]:
     return {"status": "ok"}
 
 
+@app.get("/api/config/recommendation")
+def recommendation_config() -> dict:
+    """暴露持仓建议三维评分的全部阈值与权重（单一真源）。
+
+    前端 ComprehensivePanel 原先在 ``App.jsx`` 里硬编码复刻了整套分段阈值与
+    `0.40/0.35/0.25` 权重，靠 ``verify_panel_alignment.py`` 事后校验——改一处漏一处。
+    现在前端启动时拉本端点，评分参数只有后端这一份。
+    """
+    from smcore.config.defaults import RECOMMENDATION_CONFIG
+
+    return RECOMMENDATION_CONFIG
+
+
 @app.get("/api/status")
 def app_status() -> dict:
     backend = trades_backend_name()

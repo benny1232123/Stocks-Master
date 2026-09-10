@@ -17,5 +17,14 @@
     "down_floor": 20.0,
     "down_cap": 70.0,
     "up_mult": 0.33
-  }
+  },
+  "edge": {
+    "source": "universe",
+    "window": 30,
+    "hold_days": 10,
+    "benchmark": "hs300",
+    "blend_w_backtest": 0.5,
+    "min_n_confident": 30
+  },
+  "monotonicity_tol_pp": 2.5
 }

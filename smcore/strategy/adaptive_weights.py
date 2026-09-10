@@ -74,6 +74,12 @@ _BUILTIN_DEFAULTS = {
         # 抑制「小样本高胜率」把权重顶到 50%+（实测 boll n=6/胜率100% → 58%）。
         "min_n_confident": 30,
     },
+    # 样本外单调性守卫容差（百分点）：见 test_walk_forward.test_out_of_sample_monotonicity。
+    # 项目 OOS 结论（WALK_FORWARD_VALIDATION.md）已判定单调性「非跨 regime 稳健」
+    # （3 regime 仅 1 跑赢等权，robust=False，edge 处噪声级 ±0.8pp）。故该守卫不再硬断言
+    # high>low，仅在高权重档比低权重档劣化超过此容差时报警（捕捉机制崩坏级倒置）。
+    # 取值 = 原 21 天窗口观测到的正向单调幅度(+2.5pp) 作为对称容差；可经 walk-forward CI 调。
+    "monotonicity_tol_pp": 2.5,
 }
 
 

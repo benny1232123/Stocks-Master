@@ -20,6 +20,7 @@ import {
 } from 'lucide-react'
 import { Button } from './components/ui/button'
 import { cn } from './lib/utils'
+import { useScoringConfig, bandScore, bandLabel } from './config/useScoringConfig'
 
 // 本地时区日期字符串 YYYY-MM-DD（toISOString 是 UTC，CST 早 8 点前会错成前一天）
 const localDateStr = (d = new Date()) =>
@@ -662,6 +663,9 @@ function FilterSeg({ value, onChange }) {
 }
 
 function ComprehensivePanel({ analysis }) {
+  // 评分阈值/权重来自后端单一真源（/api/config/recommendation），
+  // 后端不可达时回退打包快照；不再在本文件里硬编码任何分段阈值。
+  const CFG = useScoringConfig()
   const L = analysis?.latest ?? {}
   const M = analysis?.metrics ?? {}
   const F = analysis?.fundamentals
@@ -727,8 +731,9 @@ function ComprehensivePanel({ analysis }) {
     else if (distHi != null && distHi > -5) { techDetail.push(['布林', '近上轨', 'neutral']) }
     else techDetail.push(['布林', '中部', 'neutral'])
   }
-  const techScore = Math.max(0, Math.min(100, Math.round(50 + techS * 6)))
-  const techCls = techScore >= 70 ? 'good' : techScore <= 30 ? 'bad' : 'neutral'
+  const techClsCfg = CFG.technical_cls ?? { good: 70, bad: 30 }
+  const techScore = Math.max(0, Math.min(100, Math.round((CFG.tech_base ?? 50) + techS * (CFG.tech_step ?? 6))))
+  const techCls = techScore >= techClsCfg.good ? 'good' : techScore <= techClsCfg.bad ? 'bad' : 'neutral'
   const techCount = { bull: techDetail.filter(x => x[2] === 'bull').length, bear: techDetail.filter(x => x[2] === 'bear').length }
 
   // 基本面
@@ -741,25 +746,37 @@ function ComprehensivePanel({ analysis }) {
   const to = F?.turnover != null ? Number(F.turnover) : null
   const amt = F?.amount_20 != null ? Number(F.amount_20) : null
 
-  const peScore = pe == null ? 50 : pe < 0 ? 38 : pe < 15 ? 90 : pe < 25 ? 76 : pe < 35 ? 62 : pe < 50 ? 46 : 32
-  const pbScore = pb == null ? 50 : pb < 1 ? 90 : pb < 3 ? 76 : pb < 6 ? 62 : pb < 10 ? 46 : 32
-  const roeScore = roe == null ? 50 : roe > 0.2 ? 92 : roe > 0.15 ? 82 : roe > 0.1 ? 66 : roe > 0 ? 50 : 28
-  const gmScore = gm == null ? 50 : gm > 0.5 ? 92 : gm > 0.4 ? 82 : gm > 0.3 ? 66 : gm > 0.2 ? 54 : 42
-  const rgScore = rg == null ? 50 : rg > 0.3 ? 92 : rg > 0.2 ? 82 : rg > 0.1 ? 66 : rg > 0 ? 54 : 32
+  // 基本面 / 资金面分段打分：全部走后端配置表（缺失因子统一给 missing 分，非 0）
+  const FUND = CFG.fundamental ?? {}
+  const fundMissing = FUND.missing ?? 50
+  const peScore = bandScore(FUND.pe, pe, fundMissing)
+  const pbScore = bandScore(FUND.pb, pb, fundMissing)
+  const roeScore = bandScore(FUND.roe, roe, fundMissing)
+  const gmScore = bandScore(FUND.gm, gm, fundMissing)
+  const rgScore = bandScore(FUND.rg, rg, fundMissing)
   const fundScore = Math.round((peScore + pbScore + roeScore + gmScore + rgScore) / 5)
-  const fundCls = fundScore >= 65 ? 'good' : fundScore < 45 ? 'bad' : 'neutral'
+  const fcCfg = CFG.fund_cap_cls ?? { good: 65, bad: 45 }
+  const fundCls = fundScore >= fcCfg.good ? 'good' : fundScore < fcCfg.bad ? 'bad' : 'neutral'
 
   // 资金面（amount_20 缓存口径 = 近20日日均成交额(元)，/1e8 即亿元；勿再 /20）
+  const CAP = CFG.capital ?? {}
+  const capMissing = CAP.missing ?? 50
   const dailyAmt = amt != null ? amt / 1e8 : null
-  const liqScore = dailyAmt == null ? 50 : dailyAmt > 5 ? 92 : dailyAmt > 2 ? 76 : dailyAmt > 1 ? 62 : dailyAmt > 0.3 ? 48 : 32
-  const toScore = to == null ? 50 : to > 5 ? 90 : to > 2 ? 78 : to > 1 ? 64 : to > 0.3 ? 52 : to < 0.1 ? 34 : 46
+  const liqScore = bandScore(CAP.liq_amt, dailyAmt, capMissing)
+  const toScore = bandScore(CAP.turnover, to, capMissing)
   const capScore = Math.round((liqScore + toScore) / 2)
-  const capCls = capScore >= 65 ? 'good' : capScore < 45 ? 'bad' : 'neutral'
+  const capCls = capScore >= fcCfg.good ? 'good' : capScore < fcCfg.bad ? 'bad' : 'neutral'
 
   // 综合总评分
-  const total = hasF ? Math.round(techScore * 0.4 + fundScore * 0.35 + capScore * 0.25) : techScore
-  const rating = total >= 70 ? '推荐关注' : total >= 58 ? '偏积极' : total >= 45 ? '中性观望' : total >= 35 ? '偏谨慎' : '回避'
-  const ratingCls = total >= 58 ? 'good' : total >= 45 ? 'neutral' : 'bad'
+  const W = CFG.face_weights ?? { technical: 0.4, fundamental: 0.35, capital: 0.25 }
+  const total = hasF ? Math.round(techScore * W.technical + fundScore * W.fundamental + capScore * W.capital) : techScore
+  const rating = bandLabel(CFG.rating, total, '回避')
+  // good/neutral/bad 三档分界从 rating 表派生（第2档=偏积极→good，第3档=中性观望→neutral），
+  // 避免再写死 58 / 45
+  const rT = CFG.rating ?? []
+  const clsGood = rT.length > 1 ? (rT[1].gte ?? 58) : 58
+  const clsNeutral = rT.length > 2 ? (rT[2].gte ?? 45) : 45
+  const ratingCls = total >= clsGood ? 'good' : total >= clsNeutral ? 'neutral' : 'bad'
 
   let verdictTxt
   if (!hasF) verdictTxt = '当前标的暂无基本面 / 资金面缓存，研判仅基于技术面；如需完整分析，建议补充该标的覆盖后重试。'

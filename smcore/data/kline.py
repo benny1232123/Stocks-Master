@@ -10,6 +10,7 @@
 from __future__ import annotations
 
 import os
+import sys
 import threading
 import time
 from datetime import date, datetime, timedelta
@@ -24,6 +25,39 @@ from smcore.utils.code import format_stock_code, to_baostock_code
 # 不放在 stock_data/cache/ 下（该目录被 .gitignore 整目录忽略，会导致云端每次冷启动重抓）。
 K_DATA_CACHE_DIR = STOCK_DATA_DIR / "k_data"
 DAILY_K_COLUMNS = ["date", "open", "high", "low", "close", "volume", "amount"]
+
+# ── 缓存读取失败可观测性（2026-09-09）──
+# 背景：此前 `except Exception: pass` 遍布关键读路径，某个 parquet 损坏时会被静默跳过，
+# 表现为「股票池悄悄缩水 / 扫描结果全空」而不报错——sweep_relativity_params 曾因此
+# 让 close_map 全空却无任何提示。现在统一记录失败并首次告警。
+_READ_FAIL_LOCK = threading.Lock()
+_READ_FAILURES: dict[str, int] = {}
+_WARNED_PATHS: set[str] = set()
+
+
+def _record_read_failure(path, exc: BaseException, ctx: str = "") -> None:
+    """记录一次缓存读取失败；同一路径只在首次告警，避免刷屏。"""
+    key = f"{ctx}:{path}" if ctx else str(path)
+    with _READ_FAIL_LOCK:
+        _READ_FAILURES[key] = _READ_FAILURES.get(key, 0) + 1
+        first = key not in _WARNED_PATHS
+        _WARNED_PATHS.add(key)
+    if first:
+        tail = f"（{ctx}）" if ctx else ""
+        print(f"[kline] WARN: 缓存读取失败{tail} {path}: {exc!r}", file=sys.stderr)
+
+
+def get_read_failures() -> dict[str, int]:
+    """返回自进程启动以来各路径的缓存读取失败次数（供巡检 / 测试断言）。"""
+    with _READ_FAIL_LOCK:
+        return dict(_READ_FAILURES)
+
+
+def clear_read_failures() -> None:
+    """清空失败计数（测试用）。"""
+    with _READ_FAIL_LOCK:
+        _READ_FAILURES.clear()
+        _WARNED_PATHS.clear()
 
 # ── 复权基准漂移守卫 ──
 # 前复权价以「最新交易日」为锚：此后一旦发生分红送转，整条历史序列都会被重新缩放。
@@ -94,6 +128,9 @@ def _backend() -> str:
         return backend
     # 自动检测优先级：tdx(本地直连,毫秒级) > hithink(官方云API,有Key且联网) > baostock > akshare
     # GitHub Actions 等海外/无终端环境 tdx 不可用，hithink 有 Key 时自动成为云端最快首选。
+    # 后端探测本就是「试下一个」的流程，探测失败=该后端不可用，属正常 fallback，
+    # 故此处保持静默（否则每次启动都会在无 tdx 的环境刷屏）。真正需要告警的是
+    # 「所有后端都不可用」，由调用方在拿不到数据时报错。
     try:
         from smcore.data.tdx_client import available as tdx_available
         if tdx_available():
@@ -226,8 +263,8 @@ def read_kline_cache(code, adjust: str = DEFAULT_ADJUST, base_dir=None) -> pd.Da
             )
             if not sub.empty:
                 frames.append(sub)
-        except Exception:
-            pass
+        except Exception as exc:
+            _record_read_failure(pf, exc, ctx=f"read_kline_cache({code6})")
     legacy = base / f"{code6}_{adjust}_full.csv"
     if legacy.exists():
         try:
@@ -236,8 +273,8 @@ def read_kline_cache(code, adjust: str = DEFAULT_ADJUST, base_dir=None) -> pd.Da
                 lf = lf.copy()
                 lf.insert(0, "code", code6)
                 frames.append(lf)
-        except Exception:
-            pass
+        except Exception as exc:
+            _record_read_failure(legacy, exc, ctx=f"read_kline_cache({code6})/legacy")
     if not frames:
         return _empty_df()
     return _normalize(pd.concat(frames, ignore_index=True))
@@ -275,20 +312,35 @@ def write_kline_cache(df: pd.DataFrame, code, adjust: str = DEFAULT_ADJUST, base
 
 
 def list_kline_codes(adjust: str = DEFAULT_ADJUST, base_dir=None) -> list[str]:
-    """返回数据集中出现过的全部股票代码（parquet 优先，legacy CSV 兜底）。"""
+    """返回数据集中出现过的全部股票代码（parquet 优先，legacy CSV 兜底）。
+
+    ⚠️ 曾有静默失败坑：某个分桶 parquet 损坏时旧实现 `except: pass` 直接跳过，
+    整个桶的代码凭空消失，表现为「股票池悄悄缩水」而无任何报错。现在失败会
+    计数并告警，可通过 :func:`get_read_failures` 巡检。
+    """
     base = Path(base_dir) if base_dir else K_DATA_CACHE_DIR
     codes: set[str] = set()
+    failed: list[str] = []
     for pf in sorted(base.glob(f"{adjust}_b*.parquet")):
         try:
             c = pd.read_parquet(pf, columns=["code"])["code"].astype(str).unique().tolist()
             codes.update(c)
-        except Exception:
-            pass
+        except Exception as exc:
+            failed.append(pf.name)
+            _record_read_failure(pf, exc, ctx="list_kline_codes")
     for csv in base.glob(f"*_{adjust}_full.csv"):
         try:
             codes.add(csv.name.split("_")[0])
-        except Exception:
-            pass
+        except Exception as exc:
+            failed.append(csv.name)
+            _record_read_failure(csv, exc, ctx="list_kline_codes/legacy")
+    if failed:
+        print(
+            f"[kline] WARN: list_kline_codes 有 {len(failed)} 个数据文件读取失败，"
+            f"返回的股票池不完整（缺失: {', '.join(failed[:5])}"
+            f"{' ...' if len(failed) > 5 else ''}）",
+            file=sys.stderr,
+        )
     return sorted(codes)
 
 
@@ -494,8 +546,12 @@ def fetch_daily_k(
                             f"[kline] {code6} {len(_unexplained)} 处复权断层无法用分红/送股解释"
                             f"（疑似真实数据错误，将触发全量重拉）；可解释={len(breaks) - len(_unexplained)}"
                         )
-            except Exception:
-                pass
+            except Exception as exc:
+                # 复权断层校验是数据质量守卫，静默失败等于守卫失效（坏 K 线直接进策略）
+                print(
+                    f"[kline] WARN: {code6} 复权断层校验异常，守卫未生效（{exc!r}）",
+                    file=sys.stderr,
+                )
         if breaks:
             if (not force_refresh) and (not _no_retry):
                 return fetch_daily_k(

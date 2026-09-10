@@ -54,6 +54,29 @@ _BUILTIN_DEFAULTS = {
     "beta_min_keep": {"frac_of_picks": 0.5, "min": 5, "max": 15},
     "max_per_strategy": {"expansion": 1.0, "min": 3, "max": 20},
     "sector_momentum_bonus": {"dispersion_k": 1.2, "floor": 2.0, "ceil": 12.0},
+    # ── 融合层加权系数（2026-09-09 从 fusion.py 硬编码迁入）──
+    "fusion": {
+        "theme_score_weight": 0.1,
+        "theme_score_cap": 10.0,
+    },
+    # ── regime 过滤器阈值（2026-09-09 从 regime_filter.py 硬编码迁入）──
+    # 默认值与迁移前代码完全一致，保证行为不变；改这里即可随市场调优。
+    "regime_filter": {
+        "rs_tol_base": 0.03,
+        "rs_tol_strength_span": 0.04,
+        "rs_tol_vol_span": 0.03,
+        "rs_tol_min": 0.015,
+        "rs_tol_max": 0.07,
+        "min_amt_base": 1e8,
+        "min_amt_strength_span": 1e8,
+        "min_amt_vol_span": 1.2e8,
+        "min_amt_floor": 5e7,
+        "min_amt_ceil": 3e8,
+        "trend_guard_below_ma20": 0.12,
+        "rs_lookback": 20,
+        "min_signal_amount": 1e8,
+        "multi_hit_bonus_cap": 12,
+    },
     "drawdown": {"dd_full": 0.20, "dd_cash_ceiling": 0.50},
     "exit": {
         "stop_loss_pct": {"base": 0.08, "min": 0.04, "max": 0.15, "vol_sensitivity": 0.5},
