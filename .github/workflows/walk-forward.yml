@@ -37,7 +37,7 @@ jobs:
           python-version: "3.11"
 
       - name: 安装依赖（仅 pandas，纯本地计算）
-        run: pip install --retries 3 pandas
+        run: pip install --retries 3 pandas pyarrow
 
       - name: 运行 walk-forward 重验 + 导出推荐 JSON
         id: wf

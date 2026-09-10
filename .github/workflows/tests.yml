@@ -33,7 +33,7 @@ jobs:
       - name: 安装依赖
         run: |
           pip install --upgrade pip
-          pip install --retries 3 pytest akshare pandas requests baostock matplotlib cos-python-sdk-v5 supabase backtrader
+          pip install --retries 3 pytest akshare pandas pyarrow requests baostock matplotlib cos-python-sdk-v5 supabase backtrader
 
       - name: 运行测试
         run: pytest -q

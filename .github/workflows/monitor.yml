@@ -26,7 +26,7 @@ jobs:
           python-version: "3.11"
 
       - name: 安装依赖（仅 pandas）
-        run: pip install --quiet pandas
+        run: pip install --quiet pandas pyarrow
 
       # 幂等自举：告警 issue 依赖 monitoring/auto label，仓库里缺失会导致
       # `gh issue create --label` 报 "could not add label" 而把整个监控 job 打红。
@@ -72,9 +72,18 @@ jobs:
           sys.path.insert(0, "scripts")
           import strategy_decay_monitor
           body = strategy_decay_monitor._format_issue_body(res)
-          subprocess.run(
-              ["gh", "issue", "create", "--title", title, "--body", body,
-               "--label", "monitoring,auto"], check=True)
+          try:
+              subprocess.run(
+                  ["gh", "issue", "create", "--title", title, "--body", body,
+                   "--label", "monitoring,auto"], check=True,
+                  capture_output=True, text=True)
+          except subprocess.CalledProcessError as _exc:
+              # label 缺失 / GitHub API 瞬断：降级为不带 label 创建，避免整 job 标红
+              _stderr = getattr(_exc, "stderr", "") or ""
+              print("带 label 创建失败，降级重试：", _stderr[:300])
+              subprocess.run(
+                  ["gh", "issue", "create", "--title", title, "--body", body],
+                  check=False, capture_output=True, text=True)
           print("已创建衰减告警 issue，触发策略：", decayed)
           PY
 
@@ -108,9 +117,17 @@ jobs:
           sys.path.insert(0, "scripts")
           import factor_ic_monitor
           body = factor_ic_monitor._format_issue_body(res)
-          subprocess.run(
-              ["gh", "issue", "create", "--title", title, "--body", body,
-               "--label", "monitoring,auto"], check=True)
+          try:
+              subprocess.run(
+                  ["gh", "issue", "create", "--title", title, "--body", body,
+                   "--label", "monitoring,auto"], check=True,
+                  capture_output=True, text=True)
+          except subprocess.CalledProcessError as _exc:
+              _stderr = getattr(_exc, "stderr", "") or ""
+              print("带 label 创建失败，降级重试：", _stderr[:300])
+              subprocess.run(
+                  ["gh", "issue", "create", "--title", title, "--body", body],
+                  check=False, capture_output=True, text=True)
           print("已创建因子 IC 告警 issue。")
           PY
 
@@ -152,8 +169,15 @@ jobs:
           for c in res.get("checks", []):
               lines.append(f"- **{c['id']} {c['name']}**：{c['status']} — {c['detail']}")
           body = "\n".join(lines)
-          subprocess.run(["gh","issue","create","--title",title,"--body",body,
-                          "--label","monitoring,auto"], check=True)
+          try:
+              subprocess.run(["gh","issue","create","--title",title,"--body",body,
+                              "--label","monitoring,auto"], check=True,
+                             capture_output=True, text=True)
+          except subprocess.CalledProcessError as _exc:
+              _stderr = getattr(_exc, "stderr", "") or ""
+              print("带 label 创建失败，降级重试：", _stderr[:300])
+              subprocess.run(["gh","issue","create","--title",title,"--body",body],
+                             check=False, capture_output=True, text=True)
           print("已创建样本外纪律告警 issue。")
           PY
 

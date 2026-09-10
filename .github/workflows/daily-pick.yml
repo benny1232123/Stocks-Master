@@ -90,7 +90,7 @@ jobs:
         if: steps.gate.outputs.ok == 'true'
         run: |
           pip install --upgrade pip
-          pip install --retries 3 akshare pandas requests baostock matplotlib cos-python-sdk-v5 supabase backtrader
+          pip install --retries 3 akshare pandas pyarrow requests baostock matplotlib cos-python-sdk-v5 supabase backtrader
 
       - name: 尝试安装 pytdx（国内自托管 Runner 可选；GitHub 海外 Runner 自动跳过）
         continue-on-error: true

@@ -73,7 +73,7 @@ jobs:
         if: steps.gate.outputs.ok == 'true'
         run: |
           pip install --upgrade pip
-          pip install --retries 3 numpy pandas akshare baostock supabase requests
+          pip install --retries 3 numpy pandas pyarrow akshare baostock supabase requests
 
       - name: 生成持仓个股分析并推送
         if: steps.gate.outputs.ok == 'true'

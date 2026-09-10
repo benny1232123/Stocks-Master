@@ -64,7 +64,7 @@ jobs:
 
       - name: 安装依赖（仅 pandas；离线重放，零网络）
         if: steps.gate.outputs.ok == 'true'
-        run: pip install --quiet pandas
+        run: pip install --quiet pandas pyarrow
 
       - name: 纸盘每日执行（开仓→盯市出场→漂移再平衡→回撤熔断）
         id: paper
