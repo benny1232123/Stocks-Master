@@ -45,6 +45,26 @@
     "floor": 2.0,
     "ceil": 12.0
   },
+  "fusion": {
+    "theme_score_weight": 0.1,
+    "theme_score_cap": 10.0
+  },
+  "regime_filter": {
+    "rs_tol_base": 0.03,
+    "rs_tol_strength_span": 0.04,
+    "rs_tol_vol_span": 0.03,
+    "rs_tol_min": 0.015,
+    "rs_tol_max": 0.07,
+    "min_amt_base": 100000000.0,
+    "min_amt_strength_span": 100000000.0,
+    "min_amt_vol_span": 120000000.0,
+    "min_amt_floor": 50000000.0,
+    "min_amt_ceil": 300000000.0,
+    "trend_guard_below_ma20": 0.12,
+    "rs_lookback": 20,
+    "min_signal_amount": 100000000.0,
+    "multi_hit_bonus_cap": 12
+  },
   "drawdown": {
     "dd_full": 0.2,
     "dd_cash_ceiling": 0.5
@@ -109,6 +129,10 @@
     "scale": 8.0,
     "max_bonus": 15.0
   },
+  "fundamental_pit": {
+    "prefer_pub_date": true,
+    "disclosure_lag_days": {"03-31": 30, "06-30": 62, "09-30": 31, "12-31": 120}
+  },
   "action_list": {
     "placeholder_when_empty": true
   },
@@ -162,6 +186,8 @@
     "use_sw_industry": false,
     "confidence_high_threshold": 40,
     "confidence_mid_threshold": 16,
+    "confidence_mention_weight": 0.5,
+    "confidence_sentiment_weight": 0.3,
     "sentiment_neutral_weight": 0.0,
     "sentiment_macro_weight": 0.0,
     "sector_synonyms": {

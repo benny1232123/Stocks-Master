@@ -18,7 +18,7 @@ from __future__ import annotations
 
 import json
 import threading
-from datetime import datetime, timedelta
+from datetime import date, datetime, timedelta
 from pathlib import Path
 from typing import Optional
 
@@ -32,6 +32,87 @@ except Exception:  # pragma: no cover
 CACHE_DIR = PROJECT_ROOT / "stock_data" / "fundamental_cache"
 SPOT_FILE = CACHE_DIR / "spot_snapshot.csv"
 CACHE_TTL_DAYS = int(__import__("os").environ.get("FUND_TTL_DAYS", "30"))
+
+# ───────────────────────── Point-in-Time (PIT) 纪律 ─────────────────────────
+# 历史回补时绝不能使用「信号日之后才公告」的财报（未来函数）。缓存按报告期存历史，
+# 取数时按「真实公告日 pubDate（最优） 或 法定披露截止日」对齐到 as_of。
+# 这是基本面因子进入选股/回测前的最后一道防泄漏闸——价格因子已在 factor_scoring
+# 内按 end=as_of 因果切片，此处补齐基本面因子。
+CACHE_VERSION = 2
+
+# 法定披露截止日相对报告期季末的滞后天数（A股惯例，仅当缺 pubDate 时回退使用）：
+# 一季报/中报/三季报/年报 大限约 4-30 / 8-31 / 10-31 / 次年4-30。配置可由
+# risk_config.json 的 fundamental_pit.disclosure_lag_days 覆盖。
+_DISCLOSURE_LAG_DAYS = {"03-31": 30, "06-30": 62, "09-30": 31, "12-31": 120}
+
+
+def _load_pit_cfg() -> dict:
+    """从 risk_config.json 读取 fundamental_pit 配置（缺省回退内置常量）。"""
+    try:
+        cfg_path = PROJECT_ROOT / "smcore" / "strategy" / "risk_config.json"
+        cfg = json.loads(Path(cfg_path).read_text(encoding="utf-8"))
+        pit = cfg.get("fundamental_pit")
+        if isinstance(pit, dict):
+            return pit
+    except Exception:
+        pass
+    return {}
+
+
+def _parse_date_str(s) -> Optional[date]:
+    if not s:
+        return None
+    s = str(s).strip()
+    for fmt in ("%Y-%m-%d", "%Y%m%d"):
+        try:
+            return datetime.strptime(s, fmt).date()
+        except (ValueError, TypeError):
+            continue
+    return None
+
+
+def _pit_lag_days(period_end: str) -> Optional[int]:
+    """季末 MM-DD → 法定披露滞后天数（配置优先，内置常量回退）。"""
+    mmdd = period_end[5:10] if len(period_end) >= 10 else period_end
+    lags = (_load_pit_cfg().get("disclosure_lag_days") or _DISCLOSURE_LAG_DAYS)
+    if mmdd in lags:
+        try:
+            return int(lags[mmdd])
+        except (TypeError, ValueError):
+            return None
+    return None
+
+
+def _period_available_date(period_end: str, pub_date: Optional[str]) -> Optional[date]:
+    """报告期可用日期：优先真实公告日；缺则按法定披露大限推算。"""
+    if _load_pit_cfg().get("prefer_pub_date", True):
+        pd_ = _parse_date_str(pub_date)
+        if pd_ is not None:
+            return pd_
+    lag = _pit_lag_days(period_end)
+    pe = _parse_date_str(period_end)
+    if pe is None:
+        return None
+    if lag is None:
+        return pe  # 无滞后信息则退化为报告期当日（保守下限）
+    return pe + timedelta(days=lag)
+
+
+def _select_pit_period(periods: dict, as_of: date) -> Optional[dict]:
+    """在 periods{报告期: 记录(含 _pub)} 中选 as_of 前已披露的最新一期。"""
+    best_end = None
+    best = None
+    for pe, rec in periods.items():
+        if not isinstance(rec, dict):
+            continue
+        avail = _period_available_date(pe, rec.get("_pub"))
+        if avail is None or avail > as_of:
+            continue
+        if best_end is None or pe > best_end:
+            best_end = pe
+            best = rec
+    return best
+
 
 # 腾讯行情字段索引（~ 分隔）：1=名称 3=现价 34=PE(TTM) 39=PB 45=总市值(万元)
 _TX_HOST = "http://qt.gtimg.cn"
@@ -229,66 +310,61 @@ def _bs_login() -> bool:
         return False
 
 
-def _fetch_profit_baostock(code6: str) -> Optional[dict]:
-    """baostock 盈利能力 → ROE + 毛利率。取最近一期。"""
+def _fetch_profit_growth_periods_baostock(code6: str) -> dict:
+    """baostock 盈利 + 成长 → 按报告期归集的 {statDate: {roe, gross_margin, revenue_growth, _pub}}。
+
+    拉取全部历史报告期（不取最新一期），供 PIT 按 as_of 选期。优先用真实公告日 pubDate；
+    缺 pubDate 时按法定披露大限兜底。fail-soft：任何异常返回空 dict。
+    """
+    result: dict[str, dict] = {}
     try:
         import baostock as bs
         if not _bs_login():
-            return None
-        # 拉近 4 年各季度，取最新非空
-        for year in (2025, 2024, 2023, 2022):
+            return result
+        sym = ("sh." if code6.startswith(("6", "9")) else "sz.") + code6
+        # 盈利（ROE / 毛利率）
+        for year in range(2020, datetime.now().year + 1):
             for q in (4, 3, 2, 1):
-                rs = bs.query_profit_data(code=f"sh.{code6}" if code6.startswith(("6", "9"))
-                                          else f"sz.{code6}", year=year, quarter=q)
+                rs = bs.query_profit_data(code=sym, year=year, quarter=q)
                 if rs is None or rs.error_code != "0":
                     continue
-                rows = []
                 while rs.next():
-                    rows.append(rs.get_row_data())
-                if not rows or not rs.fields:
-                    continue
-                rec = dict(zip(rs.fields, rows[0]))
-                try:
-                    roe = float(rec.get("roeAvg", "")) if rec.get("roeAvg") else None
-                    gm = float(rec.get("gpMargin", "")) if rec.get("gpMargin") else None
-                except (TypeError, ValueError):
-                    roe = gm = None
-                if roe is None and gm is None:
-                    continue
-                return {"roe": roe, "gross_margin": gm}
-    except Exception:
-        return None
-    return None
-
-
-def _fetch_growth_baostock(code6: str) -> Optional[dict]:
-    """baostock 成长能力 → 营收增长。取最近一期。"""
-    try:
-        import baostock as bs
-        if not _bs_login():
-            return None
-        for year in (2025, 2024, 2023, 2022):
+                    rec = dict(zip(rs.fields, rs.get_row_data()))
+                    pe = rec.get("statDate")
+                    if not pe:
+                        continue
+                    d = result.setdefault(pe, {})
+                    if rec.get("pubDate"):
+                        d["_pub"] = rec["pubDate"]
+                    try:
+                        if rec.get("roeAvg"):
+                            d["roe"] = float(rec["roeAvg"])
+                        if rec.get("gpMargin"):
+                            d["gross_margin"] = float(rec["gpMargin"])
+                    except (TypeError, ValueError):
+                        pass
+        # 成长（营收同比增长）
+        for year in range(2020, datetime.now().year + 1):
             for q in (4, 3, 2, 1):
-                rs = bs.query_growth_data(code=f"sh.{code6}" if code6.startswith(("6", "9"))
-                                          else f"sz.{code6}", year=year, quarter=q)
+                rs = bs.query_growth_data(code=sym, year=year, quarter=q)
                 if rs is None or rs.error_code != "0":
                     continue
-                rows = []
                 while rs.next():
-                    rows.append(rs.get_row_data())
-                if not rows or not rs.fields:
-                    continue
-                rec = dict(zip(rs.fields, rows[0]))
-                try:
-                    rg = float(rec.get("YSTZ", "")) if rec.get("YSTZ") else None  # 营业收入同比增长率
-                except (TypeError, ValueError):
-                    rg = None
-                if rg is None:
-                    continue
-                return {"revenue_growth": rg}
+                    rec = dict(zip(rs.fields, rs.get_row_data()))
+                    pe = rec.get("statDate")
+                    if not pe:
+                        continue
+                    d = result.setdefault(pe, {})
+                    if rec.get("pubDate"):
+                        d["_pub"] = rec["pubDate"]
+                    try:
+                        if rec.get("YSTZ"):
+                            d["revenue_growth"] = float(rec["YSTZ"])
+                    except (TypeError, ValueError):
+                        pass
     except Exception:
-        return None
-    return None
+        return result
+    return result
 
 
 def _fetch_kline_stats_baostock(code6: str, as_of=None) -> Optional[dict]:
@@ -332,34 +408,89 @@ def _fetch_kline_stats_baostock(code6: str, as_of=None) -> Optional[dict]:
         return None
 
 
-# ───────────────────────── 合并 fetch ─────────────────────────
+# ───────────────────────── 合并 fetch（PIT 合规） ─────────────────────────
 def fetch_fundamental(code: str, as_of=None, *, force: bool = False) -> Optional[dict]:
-    """合并返回单只票的基本面因子原始值：
+    """合并返回单只票的基本面因子原始值（**Point-in-Time 合规**）：
         {roe, gross_margin, revenue_growth, pe, pb, mkt_cap, turnover, amount_20}
     任一子块缺失则其字段为 None（因子层据此降级）。全部缺失返回 None。
+
+    PIT 行为：
+    - as_of 为 None（实时/刷新）：用缓存中最新一期报告 + 最新估值快照。
+    - as_of 给定（历史回补）：质量/成长取「as_of 前已公告」的最新报告期；缺失该期则降级 None。
+      估值快照仅当 as_of ≥ 快照刷新日时可用，否则降级 None（绝不用未来估值污染历史）。
     """
     code6 = _norm_code(code)
     cached = None if force else _load_fund_cache(code6)
     if cached is not None:
-        return cached
+        # 旧扁平缓存(无 periods)：仅当信号日不早于缓存刷新日时 PIT 有效（实时/近期），
+        # 历史回补早于刷新日则降级为 None（规避未来函数）。v2 缓存走 _extract_for_asof 精选期。
+        if "periods" not in cached and as_of is not None:
+            mtime = _cache_mtime_date(code6)
+            a = _parse_date_str(as_of)
+            if mtime is not None and a is not None and a < mtime:
+                return None
+            return cached
+        return _extract_for_asof(cached, as_of)
+    built = _build_fundamental_online(code6, as_of)
+    if built:
+        _save_fund_cache(code6, built)
+    return _extract_for_asof(built, as_of)
 
-    out: dict = {}
-    q = _fetch_profit_baostock(code6)
-    if q:
-        out.update(q)
-    g = _fetch_growth_baostock(code6)
-    if g:
-        out.update(g)
-    val = get_valuation(code6, force=force)
-    if val:
-        out.update(val)
+
+def _build_fundamental_online(code6: str, as_of=None) -> Optional[dict]:
+    """联网构建 v2 缓存结构：{periods, spot, kline_stats, _spot_as_of}。fail-soft。"""
+    periods = _fetch_profit_growth_periods_baostock(code6)
+    val = get_valuation(code6)
     ks = _fetch_kline_stats_baostock(code6, as_of)
-    if ks:
-        out.update(ks)
-    if not out:
+    if not periods and not val and not ks:
         return None
-    _save_fund_cache(code6, out)
-    return out
+    return {
+        "_v": CACHE_VERSION,
+        "periods": periods,
+        "spot": val or {},
+        "kline_stats": ks or {},
+        "_spot_as_of": datetime.now().strftime("%Y-%m-%d"),
+    }
+
+
+def _extract_for_asof(data: Optional[dict], as_of=None) -> Optional[dict]:
+    """从 v2 缓存结构按 as_of 提取扁平基本面 dict；旧扁平缓存(无 periods)保守降级。"""
+    if not data or not isinstance(data, dict):
+        return None
+    if "periods" not in data:
+        # 旧扁平格式：无报告期历史 → 仅实时(as_of=None)可用；历史回补视为不可用（规避未来函数）
+        return data if as_of is None else None
+    as_of_d = _parse_date_str(as_of)
+    out: dict = {}
+    # 质量/成长：PIT 选期
+    periods = data.get("periods") or {}
+    if as_of_d is None:
+        if periods:
+            latest = max(periods.keys())
+            rec = periods[latest] or {}
+            for k in ("roe", "gross_margin", "revenue_growth"):
+                if rec.get(k) is not None:
+                    out[k] = rec[k]
+    else:
+        pit = _select_pit_period(periods, as_of_d)
+        if pit:
+            for k in ("roe", "gross_margin", "revenue_growth"):
+                if pit.get(k) is not None:
+                    out[k] = pit[k]
+    # 估值：最新快照仅在 as_of ≥ 快照刷新日时可用（保守，避免用未来估值）
+    spot = data.get("spot") or {}
+    spot_as_of = _parse_date_str(data.get("_spot_as_of"))
+    if spot and (as_of_d is None or spot_as_of is None or as_of_d >= spot_as_of):
+        for k in ("pe", "pb", "mkt_cap"):
+            if spot.get(k) is not None:
+                out[k] = spot[k]
+    # 资金流：换手/成交额来自刷新日 K 线，历史回补近似沿用（慢变量，后续可改本地 K 线重算）
+    ks = data.get("kline_stats") or {}
+    if ks:
+        for k in ("turnover", "amount_20"):
+            if ks.get(k) is not None:
+                out[k] = ks[k]
+    return out or None
 
 
 def fetch_fundamentals_batch(codes, as_of=None, *, force: bool = False) -> dict:
@@ -406,19 +537,50 @@ def _fund_cache_file(code: str) -> Path:
     return CACHE_DIR / f"{_norm_code(code)}.json"
 
 
+def _cache_mtime_date(code: str) -> Optional[date]:
+    """缓存文件刷新日（mtime）→ date，用于扁平缓存的 PIT 有效性判断。"""
+    p = _fund_cache_file(code)
+    if not p.exists():
+        return None
+    try:
+        return datetime.fromtimestamp(p.stat().st_mtime).date()
+    except Exception:
+        return None
+
+
 def _load_fund_cache(code: str) -> Optional[dict]:
     p = _fund_cache_file(code)
     if not p.exists() or _cache_age_days(p) > CACHE_TTL_DAYS:
         return None
     try:
-        return json.loads(p.read_text(encoding="utf-8"))
+        data = json.loads(p.read_text(encoding="utf-8"))
     except Exception:
         return None
+    # v2（含 periods）或旧扁平格式均原样返回，由 _extract_for_asof 解析
+    return data if isinstance(data, dict) else None
 
 
 def _save_fund_cache(code: str, data: dict) -> None:
     CACHE_DIR.mkdir(parents=True, exist_ok=True)
     try:
-        _fund_cache_file(code).write_text(json.dumps(data, ensure_ascii=False), encoding="utf-8")
+        # v2 合并：保留历史已存报告期，避免重复刷新覆盖旧期
+        p = _fund_cache_file(code)
+        if p.exists():
+            try:
+                old = json.loads(p.read_text(encoding="utf-8"))
+                if (isinstance(old, dict) and "periods" in old
+                        and isinstance(data, dict) and "periods" in data):
+                    merged = dict(old.get("periods", {}))
+                    merged.update(data.get("periods", {}))
+                    data = {
+                        "_v": CACHE_VERSION,
+                        "periods": merged,
+                        "spot": data.get("spot") or old.get("spot"),
+                        "kline_stats": data.get("kline_stats") or old.get("kline_stats"),
+                        "_spot_as_of": data.get("_spot_as_of") or old.get("_spot_as_of"),
+                    }
+            except Exception:
+                pass
+        p.write_text(json.dumps(data, ensure_ascii=False), encoding="utf-8")
     except Exception:
         pass

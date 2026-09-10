@@ -175,6 +175,35 @@ def collect_eligible_lists(lookback_days: int) -> list[tuple[Path, date]]:
     return cands
 
 
+def compute_excess_vs_bench(total_return, cash_pct, hs_series, sd: date, hold_days: int):
+    """同窗口沪深300 买入持有收益 + 策略超额（**同暴露口径**）。
+
+    - bench_return          : 满仓沪深300 信号日→信号日+hold_days 收益(%)
+    - bench_return_exposed : bench_return × (1 - cash_pct/100)，与组合「等额市场暴露」对齐
+    - excess_return         : total_return − bench_return_exposed
+    返回 None 表示基准数据不可用（如离线无 hs300）。纯函数，便于单测（改进说明 §基准同暴露）。
+    """
+    try:
+        if hs_series is None or len(hs_series) == 0:
+            return None
+        _t0 = pd.Timestamp(sd)
+        _t1 = _t0 + timedelta(days=hold_days)
+        _s0 = hs_series[hs_series.index <= _t0]
+        _s1 = hs_series[hs_series.index <= _t1]
+        if len(_s0) == 0 or len(_s1) == 0 or float(_s0.iloc[-1]) <= 0:
+            return None
+        _bench = (float(_s1.iloc[-1]) / float(_s0.iloc[-1]) - 1) * 100
+        _cash_frac = float(cash_pct or 0) / 100.0
+        _exposed = _bench * (1.0 - _cash_frac)
+        return {
+            "bench_return": round(_bench, 2),
+            "bench_return_exposed": round(_exposed, 2),
+            "excess_return": round(float(total_return) - _exposed, 2),
+        }
+    except Exception:
+        return None
+
+
 def _backtest_one(path: Path, sd: date, hold_days: int, market_profile=None, portfolio_curve=None, dd_thr=8.0, dd_cap=50.0, dd_deep=20.0, out_dir=None) -> dict | None:
     """对单个信号日做前向回测并落盘，返回摘要信息；无有效结果返回 None。"""
     df = pd.read_csv(path, encoding="utf-8-sig")
@@ -401,22 +430,14 @@ def _backtest_one(path: Path, sd: date, hold_days: int, market_profile=None, por
     summary["start"] = sd.strftime("%Y-%m-%d")
     summary["end"] = (sd + timedelta(days=hold_days)).strftime("%Y-%m-%d")
 
-    # 基准对照（qlib 式 excess return）：同窗口沪深300 买入持有收益与策略超额。
-    # 口径：信号日收盘 → 信号日+hold_days（与 sleeve 的日历持有窗口一致）。
-    # 没有这列就无法回答「策略是否值得跑」——绝对收益好看可能只是同期市场在涨。
-    try:
-        _hs = _get_hs300_close()
-        if _hs is not None and len(_hs) > 0:
-            _t0 = pd.Timestamp(sd)
-            _t1 = _t0 + timedelta(days=hold_days)
-            _s0 = _hs[_hs.index <= _t0]
-            _s1 = _hs[_hs.index <= _t1]
-            if len(_s0) and len(_s1) and float(_s0.iloc[-1]) > 0:
-                _bench = (float(_s1.iloc[-1]) / float(_s0.iloc[-1]) - 1) * 100
-                summary["bench_return"] = round(_bench, 2)
-                summary["excess_return"] = round(float(summary["total_return"]) - _bench, 2)
-    except Exception:
-        pass
+    # 基准对照（qlib 式 excess return，同暴露口径）：见 compute_excess_vs_bench。
+    _ex = compute_excess_vs_bench(
+        float(summary.get("total_return", 0) or 0),
+        float(summary.get("cash_pct", 0) or 0),
+        _get_hs300_close(), sd, hold_days,
+    )
+    if _ex is not None:
+        summary.update(_ex)
 
     pd.DataFrame([summary]).to_csv(f"{base}-summary.csv", index=False, encoding="utf-8-sig")
 

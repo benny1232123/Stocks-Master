@@ -4,6 +4,9 @@
 
 遍历所有 Daily-Action-List 的候选票，调用 fundamental.fetch_fundamental(force=True)
 联网拉取并缓存到 stock_data/fundamental_cache/（spot_snapshot.csv 全 A 估值 + 个股 JSON）。
+
+缓存现为 **v2 按报告期存历史**（含 baostock 真实公告日 pubDate），供回测/选股按信号日
+做 Point-in-Time 选期——历史回补绝不使用「信号日之后才公告」的财报（消除未来函数）。
 填充后，生产选股/回测的 factor_scoring 在 use_fundamentals=true 时即可激活质量/估值/资金流因子。
 
 用法：
