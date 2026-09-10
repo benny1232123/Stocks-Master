@@ -29,6 +29,7 @@ import ...` 调用无需改动）。
 from __future__ import annotations
 
 import json
+import sys
 from datetime import datetime
 
 import pandas as pd
@@ -41,6 +42,10 @@ from smcore.strategy.risk_rules import (
     compute_adaptive_risk_params,
     compute_factor_scoring_params,
 )
+
+# 融合层加权系数（原为函数内字面量 0.1 / 10，2026-09-09 迁入 risk_config.json）
+_FUSION_DEFAULTS = {"theme_score_weight": 0.1, "theme_score_cap": 10.0}
+_FUSION_CFG = {**_FUSION_DEFAULTS, **(CONFIG.get("fusion") or {})}
 from .factor_scoring import compute_factor_scores
 from smcore.utils.code import format_stock_code
 
@@ -251,19 +256,21 @@ def fuse_signals(
     # 随各策略表现自动此消彼长。无 regime 权重表、无 fallback 常数。
     # regime 仍负责「趋势闸门 / RS 过滤 / 流动性门槛」这些自适应开关。
     from smcore.strategy.adaptive_weights import (
-        cash_from_regime,
-        cash_from_volatility,
         compute_adaptive_allocation,
         save_regime_snapshot,
     )
+    from smcore.strategy.dynamic_risk import compute_dynamic_risk
 
     edge, adaptive_pct, _, cold = compute_adaptive_allocation()
     strategy_scores = adaptive_pct  # 综合评分基础分（百分比量级）
-    # 现金比例 = 波动率 S 型曲线（连续，无魔法数字上下限）
-    cash_pct = cash_from_volatility(profile.volatility_pctile if profile else None)
-    # 趋势维度微调：下行防御追加现金、趋势上行压减（幅度由波动率决定）
-    if profile:
-        cash_pct = cash_from_regime(regime, cash_pct)
+    # 现金比例 = 动态风险引擎（波动率 S 型曲线 + 趋势 regime 微调 + 防御下线钳制），
+    # 中性点 = risk_config / adaptive_weights_config 现值，行为与旧链路一致。
+    _dr = compute_dynamic_risk(
+        profile=profile if profile is not None else None,
+        regime=regime,
+        n_picks=max_picks,
+    )
+    cash_pct = _dr.cash_pct
     # 仓位权重 = 自适应权重按 (100-现金)% 缩放（不含现金），供单票 sizing
     weights = {s: adaptive_pct.get(s, 0) * (100 - cash_pct) / 100.0 for s in adaptive_pct}
 
@@ -301,9 +308,9 @@ def fuse_signals(
             hit_strategies.append("Theme")
             score += strategy_scores.get("theme", 0)
             name = theme[code]["name"] or name
-            # Theme 综合分作为额外加权（综合分 0-100，按 10% 加）
+            # Theme 综合分作为额外加权（综合分 0-100；系数与上限来自 risk_config.json）
             theme_score = theme[code].get("score") or 0
-            score += min(theme_score * 0.1, 10)
+            score += min(theme_score * _FUSION_CFG["theme_score_weight"], _FUSION_CFG["theme_score_cap"])
         if code in cctv:
             hit_strategies.append("CCTV")
             score += strategy_scores.get("cctv", 0)
@@ -562,6 +569,9 @@ def fuse_signals(
         report += f"\n- 🌡️ 市场仪表盘：{profile.summary()}"
 
     # 落盘市场状态 + 自适应权重快照，供前端/接口直接展示（确认权重确实在随市场自适应）
+    # ⚠️ source 区分当日信号 vs 历史回放：回放只写 regime_history/<date>.json，
+    # 绝不覆盖 regime-latest.json（2026-09-09 修复：回放升序跑完会把"最新"快照
+    # 顶成数周前的历史日期，导致前端长期展示陈旧 regime + 等权权重）。
     try:
         snapshot = {
             "date": date_yyyymmdd,
@@ -577,9 +587,9 @@ def fuse_signals(
             "beta_ceiling": max_beta_eff if beta_neutral else None,
             "single_weight_cap_pct": max_single_eff,
         }
-        save_regime_snapshot(snapshot)
-    except Exception:
-        pass
+        save_regime_snapshot(snapshot, source="live" if is_today else "replay")
+    except Exception as exc:  # 不再静默 pass：快照失败必须留痕
+        print(f"[fusion] WARN: regime 快照落盘失败（{exc}）", file=sys.stderr)
 
     # 样本外纪律（P1-4）落盘元数据：记录该 DAL 生成时所用的「钉死到信号日」regime，
     # 以及与「今日 regime」的差异，供 live_forward_discipline 校验历史清单未被未来信息污染。
