@@ -328,7 +328,11 @@ def _all_signal_days() -> list[str]:
 
 
 def causal_edge(cutoff: str, window: int = EDGE_WINDOW) -> dict:
-    """只用严格早于 cutoff 的信号日（取最近 window 个）算策略 edge。"""
+    """只用严格早于 cutoff 的信号日（取最近 window 个）算策略 edge。
+
+    每策略含 {n, avg_return, win_rate, edge, std}（std=总体标准差，供动态收缩使用）。
+    """
+    from smcore.strategy.adaptive_weights import _sd
     past = [d for d in _all_signal_days() if d < cutoff]
     past = past[-window:]
     strat_rets: dict[str, list[float]] = {s: [] for s in ALL_STRATEGIES}
@@ -343,7 +347,8 @@ def causal_edge(cutoff: str, window: int = EDGE_WINDOW) -> dict:
         avg = sum(rs) / n if n else 0.0
         win = (sum(1 for x in rs if x > 0) / n) if n else 0.0
         edge[s] = {"n": n, "avg_return": round(avg, 3),
-                   "win_rate": round(win * 100, 1), "edge": avg}
+                   "win_rate": round(win * 100, 1), "edge": avg,
+                   "std": round(_sd(rs), 3)}
     return edge
 
 
@@ -490,8 +495,28 @@ def _regime_robust_gate(regime_table: dict, enabled: bool = True,
     return {"robust": robust, "diverse": diverse, "qualified": qualified, "beat": beat}
 
 
-def run(shrinkage=None, floor=None, zero_negative_edge=True) -> dict:
+def run(shrinkage=None, floor=None, zero_negative_edge=True, dynamic=False) -> dict:
+    """样本外验证主入口。
+
+    - dynamic=True：启用「证据强度动态收缩」。shrinkage 保持 None 穿透给
+      adaptive_weights（其内部按 CONFIG.shrinkage_dynamic=True 计算逐策略 dict），
+      进程内临时置位、结束即恢复。floor 走 _resolve_floor（可显式传参）。
+    - 其余情况保持原语义（_eff 解析缺省为 CONFIG 常数）。
+    """
+    from smcore.strategy.adaptive_weights import CONFIG as _AW_CONFIG
+    if dynamic:
+        _orig = _AW_CONFIG.get("shrinkage_dynamic", False)
+        _AW_CONFIG["shrinkage_dynamic"] = True
+        eff_floor = _resolve_floor(floor, zero_negative_edge)
+        try:
+            return _run_impl(shrinkage, eff_floor, zero_negative_edge)
+        finally:
+            _AW_CONFIG["shrinkage_dynamic"] = _orig
     shrinkage, eff_floor = _eff(shrinkage, floor, zero_negative_edge)
+    return _run_impl(shrinkage, eff_floor, zero_negative_edge)
+
+
+def _run_impl(shrinkage: float, eff_floor: float, zero_negative_edge: bool) -> dict:
     days = _all_signal_days()
     rows = []
     all_pairs = []  # (causal_weight, return_pct) 样本外单调性
