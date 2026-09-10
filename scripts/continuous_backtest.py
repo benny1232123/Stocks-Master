@@ -60,6 +60,7 @@ def main() -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("--variant", default="baseline")
     ap.add_argument("--limit", type=int, default=0, help="只跑最近 N 个信号日（0=全部）")
+    ap.add_argument("--since", type=str, default="", help="只跑信号日 >= YYYYMMDD 的子区间")
     args = ap.parse_args()
 
     outdir = STOCK_DATA_DIR / "strategy_improve"
@@ -73,6 +74,9 @@ def main() -> int:
     lists, _ = _filter_incomplete(lists, int(os.environ.get("BACKTEST_MIN_STRATEGIES", "2")))
     if args.limit:
         lists = lists[-args.limit:]
+    if args.since:
+        _since = pd.Timestamp(args.since).date()
+        lists = [x for x in lists if x[1] >= _since]
     if not lists:
         print("[continuous] 无有效信号日，退出")
         return 1
@@ -89,6 +93,12 @@ def main() -> int:
         return _kcache[key]
 
     kline_mod.fetch_daily_k = _cached_fetch
+
+    # 回测是纯只读归档数据回放：禁止 fetch 走网络补段时写回 k_data 分桶。
+    # ⚠️ 2026-09-10 教训：此前未禁写，全量回测触发尾部缺口网络段并把 updays 写回，
+    # 导致 qfq_b* 分片被重写且 footer 损坏（"Parquet magic bytes not found"），
+    # 92 个信号日中 20260417 起几乎全部失败（git checkout 已恢复）。
+    kline_mod.write_kline_cache = lambda *a, **k: None
 
     # ── 预拉全量 K 线（温和间隔，保护上游）──
     all_codes = _collect_all_candidate_codes(lists)

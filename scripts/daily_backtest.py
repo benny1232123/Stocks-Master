@@ -54,6 +54,8 @@ from smcore.strategy.market import compute_market_profile
 from smcore.strategy.adaptive_weights import cash_from_volatility, cash_from_regime, cash_from_drawdown
 # 出场参数自适应（随波动率/regime 浮动，基线=已验证的 8/6/5/60）
 from smcore.strategy.risk_rules import compute_adaptive_exit_params
+# 动态风险引擎：统一输出 现金/仓位规模/出场参数（含双信号防御下线钳制）
+from smcore.strategy.dynamic_risk import compute_dynamic_risk
 
 STRAT_MAP = {
     "boll": "boll",
@@ -296,13 +298,26 @@ def _backtest_one(path: Path, sd: date, hold_days: int, market_profile=None, por
         _prof = compute_market_profile(as_of=sd)
     except Exception:
         _prof = None
+    _dd_val = portfolio_curve.drawdown_as_of(sd) if portfolio_curve is not None else None
+    dd_breaker_dd = _dd_val or 0.0
+    _dr = None
     if _prof is not None:
             # 总仓位随市场波动率缩放（高波动留现金，真正降低组合暴露）：
-            # 自适应 = S 型波动率分位现金 + 趋势 regime 调整（替代硬编码 VOL_POS_SCALE_MAP）
+            # 动态风险引擎 = S 型波动率分位现金 + 趋势 regime 调整 + 回撤熔断 + 防御下线，
+            # 中性点=现值（cash_from_volatility + cash_from_regime 原链路），一次算出。
             if _vol_pos_on:
-                cash_pct = cash_from_volatility(getattr(_prof, "volatility_pctile", None))
-                cash_pct = cash_from_regime(getattr(_prof, "regime", None), cash_pct)
-                capital_scale = max(0.0, 1.0 - cash_pct / 100.0)
+                _dr = compute_dynamic_risk(
+                    profile=_prof,
+                    regime=getattr(_prof, "regime", None),
+                    drawdown_pct=_dd_val,
+                    n_picks=len(sub),
+                )
+                cash_pct = _dr.cash_pct
+                capital_scale = _dr.capital_scale
+                # 回撤导致的额外现金（仅展示用：vol_mode 里追加 +ddbreak{N}）
+                _base_cash = cash_from_volatility(getattr(_prof, "volatility_pctile", None))
+                _base_cash = cash_from_regime(getattr(_prof, "regime", None), _base_cash)
+                dd_breaker_extra = max(0, int(_dr.cash_pct - _base_cash))
             # 逐只波动率自适应止损：无 vol 数据回退引擎全局 -8%
             if _vol_stop_on:
                 _stops = []
@@ -316,23 +331,19 @@ def _backtest_one(path: Path, sd: date, hold_days: int, market_profile=None, por
                 print(f"  [波动率自适应] 市场波动={_prof.volatility_level} 总仓位缩放={capital_scale} "
                       f"逐只止损: {sum(1 for s in _stops if s)}/{len(_stops)} 只已定")
 
-    # 组合级回撤熔断（独立于波动率维度）：跨信号日重建组合权益曲线，
-    # 回撤超阈值则追加现金比例降低暴露。仅「追加」、绝不减少基线现金；
-    # 最坏情况为过度防御（多持现金），不会放大风险。
-    if portfolio_curve is not None:
-        _dd = portfolio_curve.drawdown_as_of(sd)
-        _extra = cash_from_drawdown(_dd, threshold=dd_thr, cap=dd_cap, deep=dd_deep)
-        if _extra > 0:
-            cash_pct = min(100, cash_pct + _extra)
-            capital_scale = max(0.0, 1.0 - cash_pct / 100.0)
-        dd_breaker_dd = _dd
-        dd_breaker_extra = _extra
-
     strategies = derive_strategies(df["来源策略"]) if "来源策略" in df.columns else "boll,relativity,theme"
 
     size_by = os.environ.get("BACKTEST_SIZE_BY", "权重" if "权重" in df.columns else "综合评分") or None
 
-    _exit = compute_adaptive_exit_params(_prof, regime=getattr(_prof, "regime", None))
+    if _dr is not None:
+        _exit = {
+            "stop_loss_pct": _dr.stop_loss_pct,
+            "take_profit_pct": _dr.take_profit_pct,
+            "trailing_stop_pct": _dr.trailing_stop_pct,
+            "trend_exit_ma": _dr.trend_exit_ma,
+        }
+    else:
+        _exit = compute_adaptive_exit_params(_prof, regime=getattr(_prof, "regime", None))
     result = run_forward_signal_backtest(
         sub,
         hold_days=hold_days,
