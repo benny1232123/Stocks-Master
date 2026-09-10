@@ -5,7 +5,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from smcore.strategy.adaptive_weights import compute_dynamic_shrinkage, _sd
+from smcore.strategy.adaptive_weights import adaptive_weights, compute_dynamic_shrinkage, _sd
 
 
 def test_strong_evidence_low_shrinkage():
@@ -60,3 +60,46 @@ def test_sd_helper():
     assert _sd([1.0]) == 0.0
     assert _sd([]) == 0.0
     assert round(_sd([2.0, 4.0]), 6) == 1.0  # 总体标准差 (均值3，方差1)
+
+
+def _flat_edge(**kw) -> dict:
+    base = {s: {"n": 120, "edge": 0.2, "std": 10.0} for s in ["momentum", "relativity", "theme", "cctv", "boll"]}
+    base.update(kw)
+    return base
+
+
+def test_adaptive_weights_accepts_dict_shrinkage():
+    """dict shrinkage：强证据策略收缩小 → 权重高于弱证据策略。"""
+    edge = _flat_edge(
+        momentum={"n": 120, "edge": 3.0, "std": 10.0},  # t=3.29，强证据
+        cctv={"n": 4, "edge": 1.0, "std": 8.0},         # 样本极小 → 高度收缩
+    )
+    sh = compute_dynamic_shrinkage(edge)
+    pct = adaptive_weights(edge, shrinkage=sh)
+    assert pct["momentum"] > pct["cctv"]
+
+
+def test_shrinkage_zero_dict_equals_const_zero():
+    """全 0 的 dict 等价于常数 shrinkage=0（纯信自适应权重）。"""
+    edge = _flat_edge(momentum={"n": 120, "edge": 3.0, "std": 10.0})
+    zero_dict = {s: 0.0 for s in ["momentum", "relativity", "theme", "cctv", "boll"]}
+    d = adaptive_weights(edge, shrinkage=zero_dict, floor=0.0)
+    c = adaptive_weights(edge, shrinkage=0.0, floor=0.0)
+    assert d == c
+
+
+def test_shrinkage_dynamic_config_drives_default(monkeypatch):
+    """CONFIG.shrinkage_dynamic=True 时，shrinkage=None 内部自动动态收缩。"""
+    import smcore.strategy.adaptive_weights as aw
+
+    orig = aw.CONFIG.get("shrinkage_dynamic", False)
+    try:
+        aw.CONFIG["shrinkage_dynamic"] = True
+        edge = _flat_edge(
+            momentum={"n": 160, "edge": 4.0, "std": 9.0},  # 强
+            cctv={"n": 3, "edge": 6.0, "std": 5.0},        # 弱样本
+        )
+        pct = adaptive_weights(edge)
+        assert pct["momentum"] > pct["cctv"]
+    finally:
+        aw.CONFIG["shrinkage_dynamic"] = orig

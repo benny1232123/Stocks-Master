@@ -34,9 +34,19 @@ from scripts.daily_backtest import (
 import smcore.data.kline as kline_mod
 
 # 变体预设：覆盖 adaptive_weights.CONFIG（进程内生效，跑完进程退出即恢复）。
-# 后续阶段往里添加 v_* 形态。
+# 四形态（stage1）：baseline=现状；v_fixed0=去FLOOR+固定shrink0；
+# v_dyn=动态shrinkage；v_dyn_floor0=动态+FLOOR0。
 VARIANT_PRESETS = {
     "baseline": {},
+    "v_fixed0": {
+        "aw": {"FLOOR": 0.0, "shrinkage_dynamic": False, "shrinkage": 0.0},
+    },
+    "v_dyn": {
+        "aw": {"shrinkage_dynamic": True},
+    },
+    "v_dyn_floor0": {
+        "aw": {"FLOOR": 0.0, "shrinkage_dynamic": True},
+    },
 }
 
 

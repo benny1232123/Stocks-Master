@@ -469,7 +469,7 @@ def compute_dynamic_shrinkage(
 def adaptive_weights(
     edge: dict,
     *,
-    shrinkage: Optional[float] = None,
+    shrinkage=None,
     temp: Optional[float] = None,
     pseudo: Optional[float] = None,
     floor: Optional[float] = None,
@@ -499,17 +499,32 @@ def adaptive_weights(
 
     所有正则化常数（shrinkage/temp/pseudo/FLOOR）默认取自 CONFIG，
     可经 adaptive_weights_config.json 热更新；传参时以传参为准。
+
+    ``shrinkage`` 可为三种形态：
+    - ``None``：若 CONFIG["shrinkage_dynamic"] 为 true，用
+      :func:`compute_dynamic_shrinkage` 按每策略证据强度动态收缩（返回 dict）；
+      否则用 CONFIG["shrinkage"] 常数。
+    - ``float``：所有策略同一常数（旧行为）。
+    - ``dict``：按策略指定收缩系数（缺失回退 CONFIG["shrinkage"]）。
     """
     strs = ALL_STRATEGIES
 
     # ── 超参来自 CONFIG（可经 adaptive_weights_config.json 热更新）──
     cfg = CONFIG
-    if shrinkage is None:
-        shrinkage = cfg["shrinkage"]
     if temp is None:
         temp = cfg["temp"]
     if pseudo is None:
         pseudo = cfg["pseudo"]
+    if shrinkage is None:
+        if cfg.get("shrinkage_dynamic", False):
+            shrinkage = compute_dynamic_shrinkage(
+                edge,
+                base=float(cfg["shrinkage"]),
+                pseudo=pseudo,
+                t_target=float(cfg.get("shrinkage_t_target", 2.0)),
+            )
+        else:
+            shrinkage = cfg["shrinkage"]
     eff_floor = floor if (floor is not None and zero_negative_edge) else (cfg["FLOOR"] if zero_negative_edge else 0.0)
 
     # ── 自适应证据门槛 ──
@@ -542,7 +557,13 @@ def adaptive_weights(
 
     # 3) 向等权收缩（正则化，无地板值——清零门负责保底过滤）
     uni = 1.0 / len(strs)
-    w = {s: (1 - shrinkage) * raw[s] + shrinkage * uni for s in strs}
+    if isinstance(shrinkage, dict):
+        w = {}
+        for s in strs:
+            sh = float(shrinkage.get(s, cfg.get("shrinkage", 0.4)))
+            w[s] = (1 - sh) * raw[s] + sh * uni
+    else:
+        w = {s: (1 - shrinkage) * raw[s] + shrinkage * uni for s in strs}
     tot = sum(w.values())
     pct = {s: round(max(0.0, w[s]) / tot * 100) for s in w}
     # 修正四舍五入误差使和为 100
@@ -656,9 +677,8 @@ def compute_adaptive_allocation(
     cold_start=True 表示回测历史不足，权重回退等权（仅冷启动），此时不依赖业绩。
     所有权重均来自交易数据计算，无任何硬编码策略分数。
     shrinkage / floor 默认取自 CONFIG，可经 adaptive_weights_config.json 热更新。
+    shrinkage=None → adaptive_weights 按 CONFIG.shrinkage_dynamic 决定 float/dict。
     """
-    if shrinkage is None:
-        shrinkage = CONFIG["shrinkage"]
     eff_floor = floor if (floor is not None and zero_negative_edge) else (CONFIG["FLOOR"] if zero_negative_edge else 0.0)
     # 口径由 CONFIG["edge"]["source"] 决定（默认 universe = 候选全集，无截断偏差）
     edge = compute_edge(edge_window)
