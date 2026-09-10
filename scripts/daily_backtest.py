@@ -173,7 +173,7 @@ def collect_eligible_lists(lookback_days: int) -> list[tuple[Path, date]]:
     return cands
 
 
-def _backtest_one(path: Path, sd: date, hold_days: int, market_profile=None, portfolio_curve=None, dd_thr=8.0, dd_cap=50.0, dd_deep=20.0) -> dict | None:
+def _backtest_one(path: Path, sd: date, hold_days: int, market_profile=None, portfolio_curve=None, dd_thr=8.0, dd_cap=50.0, dd_deep=20.0, out_dir=None) -> dict | None:
     """对单个信号日做前向回测并落盘，返回摘要信息；无有效结果返回 None。"""
     df = pd.read_csv(path, encoding="utf-8-sig")
     if df.empty or "股票代码" not in df.columns:
@@ -362,7 +362,7 @@ def _backtest_one(path: Path, sd: date, hold_days: int, market_profile=None, por
         return None
 
     date_tag = sd.strftime("%Y%m%d")
-    base = STOCK_DATA_DIR / f"Multi-Backtest-{date_tag}"
+    base = (out_dir if out_dir is not None else STOCK_DATA_DIR) / f"Multi-Backtest-{date_tag}"
 
     summary = dict(result.summary)
     summary.pop("data_coverage", None)
