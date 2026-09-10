@@ -55,6 +55,11 @@
   button.small{padding:3px 10px;font-size:12px;margin-right:4px}
   td input{width:88px;padding:4px 6px;font-size:13px}
   code{background:#f3f4f6;padding:1px 5px;border-radius:4px;font-size:12px}
+  /* 持仓日报卡片 */
+  .report-select{display:flex;gap:8px;align-items:center;flex-wrap:wrap}
+  .report-select select{width:auto;min-width:140px}
+  .report-frame{width:100%;border:1px solid var(--border);border-radius:8px;background:#fff;margin-top:12px;min-height:400px;display:none}
+  .report-loading{color:var(--muted);text-align:center;padding:24px}
 </style>
 </head>
 <body>
@@ -124,6 +129,15 @@
       <div class="actions">
         <button class="danger" id="clearBtn">清空全部交易</button>
       </div>
+    </div>
+
+    <div class="card">
+      <h2>📄 持仓日报</h2>
+      <div class="report-select">
+        <select id="reportDate"><option value="">加载中…</option></select>
+        <button class="primary" id="reportBtn">查看</button>
+      </div>
+      <iframe id="reportFrame" class="report-frame" sandbox="allow-same-origin"></iframe>
     </div>
 
   </div>
@@ -502,6 +516,7 @@
     $('mainView').style.display = 'block';
     $('logout').style.display = 'inline-block';
     loadHoldings().catch(function (e) { showMsg(e.message, 'err'); });
+    loadReports().catch(function () {}); // 日报列表加载失败不阻断主流程
   }
 
   function logout() {
@@ -533,6 +548,48 @@
       })
       .catch(function (e) { showMsg(e.message, 'err'); });
   }
+
+  // ---------- 持仓日报 ----------
+  function loadReports() {
+    return api('/api/admin/reports').then(function (d) {
+      var sel = $('reportDate');
+      sel.textContent = '';
+      var list = d.reports || [];
+      if (!list.length) {
+        sel.appendChild(el('option', null, '暂无日报'));
+        return;
+      }
+      list.forEach(function (r) {
+        var opt = el('option', null, r.date + '（' + r.ext + '）');
+        opt.value = r.date;
+        sel.appendChild(opt);
+      });
+      // 默认选中最新
+      sel.value = list[0].date;
+    });
+  }
+
+  function viewReport() {
+    var date = $('reportDate').value;
+    if (!date) { showMsg('请选择日期', 'err'); return; }
+    var frame = $('reportFrame');
+    frame.style.display = 'none';
+    frame.srcdoc = '<div class="report-loading">加载中…</div>';
+    api('/api/admin/reports/' + encodeURIComponent(date))
+      .then(function (d) {
+        if (d.ext === 'html') {
+          frame.srcdoc = d.content;
+        } else {
+          // md 渲染为简单 HTML
+          frame.srcdoc = '<pre style="padding:16px;font-size:14px;line-height:1.8;white-space:pre-wrap">' +
+            d.content.replace(/</g, '&lt;') + '</pre>';
+        }
+        frame.style.display = 'block';
+      })
+      .catch(function (e) { showMsg(e.message, 'err'); frame.style.display = 'none'; });
+  }
+
+  $('reportBtn').onclick = viewReport;
 
   // ---------- 绑定 ----------
   $('loginBtn').onclick = doLogin;

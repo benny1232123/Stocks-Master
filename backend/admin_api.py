@@ -302,3 +302,45 @@ def delete_all_trades(_: None = Depends(_require_admin)) -> dict[str, Any]:
     """清空全部交易（不可撤销）。"""
     clear_trades()
     return {"status": "ok"}
+
+
+# --------------------------------------------------------------------------
+# 持仓日报
+# --------------------------------------------------------------------------
+import re
+from pathlib import Path
+
+_STOCK_DATA_DIR = Path(__file__).resolve().parent.parent / "stock_data"
+
+
+@router.get("/reports")
+def list_reports(_: None = Depends(_require_admin)) -> dict[str, Any]:
+    """返回 stock_data/ 下所有持仓日报文件列表（按日期降序，每日期一条，优先 html）。"""
+    pattern = re.compile(r"holdings_analysis_(\d{8})\.(md|html)$")
+    by_date: dict[str, str] = {}
+    if _STOCK_DATA_DIR.is_dir():
+        for f in sorted(_STOCK_DATA_DIR.iterdir()):
+            m = pattern.search(f.name)
+            if m:
+                date, ext = m.group(1), m.group(2)
+                if date not in by_date or ext == "html":
+                    by_date[date] = ext
+    reports = [
+        {"date": d, "ext": by_date[d], "filename": f"holdings_analysis_{d}.{by_date[d]}"}
+        for d in sorted(by_date, reverse=True)
+    ]
+    return {"reports": reports}
+
+
+@router.get("/reports/{date}")
+def get_report(date: str, _: None = Depends(_require_admin)) -> dict[str, Any]:
+    """返回指定日期的持仓日报内容（html 优先，其次 md）。"""
+    if not re.fullmatch(r"\d{8}", date):
+        raise HTTPException(status_code=400, detail="日期格式应为 YYYYMMDD")
+
+    for ext in ("html", "md"):
+        fp = _STOCK_DATA_DIR / f"holdings_analysis_{date}.{ext}"
+        if fp.is_file():
+            return {"date": date, "ext": ext, "content": fp.read_text(encoding="utf-8")}
+
+    raise HTTPException(status_code=404, detail=f"未找到 {date} 的持仓日报")

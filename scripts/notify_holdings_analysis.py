@@ -503,7 +503,7 @@ body{background:#eef0f3;font-family:-apple-system,BlinkMacSystemFont,"PingFang S
 .news-badge.neutral{background:#f0f1f3;color:#5a6068}
 .news-body{flex:1;min-width:0}
 .news-title{font-size:13px;font-weight:600;line-height:1.4}
-.news-preview{font-size:12px;color:#8a9099;margin-top:2px;line-height:1.5;overflow:hidden;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical}
+.news-preview{font-size:12px;color:#8a9099;margin-top:2px;line-height:1.5;overflow:hidden;display:-webkit-box;-webkit-line-clamp:4;-webkit-box-orient:vertical}
 .news-feed{margin-top:4px}
 .news-sub{font-size:11px;color:#3b5bdb;font-weight:700;letter-spacing:.5px;margin:8px 0 4px}
 """
@@ -984,7 +984,7 @@ def render_news_surface_html(surface: dict) -> str:
                 f'<span class="news-badge {cls}">{html_escape_mod.escape(str(it.get("sector", "")))}</span>'
                 f'<div class="news-body">'
                 f'<div class="news-title">{html_escape_mod.escape(str(it.get("title", "")))}</div>'
-                f'<div class="news-preview">{html_escape_mod.escape(str(it.get("preview", "")[:90]))}</div>'
+                f'<div class="news-preview">{html_escape_mod.escape(str(it.get("preview", "")[:200]))}</div>'
                 f"</div></div>"
             )
         feed_html = '<div class="news-sub">相关新闻</div><div class="news-feed">' + "".join(rows) + "</div>"
@@ -1057,7 +1057,7 @@ def _render_stock_news_html(code: str) -> str:
                 f'<span class="news-badge {cls}">{html_escape_mod.escape(str(it.get("sector", "")))}</span>'
                 f'<div class="news-body">'
                 f'<div class="news-title">{html_escape_mod.escape(str(it.get("title", "")))}</div>'
-                f'<div class="news-preview">{html_escape_mod.escape(str(it.get("preview", "")[:80]))}</div>'
+                f'<div class="news-preview">{html_escape_mod.escape(str(it.get("preview", "")[:200]))}</div>'
                 f"</div></div>"
             )
         feed = '<div class="news-sub">关联新闻</div><div class="news-feed">' + "".join(rows) + "</div>"

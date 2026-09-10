@@ -126,7 +126,7 @@ def _read_news_items(sectors: list[str] | None, max_news: int = 12) -> tuple[lis
         title = _safe(r.get("标题")) or "(无标题)"
         preview = _safe(r.get("新闻片段")) or ""
         if preview and not preview.endswith(("。", "！", "？", "”", "…")):
-            preview = preview[:120]
+            preview = preview[:300]
         rec = {
             "title": title,
             "preview": preview,
