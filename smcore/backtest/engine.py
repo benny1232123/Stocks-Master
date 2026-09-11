@@ -378,6 +378,7 @@ def run_forward_signal_backtest(
     weight_map: dict[tuple[date, str], float] = {}
     stoppct_map: dict[tuple[date, str], Optional[float]] = {}
     strat_map: dict[tuple[date, str], str] = {}  # 来源策略 → 退出路由依据
+    hold_map: dict[tuple[date, str], Optional[int]] = {}  # 逐行最大持有天数（None=用全局）
     for _, row in norm.iterrows():
         sd = row["date"].date()
         code = str(row["code"]).strip()
@@ -393,6 +394,10 @@ def run_forward_signal_backtest(
         stoppct_map[(sd, code)] = sp if (sp is not None and sp > 0) else None
         # 来源策略（如 "boll" / "theme" / "Momentum" / "boll,theme"），用于退出路由
         strat_map[(sd, code)] = str(row.get("来源策略", "")).strip()
+        # 逐行最大持有天数（按策略族/波动率分档，daily_backtest 从配置展开）；
+        # 无该列时回退全局 hold_days——为「持有期分档」留出的机制位
+        hd = _to_f(row.get("hold_days"))
+        hold_map[(sd, code)] = int(hd) if (hd is not None and hd > 0) else None
 
     min_sig = min(raw_by_date.keys())
     max_sig = max(raw_by_date.keys())
@@ -543,6 +548,7 @@ def run_forward_signal_backtest(
                         weight_map.get((sd, code), 1.0),
                         stoppct_map.get((sd, code), None),
                         strat_map.get((sd, code), ""),
+                        hold_map.get((sd, code), None),
                     )
                 )
 
@@ -554,28 +560,28 @@ def run_forward_signal_backtest(
     for d in cal:
         # 1) 信号日次日开盘买入（处理日 = 信号日后第一个交易日，用其开盘价）
         if d in buy_schedule:
-            candidates = [(sd, c, w, sp, st) for (sd, c, w, sp, st) in buy_schedule[d] if c not in holdings]
+            candidates = [(sd, c, w, sp, st, hd) for (sd, c, w, sp, st, hd) in buy_schedule[d] if c not in holdings]
             avail = max_positions - len(holdings)
             buyable = candidates[:avail]
             # 波动率目标仓位：仓位 ∝ 目标波动 / 个股波动20日。高波动票少买、低波动票多买，
             # 用 (scaled_w / sum_scaled) 重新分配同一笔可用资金 → 总暴露不变、内部向低波动倾斜，
             # 在不放大回撤的前提下提升收益/回撤比。scale 缺失→1.0 中性。
             _scaled = []
-            for (sd, c, w, row_stop, _st) in buyable:
+            for (sd, c, w, row_stop, _st, row_hold) in buyable:
                 sc = 1.0
                 if vt_enabled:
                     sc = vol_target_scale(_ann_vol(c, d, _vt_cfg["window"]), _vt_cfg)
-                _scaled.append((sd, c, w, row_stop, _st, w * sc))
+                _scaled.append((sd, c, w, row_stop, _st, row_hold, w * sc))
             # 按（波动率缩放后的）置信度权重降序分配：权重高者优先拿满一手。
             # 旧逻辑按名单顺序均分 cash×capital_scale，单票资金常不足一手（100 股），
             # 只有低价股能凑够手数 → 组合被「股价低」这个未设计条件静默过滤。
             # 现改为权重优先 + 保底一手 + 现金不足跳过，消除低价股偏差。
-            _scaled.sort(key=lambda t: t[5], reverse=True)
-            _total_scaled = sum(t[5] for t in _scaled)
+            _scaled.sort(key=lambda t: t[6], reverse=True)
+            _total_scaled = sum(t[6] for t in _scaled)
             _total_scaled = _total_scaled or 1.0
             _cs = max(0.0, min(1.0, capital_scale))
             _budget = cash * _cs
-            for sd, c, w, row_stop, _st, scaled_w in _scaled:
+            for sd, c, w, row_stop, _st, row_hold, scaled_w in _scaled:
                 # 一字涨停开盘买不进：放弃该笔入场（对称于跌停卖不出的顺延处理；
                 # 放弃而非顺延——涨停开板的次日再入场属于新决策，不归本信号管）
                 if lu_enabled and _at_limit_up_open(c, d):
@@ -613,6 +619,7 @@ def run_forward_signal_backtest(
                     "peak": buy_price,
                     "sd": sd,
                     "strategy": _st,
+                    "hold_days": row_hold if (row_hold is not None and row_hold > 0) else None,
                 }
                 avail -= 1
 
@@ -698,8 +705,9 @@ def run_forward_signal_backtest(
                     # 最后防线：仅当 Boll 下轨明显低于入场价（>3%）时才用作硬止损
                     elif use_signal_bands and h.get("stop") is not None and h["stop"] < h["buy_price"] * 0.97 and close <= h["stop"]:
                         exit_reason = "stop_band"
-            if exit_reason is None and (d - h["buy_date"]).days >= hold_days:
-                exit_reason = "max_hold"  # 持有期满兜底
+            _row_hold = h.get("hold_days") or hold_days
+            if exit_reason is None and (d - h["buy_date"]).days >= _row_hold:
+                exit_reason = "max_hold"  # 持有期满兜底（逐行分档 > 全局）
             if exit_reason is not None:
                 h["exit_reason"] = exit_reason
 

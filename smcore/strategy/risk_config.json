@@ -101,7 +101,8 @@
       "tranche_pct": 0.33,
       "trailing_tighten": 0.5,
       "max_tranches": 2
-    }
+    },
+    "hold_days_by_strategy": {}
   },
   "vol_target": {
     "enabled": false,
@@ -151,7 +152,12 @@
     "continuous_streak_cap": 3,
     "stop_pct_vol_mult": 2.5,
     "stop_pct_min": 0.04,
-    "stop_pct_max": 0.12
+    "stop_pct_max": 0.12,
+    "k_by_vol_regime": {
+      "low": null,
+      "mid": null,
+      "high": null
+    }
   },
   "relativity": {
     "price_upper_limit": 30.0,

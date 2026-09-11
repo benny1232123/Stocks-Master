@@ -334,6 +334,24 @@ def _backtest_one(path: Path, sd: date, hold_days: int, portfolio_curve=None, dd
     # 使自适应策略权重真正驱动收益（替代原先纯综合评分定仓）
     if "权重" in df.columns:
         sub["权重"] = pd.to_numeric(df["权重"], errors="coerce").values[: len(codes)]
+    # 逐行最大持有天数（exit.hold_days_by_strategy 按策略分档；缺省 {} = 全部用全局
+    # hold_days——数值待 measure_hold_by_family 测量给出证据后再配置）
+    try:
+        from smcore.strategy.risk_rules import CONFIG as _RR_CFG
+
+        _hold_by_strat = dict((_RR_CFG.get("exit", {}) or {}).get("hold_days_by_strategy") or {})
+    except Exception:
+        _hold_by_strat = {}
+    if _hold_by_strat and "来源策略" in df.columns:
+        def _row_hold(strats):
+            names = [t.strip().lower() for t in str(strats).replace("/", ",").split(",") if t.strip()]
+            vals = [int(_hold_by_strat[n]) for n in names if n in _hold_by_strat]
+            # 多策略命中取最长持有（就最远视野的策略）
+            return max(vals) if vals else None
+        holds = [_row_hold(x) for x in df["来源策略"]]
+        if any(h is not None for h in holds):
+            sub["hold_days"] = holds
+            print(f"  [持有分档] {sum(1 for h in holds if h is not None)}/{len(holds)} 行按策略分档: {_hold_by_strat}")
 
     # 波动率自适应风控（market profile 驱动）
     _vol_stop_on = os.environ.get("VOL_SCALED_STOP", "1") == "1"

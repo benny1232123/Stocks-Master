@@ -338,7 +338,23 @@ def run_boll(
 
     # 布林触发参数：配置驱动（risk_config.json 的 boll 段），None 时用配置/默认值
     _boll_cfg = _load_boll_config()
-    k = k if k is not None else _boll_cfg["k"]
+    explicit_k = k is not None
+    k = k if explicit_k else _boll_cfg["k"]
+    # 布林 k 按市场波动分位自适应（机制位，2026-09-12）：仅当调用方未显式传 k
+    # 且 k_by_vol_regime 三键齐备时启用——按当前波动水平（low/mid/high）选 k。
+    # 数值待 measure_boll_k 的分 regime 测量给出证据后再配置，默认关闭（维持静态 k）。
+    _k_regime_map = _boll_cfg.get("k_by_vol_regime") or {}
+    if not explicit_k and all(_k_regime_map.get(x) for x in ("low", "mid", "high")):
+        try:
+            from smcore.strategy.market import compute_market_profile
+
+            _lvl = str(getattr(compute_market_profile(), "volatility_level", "") or "").lower()
+            _adapt_k = _k_regime_map.get(_lvl)
+            if _adapt_k:
+                print(f"[boll] k 按波动分位自适应: vol={_lvl} → k={_adapt_k}")
+                k = float(_adapt_k)
+        except Exception as _exc:
+            print(f"[boll] k 自适应失败（回退静态 k）: {_exc}")
     near_ratio = near_ratio if near_ratio is not None else _boll_cfg["near_ratio"]
     mid_pullback_pct = mid_pullback_pct if mid_pullback_pct is not None else _boll_cfg["mid_pullback_pct"]
     squeeze_enabled = squeeze_enabled if squeeze_enabled is not None else _boll_cfg["squeeze_enabled"]
