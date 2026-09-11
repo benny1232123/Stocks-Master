@@ -149,18 +149,18 @@ def main() -> int:
     step1_archive()
 
     # ① 先测量：持有期分档建议（不依赖回测归档）
-    run_step("hold_by_family", [PY, str(ROOT / "scripts" / "measure_hold_by_family.py")], timeout_s=2 * 3600)
+    run_step("hold_by_family", [PY, "-u", str(ROOT / "scripts" / "measure_hold_by_family.py")], timeout_s=2 * 3600)
 
     # ② 应用验证通过的分档值到 risk_config（无通过项 = 维持全局 12）
     step2_apply_validated_holds()
 
     # ③ 再跑全量重回测——daily_backtest 子进程此刻读取的就是分档后的配置
-    run_step("rebacktest", [PY, str(ROOT / "scripts" / "daily_backtest.py")],
+    run_step("rebacktest", [PY, "-u", str(ROOT / "scripts" / "daily_backtest.py")],
              timeout_s=4 * 3600, env_extra={"HOLD_DAYS": "12", "LOOKBACK_DAYS": "400"})
 
     # ④ 其余两项测量（与回测归档无依赖）
-    run_step("price_band", [PY, str(ROOT / "scripts" / "measure_price_band.py")], timeout_s=60 * 60)
-    run_step("boll_k", [PY, str(ROOT / "scripts" / "measure_boll_k.py")], timeout_s=2 * 3600)
+    run_step("price_band", [PY, "-u", str(ROOT / "scripts" / "measure_price_band.py")], timeout_s=60 * 60)
+    run_step("boll_k", [PY, "-u", str(ROOT / "scripts" / "measure_boll_k.py")], timeout_s=2 * 3600)
 
     # ── 总结报告 ──
     lines = [
