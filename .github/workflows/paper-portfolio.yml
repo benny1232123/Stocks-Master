@@ -19,6 +19,10 @@ permissions:
   contents: read
   issues: write
 
+concurrency:
+  group: paper-portfolio
+  cancel-in-progress: true
+
 jobs:
   paper-portfolio:
     runs-on: ubuntu-latest

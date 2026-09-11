@@ -39,7 +39,9 @@ CREATE TABLE IF NOT EXISTS strategy_cache (
     UNIQUE(strategy, trade_date)
 );
 ALTER TABLE strategy_cache ENABLE ROW LEVEL SECURITY;
-CREATE POLICY "allow_all" ON strategy_cache FOR ALL USING (true) WITH CHECK (true);
+-- 注意（2026-09-12）：不要再创建 "allow_all" USING(true) 全放行策略——
+-- 那等于把 anon key 变成全表读写删凭证。请改用 service-role key 访问
+-- （service role 绕过 RLS）， anon role 不授任何 policy 即默认全部拒绝。
 """
 
 
@@ -77,6 +79,11 @@ def _get_client():
     key = os.getenv("SUPABASE_KEY", "").strip()
     if not url or not key:
         return None
+        try:
+            from smcore.storage.trades_repo import warn_if_anon_key
+            warn_if_anon_key(key, source="strategy_cache")
+        except Exception:
+            pass
     try:
         url = url.rstrip("/")
         for suffix in ("/rest/v1", "/rest/v1/", "/rest", "/auth/v1"):

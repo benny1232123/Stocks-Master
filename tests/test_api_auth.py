@@ -1,11 +1,10 @@
 """离线单测：API 鉴权核心 _check_api_key（与 FastAPI 解耦，仅依赖标准库）。
 
-覆盖：未配置 token 时放行；配置后正确 key 放行、缺失/错误/空 key 拒绝；
-以及 timing-safe 比较契约（hmac.compare_digest 被调用）。
+安全默认（2026-09-12）：未配置 token 时仅放行本机回环，公网拒绝；
+配置后正确 key 放行、缺失/错误/空 key 拒绝；timing-safe 比较契约。
 """
 from __future__ import annotations
 
-import hmac
 import os
 from unittest import mock
 
@@ -21,65 +20,65 @@ def _no_auth_token(monkeypatch):
     yield
 
 
-def test_no_token_allows_none():
-    # 未配置 token：即使没带 key 也应放行（向后兼容旧部署）
-    _check_api_key(None)  # 不应抛异常
+def test_no_token_allows_loopback():
+    # 未配置 token：本机回环放行（本地开发不受影响）
+    _check_api_key(None, client_host="127.0.0.1")
+    _check_api_key("whatever", client_host="::1")
+    _check_api_key(None, client_host="localhost")
 
 
-def test_no_token_allows_any_key():
-    # 未配置 token：带任意 key 也应放行
-    _check_api_key("whatever")  # 不应抛异常
+def test_no_token_rejects_public():
+    # 未配置 token：公网/代理来源一律拒绝（安全默认，防公网裸奔）
+    with pytest.raises(ApiKeyError):
+        _check_api_key(None, client_host="10.2.3.4")
+    with pytest.raises(ApiKeyError):
+        _check_api_key("whatever", client_host="172.16.0.9")
+
+
+def test_no_token_rejects_when_host_unknown():
+    # 拿不到 client host（如某些代理配置）时按公网处理
+    with pytest.raises(ApiKeyError):
+        _check_api_key(None, client_host="")
 
 
 def test_token_set_correct_key_passes(monkeypatch):
     monkeypatch.setenv("API_AUTH_TOKEN", "secret-token")
-    _check_api_key("secret-token")  # 不应抛异常
+    _check_api_key("secret-token", client_host="10.0.0.1")
 
 
 def test_token_set_missing_key_rejected(monkeypatch):
     monkeypatch.setenv("API_AUTH_TOKEN", "secret-token")
     with pytest.raises(ApiKeyError):
-        _check_api_key(None)
+        _check_api_key(None, client_host="127.0.0.1")
 
 
 def test_token_set_empty_key_rejected(monkeypatch):
     monkeypatch.setenv("API_AUTH_TOKEN", "secret-token")
     with pytest.raises(ApiKeyError):
-        _check_api_key("")
+        _check_api_key("", client_host="127.0.0.1")
 
 
 def test_token_set_wrong_key_rejected(monkeypatch):
     monkeypatch.setenv("API_AUTH_TOKEN", "secret-token")
     with pytest.raises(ApiKeyError):
-        _check_api_key("wrong-key")
+        _check_api_key("wrong-key", client_host="127.0.0.1")
 
 
 def test_token_is_stripped_of_surrounding_whitespace(monkeypatch):
-    # 配置 "  secret-token  " 时，精确 "secret-token" 应通过（token 被 strip）
     monkeypatch.setenv("API_AUTH_TOKEN", "  secret-token  ")
-    _check_api_key("secret-token")  # 不应抛异常
+    _check_api_key("secret-token", client_host="10.0.0.1")
 
 
-def test_timing_safe_compare_is_used(monkeypatch):
-    # 锁定「timing-safe 比较」契约：必须走 hmac.compare_digest，而非 == 短路比较
+def test_non_ascii_key_rejected_not_500(monkeypatch):
+    # 非 ASCII key 不得触发 TypeError（旧版 compare_digest(str) 会 500）
     monkeypatch.setenv("API_AUTH_TOKEN", "secret-token")
-    captured = {}
+    with pytest.raises(ApiKeyError):
+        _check_api_key("密钥", client_host="10.0.0.1")
 
-    real_cd = hmac.compare_digest
 
-    def _spy(a, b):
-        captured["called"] = True
-        captured["args"] = (a, b)
-        return real_cd(a, b)
-
-    with mock.patch("backend.api_auth.hmac.compare_digest", _spy):
-        _check_api_key("secret-token")  # 正确 key -> 不抛
-    assert captured.get("called") is True
-    assert captured["args"] == ("secret-token", "secret-token")
-
-    # 错误 key 也应走 compare_digest 后才拒绝
-    captured.clear()
-    with mock.patch("backend.api_auth.hmac.compare_digest", _spy):
-        with pytest.raises(ApiKeyError):
-            _check_api_key("nope")
-    assert captured.get("called") is True
+def test_timing_safe_compare_used(monkeypatch):
+    # 契约：比较必须走 hmac.compare_digest（防时序侧信道）
+    monkeypatch.setenv("API_AUTH_TOKEN", "secret-token")
+    with mock.patch("backend.api_auth.hmac.compare_digest", wraps=__import__("hmac").compare_digest) as spy:
+        _check_api_key("secret-token", client_host="10.0.0.1")
+    assert spy.called

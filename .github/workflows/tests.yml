@@ -1,6 +1,6 @@
 name: 测试（pytest）
 
-# 闭环缺口：仓库已有 pytest 套件（tests/ 下 10 个文件，覆盖 fusion / 自适应权重 /
+# 闭环缺口：仓库已有 pytest 套件（tests/ 下 40+ 个文件，覆盖 fusion / 自适应权重 /
 # 回撤熔断 / walk-forward / 信号回测 / 风险中性化 / 衰减与因子IC监控等），
 # 但 CI 从未执行它——任何破坏代码逻辑的改动都会静默合入。
 # 本工作流在每次 push / PR 时跑全套测试，任一用例失败即标红，把回归拦在合入前。
@@ -16,6 +16,10 @@ on:
 
 permissions:
   contents: read
+
+concurrency:
+  group: tests-${{ github.ref }}
+  cancel-in-progress: true
 
 jobs:
   test:
@@ -33,7 +37,8 @@ jobs:
       - name: 安装依赖
         run: |
           pip install --upgrade pip
-          pip install --retries 3 pytest akshare pandas pyarrow requests baostock matplotlib cos-python-sdk-v5 supabase backtrader
+          # 统一走 requirements.txt，消除与 daily-pick 的清单漂移（含 jieba）
+          pip install --retries 3 -r requirements.txt pytest
 
       - name: 运行测试
         run: pytest -q

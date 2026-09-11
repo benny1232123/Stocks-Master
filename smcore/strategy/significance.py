@@ -78,22 +78,55 @@ def probabilistic_sharpe(returns: list[float], sr_benchmark: float = 0.0) -> flo
     return NormalDist().cdf(z)
 
 
+def _expected_max_sr(n_obs: int, n_trials: int, var: float) -> float:
+    """N 次尝试下期望最大夏普 E[max SR]（Bailey & López de Prado 2014）。
+
+      E[max SR] = sqrt(V) · ((1-γ)·Z⁻¹(1-1/N) + γ·Z⁻¹(1-1/(N·e)))，γ=Euler-Mascheroni。
+    var<=0 时用 1/(n-1) 兜底（零基准随机序列的单序列方差近似）。
+    """
+    if n_trials <= 1:
+        return 0.0
+    e = math.e
+    zeta = 0.5772156649015329
+    nd = NormalDist()
+    v = var if var > 0 else 1.0 / max(n_obs - 1, 1)
+    return math.sqrt(v) * (
+        (1 - zeta) * nd.inv_cdf(1 - 1.0 / n_trials)
+        + zeta * nd.inv_cdf(1 - 1.0 / (n_trials * e))
+    )
+
+
 def deflated_sharpe_critical(sr_benchmark: float, n_obs: int, n_trials: int,
                             significance: float = 0.05,
                             gamma3: float = 0.0, gamma4: float = 3.0) -> float:
-    """多重检验调整后的临界夏普 SR*（Bailey & López de Prado 2014, eq.32）。
+    """多重检验调整后的临界夏普 SR*（Bailey & López de Prado 2014, DSR）。
 
-      SR* = SR_bench * sqrt(1 + θ·(1 - γ3·SR_bench + (γ4-1)/4·SR_bench²) / (SR_bench²·(n-1)))
-      θ = (1-ψ)^{-1} · V · ζ,  V=1, ζ=Euler-Mascheroni≈0.5772, ψ=significance
-    当 SR_bench=0 时退化为 0（此时由 t_stat 与 PSR 把关，见 significance_report）。
+      SR* = SR₀ + Z⁻¹(1-α)·sqrt(V[SR])
+      SR₀ = SR_bench + E[max SR of N trials]（N 次尝试下的期望最大夏普）
+      V[SR] 用单序列方差近似 (1 - γ3·SR + (γ4-1)/4·SR²)/(n-1)（与 PSR 分母同口径；
+      γ3/γ4 以观测序列的偏度/峰度为代理）。
+
+    旧实现的 θ=(1-ψ)⁻¹·ζ 与 n_trials 无关，不是 DSR（n_trials 形参从未生效，
+    会把假校正当真）——2026-09-12 更正为标准式：n_trials>1 时临界值随尝试次数
+    抬高；N=1 且 sr_benchmark=0 时返回 0（此时由 t_stat 与 PSR 把关）。
     """
-    if n_obs < 3 or sr_benchmark == 0:
+    if n_obs < 3:
         return 0.0
-    zeta = 0.5772156649015329
-    theta = ((1 - significance) ** -1) * 1.0 * zeta
-    inner = 1 - gamma3 * sr_benchmark + (gamma4 - 1) / 4 * sr_benchmark * sr_benchmark
-    ratio = theta * inner / (sr_benchmark * sr_benchmark * (n_obs - 1))
-    return sr_benchmark * math.sqrt(1 + ratio)
+    n_trials = max(int(n_trials), 1)
+    if sr_benchmark <= 0:
+        if n_trials <= 1:
+            return 0.0
+        # 零基准：E[max of N 随机序列] + α 分位（方差用 1/(n-1) 兜底）
+        return _expected_max_sr(n_obs, n_trials, 0.0) + NormalDist().inv_cdf(1 - significance) * math.sqrt(
+            1.0 / max(n_obs - 1, 1)
+        )
+    var_bench = max(
+        1e-12,
+        (1 - gamma3 * sr_benchmark + (gamma4 - 1) / 4 * sr_benchmark * sr_benchmark) / (n_obs - 1),
+    )
+    expected_max = _expected_max_sr(n_obs, n_trials, var_bench)
+    alpha_term = NormalDist().inv_cdf(1 - significance) * math.sqrt(var_bench)
+    return sr_benchmark + expected_max + alpha_term
 
 
 def t_stat_multiple_testing(returns: list[float], sr_benchmark: float = 0.0,

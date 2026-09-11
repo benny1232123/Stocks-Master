@@ -136,17 +136,21 @@ def _market_return(as_of_yyyymmdd: str, horizon: int = 10) -> Optional[float]:
         idx = _get_hs300_close()
         if idx is None:
             return None
+        idx = idx.sort_index()
         target = pd.Timestamp(as_of_yyyymmdd)
         idx_prior = idx.loc[:target]
         if len(idx_prior) < 2:
             return None
-        i0 = int(idx_prior.index[-1])
+        # 位置索引必须用 len()-1：旧代码 int(idx_prior.index[-1]) 把 Timestamp
+        # 转成纳秒整数（~1.7e18），i1 恒 >= len(idx) → 本函数一直是死路径
+        i0 = len(idx_prior) - 1
         i1 = i0 + horizon
         if i1 >= len(idx):
             return None
         c0 = float(idx.iloc[i0])
         c1 = float(idx.iloc[i1])
-        if not (c0 and c1 and c0 > 0):
+        if pd.isna(c0) or pd.isna(c1) or c0 <= 0:
+            # 旧判据 `not (c0 and c1 ...)` 放得过 NaN（NaN 真值且只测 c0）→ 收益 NaN 穿透
             return None
         return c1 / c0 - 1.0
     except Exception:

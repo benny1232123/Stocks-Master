@@ -1,6 +1,7 @@
 """Shared helpers for trade history, FIFO holdings, and portfolio summaries."""
 from __future__ import annotations
 
+import threading
 from typing import Any
 
 import pandas as pd
@@ -55,16 +56,23 @@ def validate_trade(trade: dict[str, Any], trades: list[dict[str, Any]]) -> str |
     return None
 
 
+# 进程内互斥：卖出校验（load_trades → validate_trade）与写入 append 之间无锁时，
+# 并发两笔卖出可同时通过校验导致超卖。跨进程仍需后端层约束，此处先堵同一进程内
+# 的并发口（FastAPI 线程池即此场景）。
+_ADD_TRADE_LOCK = threading.Lock()
+
+
 def add_trade(trade: dict[str, Any]) -> list[dict[str, Any]]:
     """Append a trade and persist it."""
     trade = dict(trade)
     trade["code"] = format_stock_code(str(trade.get("code", ""))) or str(trade.get("code", "")).strip()
-    trades = load_trades()
-    error = validate_trade(trade, trades)
-    if error:
-        raise ValueError(error)
-    get_trade_repository().append(trade)
-    return load_trades()
+    with _ADD_TRADE_LOCK:
+        trades = load_trades()
+        error = validate_trade(trade, trades)
+        if error:
+            raise ValueError(error)
+        get_trade_repository().append(trade)
+        return load_trades()
 
 
 def clear_trades() -> None:
@@ -171,6 +179,17 @@ def compute_fifo_positions(trades: list[dict[str, Any]]) -> tuple[pd.DataFrame, 
                 oldest["qty"] -= matched_qty
                 if oldest["qty"] <= 0:
                     buy_queue.pop(0)
+
+            if sell_qty > 0:
+                # 卖出量超过买入队列 = 数据不自洽（漏录买入/快照导入错量）。
+                # 旧版静默丢弃超卖部分，盈亏与持仓口径双双失真——必须留痕。
+                import logging
+
+                logging.getLogger("smcore.holdings").warning(
+                    "FIFO 超卖：%s 在 %s 卖出 %s 股，可配对买入不足，超额 %s 股被丢弃"
+                    "（请补录对应买入或修正卖出数量）",
+                    code, row["date"], float(row["qty"]), sell_qty,
+                )
 
         for remaining in buy_queue:
             if remaining["qty"] > 0:

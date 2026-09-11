@@ -677,6 +677,34 @@ def _try_fetch_ak_news(function_names, source_name, limit=120, timeout_seconds=8
     return pd.DataFrame(), ""
 
 
+def _filter_extra_news_by_date(df, date_str):
+    """按信号日过滤补充资讯（修复回放前视，2026-09-12）。
+
+    cls/sina/em 等补充源永远返回"当前时刻"的新闻——历史回放时等于把未来新闻
+    注入历史信号日。规则：
+    - 信号日 = 今天（生产）→ 不过滤：此刻抓到的新闻天然满足 pub_time <= 信号形成时刻；
+    - 信号日 < 今天（回放/补跑）→ 只保留 pub_time 可解析且日期 <= 信号日的行，
+      无时间戳的行无法证明不来自未来，一律丢弃（宁缺毋滥）。
+    """
+    if df is None or df.empty or "pub_time" not in df.columns:
+        return df
+    try:
+        signal_date = datetime.datetime.strptime(date_str, "%Y%m%d").date()
+    except (ValueError, TypeError):
+        return df
+    if signal_date >= datetime.date.today():
+        return df
+    dt = pd.to_datetime(df["pub_time"], errors="coerce")
+    keep = dt.notna() & (dt.dt.date <= signal_date)
+    dropped = int((~keep).sum())
+    if dropped:
+        print(
+            f"[cctv] 回放模式：补充资讯按 pub_time<=信号日 过滤，剔除 {dropped}/{len(df)} 条"
+            f"（其中无时间戳 {int(dt.isna().sum())} 条）"
+        )
+    return df[keep].reset_index(drop=True)
+
+
 def fetch_extra_news_bundle(sources_text="cls,sina", per_source_limit=120, timeout_seconds=8):
     source_map = {
         "cls": ["news_cls", "stock_info_global_cls"],
@@ -851,12 +879,16 @@ def _build_auto_sector_keywords(news_df, top_n, use_sw_industry=True):
 
 
 def enrich_with_prev_change(date_str, sector_df):
-    candidates = sorted(DATA_DIR.glob("CCTV-Hot-Sectors-*.csv"), reverse=True)
-    prev = None
-    for p in candidates:
-        if date_str not in p.name:
-            prev = p
-            break
+    # 只允许用「严格早于信号日」的历史榜单算热度变化：旧逻辑按文件名倒序取第一个
+    # 非当日文件，回放历史日期时会拿到"未来"的榜单（与 build_n_day_sector_board 的
+    # ds <= current_date_str 校验口径不一致，2026-09-12 对齐）。
+    file_re = re.compile(r"^CCTV-Hot-Sectors-(\d{8})(?:-\d{6})?\.csv$")
+    candidates = []
+    for p in DATA_DIR.glob("CCTV-Hot-Sectors-*.csv"):
+        m = file_re.match(p.name)
+        if m and m.group(1) < date_str:
+            candidates.append((m.group(1), p))
+    prev = max(candidates, key=lambda x: (x[0], x[1].name))[1] if candidates else None
     if prev is None:
         sector_df["较上一期热度变化"] = "N/A"
         return sector_df
@@ -1119,6 +1151,11 @@ def build_sector_stock_pool(date_str, sector_df, stock_hints, sector_keywords, *
 
 
 def _next_day_return(code, signal_date):
+    """次日收益率（信息可达口径）：新闻联播 19:00 后播出（收盘后），
+
+    信号日收盘为买入基准会吃到当晚隔夜跳空（前视）；改为**次日开盘买入、
+    次日收盘卖出**——真实可执行的"次日"持有收益。仍为展示口径（未计成本）。
+    """
     try:
         start = datetime.datetime.strptime(signal_date, "%Y%m%d")
         end = start + datetime.timedelta(days=20)
@@ -1131,11 +1168,11 @@ def _next_day_return(code, signal_date):
         )
         if df is None or len(df) < 2:
             return None
-        c0 = float(df.iloc[0]["close"])
-        c1 = float(df.iloc[1]["close"])
-        if c0 == 0:
+        entry = float(df.iloc[1]["open"])
+        exit_px = float(df.iloc[1]["close"])
+        if entry <= 0:
             return None
-        return (c1 - c0) / c0
+        return (exit_px - entry) / entry
     except Exception:
         return None
 
@@ -1239,6 +1276,7 @@ def run_cctv():
         )
         for line in extra_logs:
             print(line)
+        extra_news_df = _filter_extra_news_by_date(extra_news_df, date_str)
         if not extra_news_df.empty:
             keyword_news_df = pd.concat([news_df, extra_news_df], ignore_index=True, sort=False)
             print(f"关键词样本扩展: CCTV={len(news_df)} + EXTRA={len(extra_news_df)} => TOTAL={len(keyword_news_df)}")

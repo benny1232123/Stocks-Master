@@ -18,6 +18,10 @@ permissions:
   contents: write
   pull-requests: write
 
+concurrency:
+  group: walk-forward
+  cancel-in-progress: true
+
 jobs:
   revalidate:
     runs-on: ubuntu-latest

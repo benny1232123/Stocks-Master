@@ -216,8 +216,15 @@ def _load_config() -> dict:
                 cfg[k] = merged
             else:
                 cfg[k] = v
-    except Exception:
-        pass
+    except Exception as exc:
+        # 静默回退 = 行为突变无告警：内置默认与文件现值差异巨大
+        # （如 dispersion_k 1.2 vs 120、factor_scoring.enabled False vs true），
+        # risk_config.json 改坏时必须当场喊出来（对齐 adaptive_weights._load_config）
+        print(
+            f"[risk_rules] WARN: risk_config.json 解析失败（{exc!r}），"
+            f"全部自适应参数回退内置默认——行为与文件现值不同，请尽快修复配置文件",
+            flush=True,
+        )
     return cfg
 
 

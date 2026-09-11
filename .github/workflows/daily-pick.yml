@@ -14,14 +14,22 @@ on:
         default: ''
         type: string
 
+concurrency:
+  group: daily-pick
+  cancel-in-progress: true
+
 jobs:
   daily-pick:
     runs-on: ubuntu-latest
-    timeout-minutes: 90
+    # 步骤上限之和约 115(策略) + 55(回测) + 装依赖/融合/预热 ≈ 190min：
+    # 旧值 90 会在数据源变慢时硬杀 job，当日产出全部丢失且提交步骤不执行
+    timeout-minutes: 200
     permissions:
       contents: write
       issues: write
     env:
+      # runner 与容器多为 UTC；显式设为北京时间，保证代码里所有 date.today() 语义一致
+      TZ: "Asia/Shanghai"
       # GitHub 海外 Runner 连不上国内券商 Tdx 服务器，关闭直连避免 ~24s 试探浪费，
       # 走下方加固的 akshare 兜底。国内自托管 Runner 请覆盖为 "1" 或 "auto" 启用 Tdx 提速。
       TDX_ENABLED: "0"
@@ -33,10 +41,15 @@ jobs:
         id: gate
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          SIGNAL_DATE_INPUT: ${{ github.event.inputs.signal_date }}
         run: |
-          if [ -n "${{ github.event.inputs.signal_date }}" ]; then
-            # 手动补跑：跳过窗口与防重，任意时刻执行
-            TODAY="${{ github.event.inputs.signal_date }}"
+          if [ -n "$SIGNAL_DATE_INPUT" ]; then
+            # 手动补跑：跳过窗口与防重，任意时刻执行（输入经 env 中转 + 白名单校验，防注入）
+            TODAY="$SIGNAL_DATE_INPUT"
+            case "$TODAY" in
+              [0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9]) ;;
+              *) echo "::error::非法信号日: $TODAY（须为 YYYYMMDD）"; exit 1 ;;
+            esac
             echo "手动补跑信号日: $TODAY"
           else
             NOW=$(TZ=Asia/Shanghai date +%H%M)
@@ -83,19 +96,29 @@ jobs:
         if: steps.gate.outputs.ok == 'true'
         with:
           path: ~/.cache/pip
-          key: pip-${{ runner.os }}-${{ hashFiles('Frequently-Used-Program/auto_notify_boll.py') }}
+          key: pip-${{ runner.os }}-${{ hashFiles('requirements.txt') }}
           restore-keys: pip-${{ runner.os }}-
 
       - name: 安装依赖
         if: steps.gate.outputs.ok == 'true'
         run: |
           pip install --upgrade pip
-          pip install --retries 3 akshare pandas pyarrow requests baostock matplotlib cos-python-sdk-v5 supabase backtrader
+          # 统一走 requirements.txt（含 jieba 等）：旧硬编码清单缺 jieba，CCTV 的 NLP 在 CI 静默降级
+          pip install --retries 3 -r requirements.txt
 
       - name: 尝试安装 pytdx（国内自托管 Runner 可选；GitHub 海外 Runner 自动跳过）
         continue-on-error: true
         if: steps.gate.outputs.ok == 'true'
         run: pip install "pypandoc<1.10" pytdx 2>/dev/null || pip install pytdx 2>/dev/null || true
+
+      - name: 数据新鲜度硬校验（信号日 bar 必须存在，防止用 D-1 数据出当日信号）
+        if: steps.gate.outputs.ok == 'true'
+        timeout-minutes: 5
+        env:
+          KLINE_BACKEND: hithink
+          HITHINK_FINANCE_API_KEY: ${{ secrets.HITHINK_FINANCE_API_KEY }}
+        run: |
+          python scripts/verify_data_freshness.py --signal-date ${{ steps.gate.outputs.today }}
 
       - name: 策略1 Boll 扫描
         id: boll
@@ -284,7 +307,7 @@ jobs:
         timeout-minutes: 55
         env:
           KLINE_BACKEND: hithink
-          HOLD_DAYS: "10"
+          HOLD_DAYS: "12"
           LOOKBACK_DAYS: "30"          # hithink 接入后(~5.8x 快)恢复更大回测窗口；原 akshare 慢时曾从30降到14。已完成的历史结果自动跳过。
           PREPULL_INTERVAL: "0.3"      # 串行预拉每只间隔0.3s，保护akshare接口不被打崩（不用多线程）
           SUPABASE_URL: ${{ secrets.SUPABASE_URL }}

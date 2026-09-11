@@ -600,10 +600,12 @@ def adaptive_weights(
 def cash_from_volatility(volatility_pctile: Optional[float]) -> int:
     """现金比例随市场波动率分位连续上升（高风险少出手）。无魔法数字。
 
-    使用平滑 S 型曲线而非分段线性：
-    - vol_pctile ≤ 0.3（低波）→ 0% 现金
-    - vol_pctile = 0.5（中位）→ ~8% 现金
-    - vol_pctile ≥ 0.85（高波）→ ~40% 现金
+    使用平滑 S 型曲线而非分段线性（默认 k=12 / midpoint=0.55 的实际输出，
+    2026-09-12 修正：旧注释 ~8%/~40% 与实现不符，曾误导 walk-forward 调参）：
+    - vol_pctile ≤ 0.3（低波）→ 0~2% 现金
+    - vol_pctile = 0.5（中位）→ ~18% 现金
+    - vol_pctile = 0.55（中点）→ 25% 现金
+    - vol_pctile ≥ 0.85（高波）→ ~49% 现金
     - 极端情况自然封顶于 ~50%（曲线渐近线）
 
     取代旧版 `(p-0.5)*60` 分段线性 + 外部硬编码上下限(45/5)。

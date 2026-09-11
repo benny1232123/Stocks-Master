@@ -12,7 +12,7 @@ from datetime import date, datetime, timedelta
 from pathlib import Path
 
 from dotenv import load_dotenv
-from fastapi import Depends, FastAPI, Header, HTTPException
+from fastapi import Depends, FastAPI, Header, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
@@ -41,15 +41,16 @@ from backend.trade_sanitize import _is_corrupt_trade
 from backend.api_auth import _check_api_key
 from backend.admin_api import router as admin_router
 
-# ── 可选 API 鉴权 ──
-# 仅当环境变量 API_AUTH_TOKEN 非空时生效：所有「写操作 / 高开销」POST 端点
-# 必须携带正确的 `X-API-Key` 头，否则返回 401。未配置则向后兼容（与旧部署行为一致），
-# 方便个人部署先不配、需要时再开启。Render 部署可在 Dashboard 设 API_AUTH_TOKEN 启用。
-def _require_api_key(x_api_key: str | None = Header(default=None)) -> None:
+# ── API 鉴权（安全默认：deny-by-default）──
+# API_AUTH_TOKEN 已配置 → 所有「写操作 / 高开销」POST 端点必须携带正确的 `X-API-Key` 头。
+# 未配置 → 仅放行本机回环（本地开发），公网一律 401。旧版"未配置即全放行"在
+# Render 公网部署下等于写接口裸奔（2026-09-12 反转默认；本地开发不受影响）。
+def _require_api_key(request: Request, x_api_key: str | None = Header(default=None)) -> None:
     try:
-        _check_api_key(x_api_key)
-    except ValueError:
-        raise HTTPException(status_code=401, detail="Invalid or missing API key")
+        client_host = request.client.host if request.client else ""
+        _check_api_key(x_api_key, client_host=client_host)
+    except ValueError as exc:
+        raise HTTPException(status_code=401, detail=str(exc) or "API key required")
 
 
 @asynccontextmanager
@@ -120,6 +121,29 @@ def _new_task(task_type: str) -> str:
     return task_id
 
 
+# 重任务（回测/扫描/融合）并发上限：这些任务每个都会全量拉 K 线，
+# 公网滥用或前端重复点击会把 Render free 档 512MB 打爆（2026-09-12 修复）。
+_MAX_HEAVY_TASKS = max(1, int(os.getenv("MAX_CONCURRENT_TASKS", "2")))
+
+
+def _create_heavy_task(task_type: str) -> str | None:
+    """创建重任务；运行中数量达上限时返回 None（调用方回 429）。"""
+    task_id = uuid.uuid4().hex[:12]
+    with _tasks_lock:
+        running = sum(1 for t in _tasks.values() if t["status"] == "running")
+        if running >= _MAX_HEAVY_TASKS:
+            return None
+        _tasks[task_id] = {
+            "type": task_type,
+            "status": "running",
+            "logs": [],
+            "result": None,
+            "cancelled": False,
+            "started_at": time.time(),
+        }
+    return task_id
+
+
 def _is_cancelled(task_id: str) -> bool:
     with _tasks_lock:
         t = _tasks.get(task_id)
@@ -177,7 +201,9 @@ def app_status() -> dict:
     return {
         "storage_backend": backend,
         "supabase_configured": supabase_configured,
-        "supabase_url": os.getenv("SUPABASE_URL", "")[:30] + "..." if os.getenv("SUPABASE_URL", "") else "",
+        # 不回显 SUPABASE_URL（含项目 ref，会给攻击者补齐构造 Supabase REST 调用的半边）
+        "api_auth": "enabled" if os.getenv("API_AUTH_TOKEN", "").strip()
+                    else "disabled(仅本机回环可调用写接口；公网需配置 API_AUTH_TOKEN)",
     }
 
 
@@ -633,7 +659,9 @@ def run_backtest(payload: dict) -> dict:
         start = _parse_date(payload.get("start"), date.today() - timedelta(days=365))
         end = _parse_date(payload.get("end"), date.today())
         strategies = payload.get("strategies", "boll,relativity,theme")
-        task_id = _new_task("backtest")
+        task_id = _create_heavy_task("backtest")
+    if task_id is None:
+        raise HTTPException(status_code=429, detail=f"已有 {_MAX_HEAVY_TASKS} 个重任务在运行，请稍后再试")
         _append_log(task_id, f"开始多策略回测({strategies})，共 {len(codes)} 只股票，区间 {start}~{end}")
 
         def _run_multi():
@@ -661,7 +689,9 @@ def run_backtest(payload: dict) -> dict:
     import pandas as pd
     signals = pd.DataFrame({"日期": [signal_date] * len(codes), "代码": codes})
 
-    task_id = _new_task("backtest")
+    task_id = _create_heavy_task("backtest")
+    if task_id is None:
+        raise HTTPException(status_code=429, detail=f"已有 {_MAX_HEAVY_TASKS} 个重任务在运行，请稍后再试")
     _append_log(task_id, f"开始回测，共 {len(codes)} 只股票")
 
     def _run():
@@ -722,7 +752,9 @@ def selection_boll_scan(payload: dict) -> dict:
     near_ratio = float(payload.get("near_ratio", 1.015))
     days_back = int(payload.get("days_back", 180))
 
-    task_id = _new_task("boll-scan")
+    task_id = _create_heavy_task("boll-scan")
+    if task_id is None:
+        raise HTTPException(status_code=429, detail=f"已有 {_MAX_HEAVY_TASKS} 个重任务在运行，请稍后再试")
     _append_log(task_id, f"开始布林扫描，共 {len(codes)} 只股票")
 
     def _run():
@@ -772,7 +804,9 @@ def selection_cancel_task(task_id: str) -> dict:
 
 @app.post("/api/selection/fusion", dependencies=[Depends(_require_api_key)])
 def selection_fusion(payload: dict) -> dict:
-    task_id = _new_task("fusion")
+    task_id = _create_heavy_task("fusion")
+    if task_id is None:
+        raise HTTPException(status_code=429, detail=f"已有 {_MAX_HEAVY_TASKS} 个重任务在运行，请稍后再试")
     _append_log(task_id, "开始策略融合")
 
     def _run():

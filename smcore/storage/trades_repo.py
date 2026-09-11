@@ -11,6 +11,7 @@ import logging
 import os
 import tempfile
 import threading
+import sys
 from abc import ABC, abstractmethod
 from pathlib import Path
 from typing import Any
@@ -25,6 +26,28 @@ TRADES_FILE = STOCK_DATA_DIR / "trades.json"
 # 进程级写锁：JSON 后端的读—改—写序列（append/update/delete）必须整体持锁，
 # 否则并发请求最后写回者胜，丢更新。FastAPI 同步 handler 跑在线程池上，锁必要。
 _JSON_WRITE_LOCK = threading.RLock()
+
+def warn_if_anon_key(key: str, source: str = "supabase") -> None:
+    """SUPABASE_KEY 是 anon role 时告警（2026-09-12）。
+
+    anon key + 宽松 RLS 策略 = 数据表公网可读写删；service-role key 绕过 RLS，
+    服务端应使用它。仅解码本地 JWT payload 判断 role，不做任何网络请求。
+    """
+    try:
+        import base64
+
+        payload_b64 = str(key).split(".")[1]
+        payload_b64 += "=" * (-len(payload_b64) % 4)
+        role = json.loads(base64.urlsafe_b64decode(payload_b64)).get("role", "")
+        if role == "anon":
+            print(
+                f"[supabase] WARN: {source} 使用的是 anon key——建议改用 service-role key"
+                f"（绕过 RLS），并确认表上没有放行 anon 的宽松策略，否则数据等同公网可写。",
+                file=sys.stderr,
+            )
+    except Exception:
+        pass  # key 不是 JWT 或解码失败时静默跳过（不影响主流程）
+
 
 SUPABASE_SCHEMA_SQL = """\
 -- Run in Supabase SQL Editor
@@ -44,7 +67,9 @@ CREATE INDEX IF NOT EXISTS idx_trades_code ON trades(code);
 CREATE INDEX IF NOT EXISTS idx_trades_date ON trades(trade_date);
 
 ALTER TABLE trades ENABLE ROW LEVEL SECURITY;
-CREATE POLICY "allow_all" ON trades FOR ALL USING (true) WITH CHECK (true);
+-- 注意（2026-09-12）：不要再创建 "allow_all" USING(true) 全放行策略——
+-- 那等于把 anon key 变成全表读写删凭证。请改用 service-role key 访问
+-- （service role 绕过 RLS）， anon role 不授任何 policy 即默认全部拒绝。
 """
 
 
@@ -293,6 +318,7 @@ class SupabaseTradeBackend(TradeBackend):
         if not url or not key:
             return None
 
+        warn_if_anon_key(key, source="trades_repo")
         try:
             return create_client(_normalize_supabase_url(url), key)
         except Exception as exc:
@@ -316,11 +342,28 @@ class SupabaseTradeBackend(TradeBackend):
         self._client.table("trades").insert(row).execute()
 
     def replace_all(self, trades: list[dict[str, Any]]) -> None:
+        # PostgREST 无跨语句事务：先删后插在 insert 失败时云端已空（数据"蒸发"到
+        # 重启迁移才可能救回）。delete 前先快照，insert 失败时尽力恢复旧数据。
+        snapshot = self.load_all()
         self._client.table("trades").delete().neq("id", -1).execute()
         if not trades:
             return
         rows = [_to_db_trade(item) for item in trades]
-        self._client.table("trades").insert(rows).execute()
+        try:
+            self._client.table("trades").insert(rows).execute()
+        except Exception:
+            if snapshot:
+                try:
+                    self._client.table("trades").insert(
+                        [_to_db_trade(item) for item in snapshot]
+                    ).execute()
+                    logger.error("replace_all 写入失败，已恢复 %d 条旧记录（快照回灌）", len(snapshot))
+                except Exception as restore_exc:
+                    logger.error(
+                        "replace_all 写入失败且快照恢复也失败（%s）——云端为空，"
+                        "请从本地 trades.json 或 git 历史找回数据", restore_exc,
+                    )
+            raise
 
     def delete_by_id(self, trade_id: Any) -> bool:
         """按自增 id 删除单条。"""

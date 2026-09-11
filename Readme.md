@@ -399,7 +399,8 @@ HOLD_DAYS=10 LOOKBACK_DAYS=30 python scripts/daily_backtest.py
 ```
 
 关键行为（与生产融合一致，避免旧清单数字失真）：
-- **内联 RS + 流动性过滤**：回测前先按评分粗取前 100 只预筛，再逐一复用 `fusion` 的 RS 过滤（`RS_TOL=3%`）与流动性门槛（¥1 亿）剔除弱 alpha 票，确保回测输入 = 当天新跑融合的输出；可用 `BACKTEST_INLINE_FILTER=0` / `BACKTEST_MIN_AMOUNT=...` 调整。
+- **内联过滤与生产同源**：回测前先按评分粗取前 100 只预筛，再复用与 `fusion` 完全相同的过滤链——**市场闸门（下行防御剔纯均值回归）+ RS 过滤（`_dynamic_thresholds` 动态阈值，随信号日市场状态浮动）+ 流动性门槛（动态）+ 趋势守卫**，确保回测输入 = 当天新跑融合的输出；可用 `BACKTEST_INLINE_FILTER=0` / `BACKTEST_MIN_AMOUNT=...`（显式设置时覆盖动态门槛）调整。
+- **回放产物可信度侧标**：历史重放（`replay_history.py`）运行时统一设置 `REPLAY_MODE=1`，theme 回放自动跳过异动催化等实时接口；boll/relativity/theme 的重放产出旁会写 `*.meta.json` 侧标（`universe_pit=false`）——EM 资金流排行/盈利预测无历史榜单可查，**重放产物不可作为策略有效性证据**，请只信任每日实时产出的 CSV 滚动记录。momentum 重放宇宙已改用 baostock `query_all_stock(day=信号日)` 的 point-in-time 名单。
 - **置信度加权仓位**：按 `综合评分` 加权分配资金（`size_by='综合评分'`，确定性高=多策略共振=多给仓位）；`BACKTEST_SIZE_BY=""` 回退等权。
 - 出场规则：Boll 上轨止盈 / 固定 +6% / 移动止盈 5% / 收盘跌破 MA60 / −8% 硬止损（缺口感知）/ 满 `HOLD_DAYS` 兜底；含真实交易成本。
 

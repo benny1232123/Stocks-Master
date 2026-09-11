@@ -16,6 +16,10 @@ on:
         default: ''
         type: string
 
+concurrency:
+  group: daily-holdings
+  cancel-in-progress: true
+
 jobs:
   holdings-analysis:
     runs-on: ubuntu-latest
