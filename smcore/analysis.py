@@ -72,11 +72,14 @@ def build_stock_analysis(
     days_back: int = 180,
     as_of: date | None = None,
     with_fundamentals: bool = True,
+    fundamentals_offline: bool = False,
 ) -> dict[str, Any]:
     """Build a JSON-friendly technical analysis snapshot for a stock.
 
     as_of: 指定截至日期（默认今天），用于历史回看；历史日期仅取缓存 K 线，不联网。
     with_fundamentals: 是否补取基本面（历史回看建议关掉以提速）。
+    fundamentals_offline: True 时基本面走 cache-only（绝不联网补取），
+        供每日持仓报告等「须离线确定」的路径使用；缺失即显示「暂无基本面数据」。
     """
     end_date = as_of or date.today()
     start_date = end_date - timedelta(days=days_back)
@@ -151,8 +154,8 @@ def build_stock_analysis(
                 J=kdj_df.get("J"),
             ).replace({pd.NA: None, np.nan: None}).to_dict(orient="records")
         },
-        # ── 基本面 / 资金面（缓存优先，未命中实时补取并写回缓存）──
-        "fundamentals": _build_fundamentals(code) if with_fundamentals else None,
+        # ── 基本面 / 资金面（缓存优先，未命中实时补取并写回缓存；offline 时仅读缓存）──
+        "fundamentals": _build_fundamentals(code, offline=fundamentals_offline) if with_fundamentals else None,
         # ── 消息面（CCTV 舆情：热门板块 + 相关新闻，纯本地文件读取）──
         "news": build_news_surface(code) if with_fundamentals else None,
     }
@@ -375,13 +378,16 @@ def recommendation_from_analysis(
     }
 
 
-def _build_fundamentals(code: str, timeout: float = 12.0) -> dict | None:
+def _build_fundamentals(code: str, timeout: float = 12.0, *, offline: bool = False) -> dict | None:
     """汇总个股基本面 + 资金面快照，供前端做综合分析。
 
     优先读本地缓存；未命中时通过 smcore.strategy.fundamental.fetch_fundamental
     实时联网补取（腾讯估值 + baostock 质量/成长/换手）并写回缓存。
     全程在后台线程执行 + 超时保护，避免慢网络拖垮技术面分析响应；
     超时/失败返回 None（前端显示「暂无基本面数据」提示，不影响技术面）。
+
+    offline=True：cache-only，不联网补取（纯本地读取，无超时需求，直接同步返回）。
+    供每日持仓报告等离线确定型批量路径使用。
     """
     try:
         from smcore.strategy.fundamental import fetch_fundamental
@@ -393,9 +399,14 @@ def _build_fundamentals(code: str, timeout: float = 12.0) -> dict | None:
     def _run() -> None:
         nonlocal result
         try:
-            result = fetch_fundamental(code)
+            result = fetch_fundamental(code, offline=offline)
         except Exception:
             result = None
+
+    if offline:
+        # cache-only：纯本地读取，无网络/无超时需求
+        _run()
+        return result
 
     t = threading.Thread(target=_run, daemon=True)
     t.start()

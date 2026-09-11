@@ -29,10 +29,27 @@ SPOT_ROWS = [
     ["000002", 12.0, 1.5, 2000.0],
 ]
 # baostock 个股基本面：质量(roe/gross_margin) + 成长(revenue_growth) + 换手率 + 资金流量价(amount_20)
+# v2 按报告期缓存（PIT 合规）：质量/成长在 periods（含真实公告日 _pub），估值在 spot，资金流在 kline_stats。
+# 报告期 2026-03-31 + pubDate 2026-04-28 → as_of=20260805 能选中该期（不早于公告日，非未来函数）。
+def _v2(roe, gm, rg, pe, pb, cap, turnover, amount):
+    return {
+        "_v": 2,
+        "periods": {
+            "2026-03-31": {
+                "roe": roe, "gross_margin": gm, "revenue_growth": rg,
+                "_pub": "2026-04-28",
+            }
+        },
+        "spot": {"pe": pe, "pb": pb, "mkt_cap": cap},
+        "kline_stats": {"turnover": turnover, "amount_20": amount},
+        "_spot_as_of": "2026-08-01",
+    }
+
+
 FUND = {
-    "000001": {"roe": 15.0, "gross_margin": 40.0, "revenue_growth": 10.0, "turnover": 1.0, "amount_20": 1e9},
-    "600000": {"roe": 11.0, "gross_margin": 35.0, "revenue_growth": 5.0, "turnover": 0.8, "amount_20": 8e8},
-    "000002": {"roe": 8.0, "gross_margin": 25.0, "revenue_growth": -2.0, "turnover": 1.5, "amount_20": 2e8},
+    "000001": _v2(15.0, 40.0, 10.0, 6.0, 0.8, 3500.0, 1.0, 1e9),
+    "600000": _v2(11.0, 35.0, 5.0, 4.5, 0.6, 2800.0, 0.8, 8e8),
+    "000002": _v2(8.0, 25.0, -2.0, 12.0, 1.5, 2000.0, 1.5, 2e8),
 }
 CACHE_DIR = fund_mod.CACHE_DIR
 SPOT_FILE = fund_mod.SPOT_FILE

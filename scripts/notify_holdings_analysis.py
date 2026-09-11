@@ -35,7 +35,13 @@ from smcore.notify.email import send_email
 from smcore.stock_names import resolve as _resolve_name
 from smcore.data.kline import fetch_daily_k
 from smcore.strategy.news_surface import build_news_surface
+from smcore.strategy.fundamental import fund_cache_exists
 import pandas as pd
+
+# 报告路径基本面读取策略：默认 **cache-only**（不联网），保证海外 runner 离线确定。
+# 缺缓存持仓将显示「暂无基本面数据」并在报告顶部告警，而不是白挂 12s 联网再静默降级。
+# 临时需要联网补取（本地有网时）设 FUND_REPORT_ONLINE=1。
+FUND_REPORT_ONLINE = (os.getenv("FUND_REPORT_ONLINE") or "0").strip() == "1"
 
 # 本地手动跑时从仓库根 .env 读环境变量（SUPABASE_*/SMTP_* 等）。
 # CI 用 GitHub secrets 注入，不依赖此；dotenv 缺失也不影响运行。
@@ -226,8 +232,11 @@ def build_recommendation_history(codes: list[str], pos_map: dict, n_days: int = 
         for code in codes:
             names[code] = (pos_map.get(code, {}) or {}).get("name", "") or ""
             try:
-                # 基本面无历史序列 → 用当前缓存，保证与当日建议口径一致
-                a = build_stock_analysis(code, as_of=as_of, with_fundamentals=True)
+                # 基本面无历史序列 → 用当前缓存，保证与当日建议口径一致（cache-only）
+                a = build_stock_analysis(
+                    code, as_of=as_of, with_fundamentals=True,
+                    fundamentals_offline=not FUND_REPORT_ONLINE,
+                )
                 rec = recommendation_from_analysis(a)
                 close = (a.get("latest", {}) or {}).get("close")
                 row[code] = {
@@ -1152,7 +1161,7 @@ def main() -> int:
         for code in codes:
             pos = pos_map.get(code)
             try:
-                analysis = build_stock_analysis(code)
+                analysis = build_stock_analysis(code, fundamentals_offline=not FUND_REPORT_ONLINE)
             except Exception as exc:
                 failed += 1
                 log_lines.append(f"分析 {code} 异常: {exc}")
@@ -1175,15 +1184,37 @@ def main() -> int:
         summary_line = f"成功 {ok} 只 / 失败 {failed} 只 / 共 {len(codes)} 只"
         summary_md = render_summary_md(summary, len(codes))
         summary_html = render_summary_html(summary, len(codes))
+        # 基本面缓存覆盖预检（cache-only 路径：缺缓存 = 报告显示「暂无基本面数据」）
+        missing_cache = [c for c in codes if not fund_cache_exists(c)]
+        if missing_cache:
+            log_lines.append(
+                f"⚠️ {len(missing_cache)} 只持仓缺基本面缓存（报告按缓存读取，缺失显示暂缺）: "
+                f"{', '.join(missing_cache)}"
+            )
+        cache_warn_md = ""
+        if missing_cache:
+            cache_warn_md = (
+                f"> ⚠️ 基本面缓存缺失 {len(missing_cache)} 只：{'、'.join(missing_cache)}"
+                f"——本报告基本面走本地缓存（离线确定），缺失持仓显示「暂无基本面数据」。"
+                f"请在有网环境运行 `python scripts/refresh_fundamentals.py` 回填缓存后重跑。\n\n"
+            )
         # 消息面（市场视角，最新 CCTV 舆情；纯本地读 CSV，无网络依赖）
         news_surf = build_news_surface()
         news_html = render_news_surface_html(news_surf)
         news_md = render_news_surface_md(news_surf)
         if news_html:
             sections_html.insert(0, news_html)
+        if missing_cache:
+            sections_html.insert(0, (
+                f'<div class="card"><div class="sig">⚠️ 基本面缓存缺失 {len(missing_cache)} 只：'
+                f'{"、".join(missing_cache)} —— 本报告基本面走本地缓存（离线确定），'
+                f'缺失持仓显示「暂无基本面数据」。请在有网环境运行 '
+                f'<code>python scripts/refresh_fundamentals.py</code> 回填缓存后重跑。</div></div>'
+            ))
         md = (
             f"# 持仓个股分析日报 · {today}\n\n"
             f"> 数据源：{backend} ｜ {summary_line}\n\n"
+            + cache_warn_md
             + (summary_md + "\n" if summary_md else "")
             + (news_md + "\n" if news_md else "")
             + "\n".join(sections)

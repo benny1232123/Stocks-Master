@@ -409,7 +409,8 @@ def _fetch_kline_stats_baostock(code6: str, as_of=None) -> Optional[dict]:
 
 
 # ───────────────────────── 合并 fetch（PIT 合规） ─────────────────────────
-def fetch_fundamental(code: str, as_of=None, *, force: bool = False) -> Optional[dict]:
+def fetch_fundamental(code: str, as_of=None, *, force: bool = False,
+                      offline: bool = False) -> Optional[dict]:
     """合并返回单只票的基本面因子原始值（**Point-in-Time 合规**）：
         {roe, gross_margin, revenue_growth, pe, pb, mkt_cap, turnover, amount_20}
     任一子块缺失则其字段为 None（因子层据此降级）。全部缺失返回 None。
@@ -418,6 +419,10 @@ def fetch_fundamental(code: str, as_of=None, *, force: bool = False) -> Optional
     - as_of 为 None（实时/刷新）：用缓存中最新一期报告 + 最新估值快照。
     - as_of 给定（历史回补）：质量/成长取「as_of 前已公告」的最新报告期；缺失该期则降级 None。
       估值快照仅当 as_of ≥ 快照刷新日时可用，否则降级 None（绝不用未来估值污染历史）。
+
+    offline=True：**cache-only 模式**——缓存未命中直接返回 None，绝不联网补取。
+      供每日持仓报告等「须离线确定」的批量路径使用（海外 runner 拉 baostock/hithink 常超时，
+      缺缓存持仓会白挂 12s 且静默降级，离线模式让缺失变成可预检、可告警的确定性状态）。
     """
     code6 = _norm_code(code)
     cached = None if force else _load_fund_cache(code6)
@@ -431,10 +436,24 @@ def fetch_fundamental(code: str, as_of=None, *, force: bool = False) -> Optional
                 return None
             return cached
         return _extract_for_asof(cached, as_of)
+    if offline:
+        return None
     built = _build_fundamental_online(code6, as_of)
     if built:
         _save_fund_cache(code6, built)
     return _extract_for_asof(built, as_of)
+
+
+def fund_cache_exists(code: str) -> bool:
+    """报告/批量路径用：判断该票本地基本面缓存是否可用（**不联网**）。
+
+    命中条件与 fetch_fundamental(offline=True) 完全一致（缓存文件存在且未超 TTL）。
+    供每日报告预检「哪些持仓缺缓存」，避免缺缓存持仓静默显示「暂无基本面数据」。
+    """
+    try:
+        return _load_fund_cache(_norm_code(code)) is not None
+    except Exception:
+        return False
 
 
 def _build_fundamental_online(code6: str, as_of=None) -> Optional[dict]:
