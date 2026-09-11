@@ -17,6 +17,7 @@ import {
   Trophy,
   AlertTriangle,
   Zap,
+  ShieldCheck,
 } from 'lucide-react'
 import { Button } from './components/ui/button'
 import { cn } from './lib/utils'
@@ -33,6 +34,7 @@ const TABS = [
   { id: 'daily', label: '日报', icon: FileText },
   { id: 'portfolio', label: '持仓', icon: Briefcase },
   { id: 'backtest', label: '回测', icon: FlaskConical },
+  { id: 'admin', label: '管理', icon: ShieldCheck },
 ]
 
 function StatCard({ label, value, trend, className: cnExtra }) {
@@ -2673,13 +2675,26 @@ function App() {
                 <input value={tradeForm.notes} placeholder="备注" className="h-9 rounded-lg bg-card border border-border px-3 text-foreground"
                   onChange={(e) => setTradeForm((p) => ({ ...p, notes: e.target.value }))} />
                 <Button onClick={async () => {
-                  const r = await fetch('/api/trades', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(tradeForm) })
-                  if (r.ok) { const p = await fetch('/api/portfolio'); if (p.ok) setPortfolio(await p.json()) }
+                  try {
+                    const r = await fetch('/api/trades', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(tradeForm) })
+                    if (r.ok) {
+                      const p = await fetch('/api/portfolio'); if (p.ok) setPortfolio(await p.json())
+                      setTradeForm((f) => ({ ...f, notes: '' }))
+                    } else {
+                      // 后端校验错误（卖出超持仓/格式无效/401）必须反馈给用户，不能静默
+                      let detail = `保存失败（HTTP ${r.status}）`
+                      try { const j = await r.json(); if (j.error || j.detail) detail = `保存失败：${j.error || j.detail}` } catch { /* 非 JSON 响应用默认文案 */ }
+                      setError(detail)
+                    }
+                  } catch { setError('保存失败：后端不可达') }
                 }}>保存交易</Button>
                 <Button variant="destructive" onClick={async () => {
                   if (!window.confirm('确定要清空所有交易记录吗？此操作不可撤销。')) return
-                  const r = await fetch('/api/trades', { method: 'DELETE' })
-                  if (r.ok) { const p = await fetch('/api/portfolio'); if (p.ok) setPortfolio(await p.json()) }
+                  try {
+                    const r = await fetch('/api/trades', { method: 'DELETE' })
+                    if (r.ok) { const p = await fetch('/api/portfolio'); if (p.ok) setPortfolio(await p.json()) }
+                    else setError(`清空失败（HTTP ${r.status}）`)
+                  } catch { setError('清空失败：后端不可达') }
                 }}>清空</Button>
               </div>
             </SectionCard>
@@ -3242,6 +3257,28 @@ function App() {
                 </div>
               )}
             </SectionCard>
+          </>
+        ) : null}
+
+        {activeView === 'admin' ? (
+          <>
+            <div className="page-header">
+              <h2>管理后台</h2>
+              <p>交易记录管理 · 独立登录（ADMIN_PASSWORD），与主看板权限隔离</p>
+            </div>
+            {/* 既有 /admin 独立页（自包含登录 + 交易 CRUD）原样嵌入，避免双实现漂移 */}
+            <iframe
+              src="/admin"
+              title="管理后台"
+              style={{
+                width: '100%',
+                height: 'calc(100vh - 150px)',
+                minHeight: 560,
+                border: '1px solid var(--border-color, #e5e7eb)',
+                borderRadius: 12,
+                background: 'var(--card-bg, #fff)',
+              }}
+            />
           </>
         ) : null}
       </main>
