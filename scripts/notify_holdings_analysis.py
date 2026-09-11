@@ -1103,6 +1103,13 @@ def _render_stock_news_md(code: str) -> list[str]:
 
 def main() -> int:
     today = _today_str()
+    # 目标信号日 → as_of：历史补跑(TODAY/SIGNAL_DATE=过去日)时按该日截断 K 线，
+    # 避免用当日/未来实时价冒充历史（口径与「补跑某天」语义一致）。
+    # TODAY 缺省=今天时 as_of=today，与旧行为完全一致。
+    try:
+        as_of_date = date(int(today[0:4]), int(today[4:6]), int(today[6:8]))
+    except Exception:
+        as_of_date = None
     log_lines: list[str] = []
     fund_cmp_html = fund_cmp_md = ""
 
@@ -1161,7 +1168,9 @@ def main() -> int:
         for code in codes:
             pos = pos_map.get(code)
             try:
-                analysis = build_stock_analysis(code, fundamentals_offline=not FUND_REPORT_ONLINE)
+                analysis = build_stock_analysis(
+                    code, as_of=as_of_date, fundamentals_offline=not FUND_REPORT_ONLINE
+                )
             except Exception as exc:
                 failed += 1
                 log_lines.append(f"分析 {code} 异常: {exc}")
