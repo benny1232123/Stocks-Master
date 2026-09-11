@@ -4,12 +4,15 @@ from __future__ import annotations
 import concurrent.futures
 import os
 import pickle
+import tempfile
 import threading
 import time
 
 import requests
 import json as _json
 from datetime import date, datetime, timedelta
+
+from smcore.utils.dates import beijing_today
 from pathlib import Path
 from typing import Any
 
@@ -87,7 +90,7 @@ def _safe_fetch(func, timeout_seconds, label, default, retries=2):
 
 def _load_cache(key: str) -> Any:
     """Load a dated cache file if it exists."""
-    today = date.today().strftime("%Y-%m-%d")
+    today = beijing_today().strftime("%Y-%m-%d")
     path = CACHE_DIR / f"{key}_{today}.pkl"
     if not path.exists():
         return None
@@ -96,6 +99,24 @@ def _load_cache(key: str) -> Any:
             return pickle.load(file_handle)
     except Exception:
         return None
+
+
+_DASHBOARD_BUILD_LOCK = threading.Lock()
+
+
+def _load_latest_cache(key: str) -> tuple[Any, str | None]:
+    """读该 key 最近一份缓存（任意日期），返回 (data, cache_date)；全坏返回 (None, None)。
+
+    SWR 的 stale 兜底源：重建进行中时用它立即响应请求线程。
+    """
+    caches = sorted(CACHE_DIR.glob(f"{key}_*.pkl"), reverse=True)
+    for cache_file in caches:
+        try:
+            with open(cache_file, "rb") as file_handle:
+                return pickle.load(file_handle), cache_file.stem.rsplit("_", 1)[-1]
+        except Exception:
+            continue
+    return None, None
 
 
 def fetch_index_snapshot() -> pd.DataFrame:
@@ -741,7 +762,7 @@ def _fetch_macro_snapshot_inner() -> dict[str, Any]:
 
 
 def _macro_cache_path() -> Path:
-    today = date.today().strftime("%Y-%m-%d")
+    today = beijing_today().strftime("%Y-%m-%d")
     return CACHE_DIR / f"macro_snapshot_{today}.pkl"
 
 
@@ -762,10 +783,24 @@ def _refresh_macro_cache() -> None:
         print(f"[dashboard] 宏观缓存刷新失败: {exc}")
 
 
+_MACRO_REFRESH_LOCK = threading.Lock()
+
+
 def maybe_refresh_macro_cache() -> None:
-    """宏观缓存过期/缺失时后台刷新，保证看板数据持续动态更新（不阻塞请求）。"""
+    """宏观缓存过期/缺失时后台刷新，保证看板数据持续动态更新（不阻塞请求）。
+
+    单飞：TTL 过期窗口内并发请求只起一个刷新线程（旧版无锁，N 个请求 = N 个线程
+    同时打 akshare，限流雪上加霜）。
+    """
     if _macro_needs_refresh():
-        threading.Thread(target=_refresh_macro_cache, daemon=True).start()
+        if _MACRO_REFRESH_LOCK.acquire(blocking=False):
+            def _run():
+                try:
+                    if _macro_needs_refresh():  # 拿锁后双重检查
+                        _refresh_macro_cache()
+                finally:
+                    _MACRO_REFRESH_LOCK.release()
+            threading.Thread(target=_run, daemon=True).start()
 
 
 def _fetch_shibor_multi() -> dict[str, float] | None:
@@ -894,25 +929,47 @@ def build_dashboard_payload() -> dict[str, Any]:
     """Build a JSON-friendly dashboard payload for the frontend."""
     payload: dict[str, Any] = {"generated_at": datetime.now().isoformat(timespec="seconds")}
 
-    # ── 指数快照：缓存优先，缺失时实时回退 ────────────────
+    # ── 指数快照：缓存优先 + 单飞重建 + stale 兜底（SWR）────────
+    # 旧版缓存未命中时在请求线程内同步重拉（TDX 20s + 新浪），前端 fetch 无超时
+    # → 用户端表现为「刷新中」卡死 1-2 分钟。现改为：拿不到构建锁就立即返回最近
+    # 一份旧快照（后台调用方继续填缓存），请求线程永远不等行情网络。
     cached_index = _load_cache("index_snapshot")
-    if isinstance(cached_index, pd.DataFrame) and not cached_index.empty:
-        payload["index_snapshot"] = cached_index.to_dict(orient="records")
-    else:
-        # 缓存未命中（Render 上 prewarm 可能因 TDX/新浪失败而跳过）→ 同步重拉
-        print("[dashboard] 指数快照缓存为空，尝试实时获取...")
-        try:
-            fresh_index = fetch_index_snapshot()
-            if not fresh_index.empty:
-                payload["index_snapshot"] = fresh_index.to_dict(orient="records")
-                save_cache("index_snapshot", fresh_index)
-                print("[dashboard] 指数快照实时获取成功")
-            else:
-                payload["index_snapshot"] = []
-                print("[dashboard] 指数快照实时获取也失败（TDX+新浪均不可达）")
-        except Exception as exc:
-            payload["index_snapshot"] = []
-            print(f"[dashboard] 指数快照实时获取异常: {exc}")
+    index_fresh = isinstance(cached_index, pd.DataFrame) and not cached_index.empty
+    if not index_fresh:
+        stale, stale_date = _load_latest_cache("index_snapshot")
+        if not _DASHBOARD_BUILD_LOCK.acquire(blocking=False):
+            # 重建进行中 → 返回旧快照
+            if stale is not None and isinstance(stale, pd.DataFrame) and not stale.empty:
+                payload["index_snapshot"] = stale.to_dict(orient="records")
+                payload["index_snapshot_as_of"] = stale_date
+                print(f"[dashboard] 指数快照重建中，返回 {stale_date} 旧快照（stale-while-revalidate）")
+        else:
+            try:
+                # 双重检查：拿锁期间可能已被预热/其他请求填好
+                cached_index = _load_cache("index_snapshot")
+                index_fresh = isinstance(cached_index, pd.DataFrame) and not cached_index.empty
+                if not index_fresh:
+                    print("[dashboard] 指数快照缓存为空，尝试实时获取...")
+                    try:
+                        fresh_index = fetch_index_snapshot()
+                        if not fresh_index.empty:
+                            payload["index_snapshot"] = fresh_index.to_dict(orient="records")
+                            save_cache("index_snapshot", fresh_index)
+                            print("[dashboard] 指数快照实时获取成功")
+                        else:
+                            payload["index_snapshot"] = []
+                            print("[dashboard] 指数快照实时获取也失败（TDX+新浪均不可达）")
+                    except Exception as exc:
+                        payload["index_snapshot"] = []
+                        print(f"[dashboard] 指数快照实时获取异常: {exc}")
+            finally:
+                _DASHBOARD_BUILD_LOCK.release()
+    if "index_snapshot" not in payload:
+        payload["index_snapshot"] = (
+            cached_index.to_dict(orient="records")
+            if isinstance(cached_index, pd.DataFrame) and not cached_index.empty
+            else []
+        )
 
     cached_breadth = _load_cache("market_breadth")
     payload["market_breadth"] = cached_breadth if isinstance(cached_breadth, dict) else {}
@@ -928,6 +985,10 @@ def build_dashboard_payload() -> dict[str, Any]:
         "制造业PMI", "CPI同比",
     ]
     if any(cached_macro.get(k) is None for k in _CORE_MACRO_KEYS):
+        if not _DASHBOARD_BUILD_LOCK.acquire(blocking=False):
+            print("[dashboard] 宏观重建进行中，保留现有缓存（stale-while-revalidate）")
+            payload["macro_snapshot"] = cached_macro
+            return payload
         print("[dashboard] 宏观缓存存在空指标，强制同步重拉...")
         try:
             fresh = fetch_macro_snapshot()
@@ -946,17 +1007,28 @@ def build_dashboard_payload() -> dict[str, Any]:
         except Exception as exc:
             # Render 上 akshare 可能装了但网络全挂 → 不让整个 dashboard 炸掉
             print(f"[dashboard] 宏观强制重拉异常（保留旧缓存）: {exc}")
+        finally:
+            _DASHBOARD_BUILD_LOCK.release()
     payload["macro_snapshot"] = cached_macro
     return payload
 
 
 def save_cache(key: str, data: Any) -> Path:
-    """Save a dashboard cache file under stock_data/daily_cache."""
+    """Save a dashboard cache file under stock_data/daily_cache（原子写）。"""
     CACHE_DIR.mkdir(parents=True, exist_ok=True)
-    today = date.today().strftime("%Y-%m-%d")
+    today = beijing_today().strftime("%Y-%m-%d")
     path = CACHE_DIR / f"{key}_{today}.pkl"
-    with open(path, "wb") as file_handle:
-        pickle.dump(data, file_handle)
+    fd, tmp_path = tempfile.mkstemp(dir=str(CACHE_DIR), suffix=".tmp")
+    try:
+        with os.fdopen(fd, "wb") as file_handle:
+            pickle.dump(data, file_handle)
+        os.replace(tmp_path, path)
+    except BaseException:
+        try:
+            os.unlink(tmp_path)
+        except OSError:
+            pass
+        raise
     return path
 
 

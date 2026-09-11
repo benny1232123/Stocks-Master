@@ -783,8 +783,12 @@ def selection_boll_scan(payload: dict) -> dict:
     return {"task_id": task_id}
 
 
-@app.get("/api/selection/task-logs/{task_id}")
+@app.get("/api/selection/task-logs/{task_id}", dependencies=[Depends(_require_api_key)])
 def selection_task_logs(task_id: str) -> dict:
+    """任务日志轮询端点：鉴权与写接口同一套规则（本机/同源浏览器放行，脚本需 key）。
+
+    前端 500ms 轮询它，此前无鉴权可被公网任意枚举读取任务日志与回测结果。
+    """
     with _tasks_lock:
         t = _tasks.get(task_id)
         if t is None:

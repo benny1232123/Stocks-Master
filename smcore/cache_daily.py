@@ -5,14 +5,17 @@
 """
 from __future__ import annotations
 
+import os
 import pickle
-from datetime import date, datetime
+import tempfile
+from datetime import datetime
 from pathlib import Path
 from typing import Any, Callable, Optional, Tuple
 
 import pandas as pd
 
 from smcore.config.defaults import STOCK_DATA_DIR
+from smcore.utils.dates import beijing_today
 
 CACHE_DIR = STOCK_DATA_DIR / "daily_cache"
 
@@ -40,7 +43,7 @@ def get_daily(
         全失败返回 (None, None)。
     """
     CACHE_DIR.mkdir(parents=True, exist_ok=True)
-    today = date.today().strftime("%Y-%m-%d")
+    today = beijing_today().strftime("%Y-%m-%d")
     today_file = CACHE_DIR / f"{key}_{today}.pkl"
 
     # 1. 今天已缓存 → 直接用
@@ -62,8 +65,17 @@ def get_daily(
                 or (isinstance(data, pd.DataFrame) and data.empty)
             )
             if not is_empty:
-                with open(today_file, "wb") as f:
-                    pickle.dump(data, f)
+                fd, tmp_path = tempfile.mkstemp(dir=str(CACHE_DIR), suffix=".tmp")
+                try:
+                    with os.fdopen(fd, "wb") as f:
+                        pickle.dump(data, f)
+                    os.replace(tmp_path, today_file)
+                except BaseException:
+                    try:
+                        os.unlink(tmp_path)
+                    except OSError:
+                        pass
+                    raise
                 return data, today
     except Exception:
         pass
@@ -89,7 +101,7 @@ def force_refresh(key: str) -> bool:
 
     Returns: 是否成功删除（True=有缓存被删除）
     """
-    today = date.today().strftime("%Y-%m-%d")
+    today = beijing_today().strftime("%Y-%m-%d")
     today_file = CACHE_DIR / f"{key}_{today}.pkl"
     if today_file.exists():
         today_file.unlink()

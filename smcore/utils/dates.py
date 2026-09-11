@@ -11,7 +11,16 @@
 """
 from __future__ import annotations
 
-from datetime import date, datetime
+from datetime import date, datetime, timedelta, timezone
+
+# A 股日历固定 UTC+8（无夏令时）。Render/GitHub Actions 容器默认 UTC，
+# 直接 date.today() 会在北京 0-8 点错标成前一天（缓存键/数据日期全错）。
+_CN_TZ = timezone(timedelta(hours=8))
+
+
+def beijing_today() -> date:
+    """A 股日历日（显式 UTC+8，不依赖运行环境本地时区）。"""
+    return datetime.now(_CN_TZ).date()
 
 _QUARTER_MONTH_DAY = {1: "0331", 2: "0630", 3: "0930", 4: "1231"}
 
