@@ -31,7 +31,7 @@ def test_regime_filter_defaults_are_config_driven():
     assert rf.MIN_SIGNAL_AMOUNT == 1e8
     assert rf.TREND_GUARD_BELOW_MA20 == 0.12
     # 中性 profile 下动态阈值应等于基准值
-    tol, amt = rf._dynamic_thresholds("震荡轮动", None)
+    tol, amt = rf._dynamic_thresholds(None)
     assert abs(tol - 0.03) < 1e-9
     assert abs(amt - 1e8) < 1e-9
 
@@ -46,13 +46,13 @@ def test_regime_filter_reads_config(monkeypatch):
     monkeypatch.setattr(risk_rules, "RISK_CONFIG", {"regime_filter": patched})
     assert rf._rf_cfg()["rs_tol_base"] == 0.05
 
-    tol, _ = rf._dynamic_thresholds("震荡轮动", None)
+    tol, _ = rf._dynamic_thresholds(None)
     assert abs(tol - 0.05) < 1e-9, "动态阈值未跟随配置"
 
     # 超过上限时应被 clamp（防止配置写错导致阈值失控）
     patched["rs_tol_base"] = 0.5
     monkeypatch.setattr(risk_rules, "RISK_CONFIG", {"regime_filter": patched})
-    tol, _ = rf._dynamic_thresholds("震荡轮动", None)
+    tol, _ = rf._dynamic_thresholds(None)
     assert abs(tol - cfg["rs_tol_max"]) < 1e-9, "阈值未被上限 clamp"
 
 

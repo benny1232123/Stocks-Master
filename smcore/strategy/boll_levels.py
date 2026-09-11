@@ -4,6 +4,7 @@
 """
 from __future__ import annotations
 
+import json
 from datetime import date, datetime, timedelta
 from typing import Optional
 
@@ -14,6 +15,22 @@ from smcore.data import fetch_daily_k
 from smcore.indicators import calc_bollinger
 
 from .regime_filter import RS_LOOKBACK
+
+
+def _load_boll_stop_cfg() -> dict:
+    """boll 止损系数（缺省=定稿原值）；读 risk_config.json「boll」段，解析失败回退内置。"""
+    defaults = {"stop_pct_vol_mult": 2.5, "stop_pct_min": 0.04, "stop_pct_max": 0.12}
+    try:
+        from smcore.config.defaults import PROJECT_ROOT
+
+        rc_path = PROJECT_ROOT / "smcore" / "strategy" / "risk_config.json"
+        boll = json.loads(rc_path.read_text(encoding="utf-8")).get("boll") or {}
+        for k in defaults:
+            if k in boll:
+                defaults[k] = float(boll[k])
+    except Exception:
+        pass
+    return defaults
 
 
 def _compute_boll_levels(code: str, as_of_date: Optional[str] = None) -> dict:
@@ -53,11 +70,14 @@ def _compute_boll_levels(code: str, as_of_date: Optional[str] = None) -> dict:
         if len(dret) >= 5:
             vol20 = float(dret.std())
     # 波动率自适应止损比例：高波动票放宽（少被噪声洗）、低波动票收紧（保护更实）。
-    # 全局兜底仍为 8%（引擎 stop_loss_pct），此处给出逐只建议值，区间 [0.04, 0.12]。
+    # 系数/区间从 risk_config.json「boll」段读取（缺省=定稿原值 2.5 / [0.04, 0.12]）。
+    # 注意 vol20 是「日频 σ 未年化」，mult=2.5 即 2.5 个日σ——与 risk_rules 出场参数的
+    # 年化波动口径是两套体系，调整时勿混用。
     stop_pct = None
     if vol20 is not None and vol20 > 0:
-        raw = vol20 * 2.5
-        stop_pct = float(min(0.12, max(0.04, round(raw, 4))))
+        boll_cfg = _load_boll_stop_cfg()
+        raw = vol20 * boll_cfg["stop_pct_vol_mult"]
+        stop_pct = float(min(boll_cfg["stop_pct_max"], max(boll_cfg["stop_pct_min"], round(raw, 4))))
     return {
         "close": float(last["close"]),
         "lower": float(last["Lower"]) if pd.notna(last.get("Lower")) else None,

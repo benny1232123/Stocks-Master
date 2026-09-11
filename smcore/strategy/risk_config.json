@@ -131,7 +131,12 @@
   },
   "fundamental_pit": {
     "prefer_pub_date": true,
-    "disclosure_lag_days": {"03-31": 30, "06-30": 62, "09-30": 31, "12-31": 120}
+    "disclosure_lag_days": {
+      "03-31": 30,
+      "06-30": 62,
+      "09-30": 31,
+      "12-31": 120
+    }
   },
   "action_list": {
     "placeholder_when_empty": true
@@ -143,7 +148,10 @@
     "squeeze_enabled": true,
     "squeeze_window": 20,
     "squeeze_pctile": 0.2,
-    "continuous_streak_cap": 3
+    "continuous_streak_cap": 3,
+    "stop_pct_vol_mult": 2.5,
+    "stop_pct_min": 0.04,
+    "stop_pct_max": 0.12
   },
   "relativity": {
     "price_upper_limit": 30.0,
@@ -374,5 +382,25 @@
       10,
       14
     ]
+  },
+  "theme_score": {
+    "turn5_div": 10.0,
+    "turn5_w": 10.0,
+    "turn_div": 15.0,
+    "turn_w": 5.0,
+    "flow_ratio_div": 2.5,
+    "flow_w": 25.0,
+    "ret5_div": 8.0,
+    "ret5_w": 10.0,
+    "ret20_div": 25.0,
+    "ret20_w": 10.0,
+    "high_start": 0.9,
+    "high_span": 0.1,
+    "high_w": 10.0,
+    "theme_cap_hits": 3,
+    "theme_w": 30.0,
+    "ret5_penalty_threshold": 12.0,
+    "ret20_penalty_threshold": 45.0,
+    "penalty": 5.0
   }
 }

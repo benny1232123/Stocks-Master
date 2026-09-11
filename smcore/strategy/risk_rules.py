@@ -345,9 +345,16 @@ def compute_adaptive_risk_params(
     bmk = cfg["beta_min_keep"]
     min_keep = int(_clamp(round(n * bmk["frac_of_picks"]), bmk["min"], bmk["max"]))
 
-    # 单策略入选数量上限
+    # 单策略入选数量上限（策略数取自适应权重的活跃策略集，不再写死 5——
+    # 增删策略后公式自动跟随）
+    try:
+        from smcore.strategy.adaptive_weights import ALL_STRATEGIES
+
+        n_strats = max(1, len(ALL_STRATEGIES))
+    except Exception:
+        n_strats = 5
     mps2 = cfg["max_per_strategy"]
-    per_strat = mps2["expansion"] * (n / 5.0)
+    per_strat = mps2["expansion"] * (n / float(n_strats))
     max_strat = int(_clamp(round(per_strat), mps2["min"], mps2["max"]))
 
     dd = cfg["drawdown"]

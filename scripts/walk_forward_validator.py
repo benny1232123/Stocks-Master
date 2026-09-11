@@ -69,7 +69,7 @@ except Exception:  # pragma: no cover
     RISK_CONFIG = {}
 
     def compute_adaptive_exit_params(*a, **k):  # pragma: no cover
-        return {"stop_loss_pct": 0.08, "trailing_stop_pct": 0.05, "hold_days": 10}
+        return {"stop_loss_pct": 0.08, "trailing_stop_pct": 0.05, "hold_days": 12}  # 与 risk_config exit.hold_days 一致
 try:  # 市场状态检测（as_of 历史切片，因果安全；新浪主源+本地缓存，离线可用）
     from smcore.strategy.market import regime_as_of as _market_regime_as_of  # noqa: E402
 except Exception:  # pragma: no cover

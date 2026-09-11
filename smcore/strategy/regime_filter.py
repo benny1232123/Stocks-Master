@@ -53,8 +53,11 @@ def _rf_cfg() -> dict:
     }
 
 
-def _dynamic_thresholds(regime: str, profile=None) -> tuple[float, float]:
-    """RS 容忍度与流动性门槛：根据实际市场数据连续计算，非 regime 查表。
+def _dynamic_thresholds(profile=None) -> tuple[float, float]:
+    """RS 容忍度与流动性门槛：由 profile 的强度/波动分位连续驱动。
+
+    旧签名收 regime 形参但函数体从未使用（死参数，2026-09-12 移除）；
+    regime 相关调节由调用方的市场闸门负责，不在本函数。
 
     RS 容忍度：
     - 趋势上行 + 高强度 → 放宽（让强势票过）
@@ -226,20 +229,21 @@ def _fetch_hs300_akshare() -> Optional[pd.Series]:
         return None
 
 
-def _get_hs300_close(ttl_days: int = 1) -> Optional[pd.Series]:
+def _get_hs300_close(use_daily_cache: bool = True) -> Optional[pd.Series]:
     """缓存沪深300 收盘价序列（baostock 主源 + akshare 兜底，东财-free）。
 
     此前仅走 akshare，沙箱/云端指数接口偶发失败会返回 None，
     导致 RS 过滤「数据缺失一律放行」而形同虚设。改为 baostock 主源后
     沙箱稳定可取，云端退 akshare，保证相对强度过滤真正生效。
 
-    缓存按天失效（``ttl_days``，默认 1 天）：长驻服务（Render / FastAPI）若永不
-    失效，跨天后仍用启动当天拉的序列，相对强度基准会越来越旧。
-    ``ttl_days=0`` 表示不缓存（每次重拉）。
+    缓存按自然日失效（旧形参 ttl_days 名为天数实为布尔——传 3 和传 1 行为相同，
+    2026-09-12 更名 use_daily_cache 如实表达）：长驻服务若永不失效，跨天后仍用
+    启动当天拉的序列，相对强度基准会越来越旧。
+    ``use_daily_cache=False`` 表示不缓存（每次重拉）。
     """
     global _HS300_CLOSE_CACHE, _HS300_CACHE_DATE
     today = date.today().isoformat()
-    if _HS300_CLOSE_CACHE is not None and _HS300_CACHE_DATE == today and ttl_days > 0:
+    if _HS300_CLOSE_CACHE is not None and _HS300_CACHE_DATE == today and use_daily_cache:
         return _HS300_CLOSE_CACHE
     s = _fetch_hs300_baostock()
     if s is None:

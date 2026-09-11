@@ -206,7 +206,7 @@ def compute_excess_vs_bench(total_return, cash_pct, hs_series, sd: date, hold_da
         return None
 
 
-def _backtest_one(path: Path, sd: date, hold_days: int, market_profile=None, portfolio_curve=None, dd_thr=8.0, dd_cap=50.0, dd_deep=20.0, out_dir=None) -> dict | None:
+def _backtest_one(path: Path, sd: date, hold_days: int, portfolio_curve=None, dd_thr=8.0, dd_cap=50.0, dd_deep=20.0, out_dir=None) -> dict | None:
     """对单个信号日做前向回测并落盘，返回摘要信息；无有效结果返回 None。"""
     df = pd.read_csv(path, encoding="utf-8-sig")
     if df.empty or "股票代码" not in df.columns:
@@ -258,7 +258,7 @@ def _backtest_one(path: Path, sd: date, hold_days: int, market_profile=None, por
         sd_yyyymmdd = sd.strftime("%Y%m%d")
         idx_ret = _index_20d_return(sd_yyyymmdd)
         # 动态阈值与生产同一函数（随信号日市场状态浮动）；BACKTEST_MIN_AMOUNT 显式设置时可覆盖
-        rs_tol, min_amt_dyn = _dynamic_thresholds(getattr(_prof, "regime", "震荡轮动"), _prof)
+        rs_tol, min_amt_dyn = _dynamic_thresholds(_prof)
         _env_min_amt = os.environ.get("BACKTEST_MIN_AMOUNT")
         _min_amt = float(_env_min_amt) if _env_min_amt else min_amt_dyn
         _regime = getattr(_prof, "regime", None)

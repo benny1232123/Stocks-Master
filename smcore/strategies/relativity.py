@@ -760,16 +760,17 @@ def _evaluate_single_code(
     if latest_close > price_upper_limit:
         return format_stock_code(code), False, {"reason": "above_max_price", "latest_close": latest_close}
 
+    # 阈值逐次从配置现读（旧版用 import 时冻结的模块常量：改 risk_config.json 不重启不生效）
     passed, stats = relative_strength_pass(
         stock_close_df,
         index_close_df,
-        min_overlap_days=RS_MIN_OVERLAP_DAYS,
+        min_overlap_days=int(_RCFG.get("rs_min_overlap_days", 30)),
         up_tol=up_tol,
-        down_outperf=RS_DOWN_OUTPERF,
-        min_up_ratio=RS_MIN_UP_RATIO,
+        down_outperf=float(_RCFG.get("rs_down_outperf", RS_DOWN_OUTPERF)),
+        min_up_ratio=float(_RCFG.get("rs_min_up_ratio", 0.6)),
         min_down_ratio=min_down_ratio,
-        min_up_days=RS_MIN_UP_DAYS,
-        min_down_days=RS_MIN_DOWN_DAYS,
+        min_up_days=int(_RCFG.get("rs_min_up_days", 5)),
+        min_down_days=int(_RCFG.get("rs_min_down_days", 5)),
     )
     meta = {"code": format_stock_code(code), "name": stock_name, "suggested_buy": suggested_buy, **stats}
     return format_stock_code(code), passed, meta

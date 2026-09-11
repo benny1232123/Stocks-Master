@@ -620,6 +620,37 @@ def _fetch_recent_k(code, end_date_text, lookback_days=45, request_interval_seco
     return df.reset_index(drop=True)
 
 
+
+# ── 题材打分参数（2026-09-12 从函数内魔数迁入 risk_config.json「theme_score」段）──
+# 缺省值 = 打分定稿时的原值；改配置即可调权重，无需动代码。
+_THEME_SCORE_DEFAULTS = {
+    "turn5_div": 10.0, "turn5_w": 10.0,
+    "turn_div": 15.0, "turn_w": 5.0,
+    "flow_ratio_div": 2.5, "flow_w": 25.0,
+    "ret5_div": 8.0, "ret5_w": 10.0,
+    "ret20_div": 25.0, "ret20_w": 10.0,
+    "high_start": 0.9, "high_span": 0.1, "high_w": 10.0,
+    "theme_cap_hits": 3, "theme_w": 30.0,
+    "ret5_penalty_threshold": 12.0, "ret20_penalty_threshold": 45.0, "penalty": 5.0,
+}
+
+
+def _load_theme_score_cfg() -> dict:
+    cfg = dict(_THEME_SCORE_DEFAULTS)
+    try:
+        rc_path = PROJECT_ROOT / "smcore" / "strategy" / "risk_config.json"
+        user = (json.loads(rc_path.read_text(encoding="utf-8")).get("theme_score") or {})
+        for k in list(cfg):
+            if k in user:
+                cfg[k] = type(cfg[k])(user[k])
+    except Exception as exc:
+        print(f"[theme] WARN: risk_config.json theme_score 段读取失败（{exc!r}），打分参数回退内置默认", flush=True)
+    return cfg
+
+
+_THE_SCORE = _load_theme_score_cfg()
+
+
 def _calc_score(row):
     latest_turn = row["最新换手率%"]
     avg_turn5 = row["近5日换手均值%"]
@@ -629,20 +660,21 @@ def _calc_score(row):
     near_high = row["距20日高点比"]
     theme_hits = row["题材命中数"]
 
-    turn_score = min(avg_turn5 / 10.0, 1.0) * 10 + min(latest_turn / 15.0, 1.0) * 5
-    flow_score = min(vol_ratio / 2.5, 1.0) * 25
-    mom_score = min(max(ret5, 0.0) / 8.0, 1.0) * 10 + min(max(ret20, 0.0) / 25.0, 1.0) * 10
-    high_score = min(max(near_high - 0.9, 0.0) / 0.1, 1.0) * 10
-    theme_score = min(theme_hits, 3) / 3.0 * 30
+    ts = _THE_SCORE
+    turn_score = min(avg_turn5 / ts["turn5_div"], 1.0) * ts["turn5_w"] + min(latest_turn / ts["turn_div"], 1.0) * ts["turn_w"]
+    flow_score = min(vol_ratio / ts["flow_ratio_div"], 1.0) * ts["flow_w"]
+    mom_score = min(max(ret5, 0.0) / ts["ret5_div"], 1.0) * ts["ret5_w"] + min(max(ret20, 0.0) / ts["ret20_div"], 1.0) * ts["ret20_w"]
+    high_score = min(max(near_high - ts["high_start"], 0.0) / ts["high_span"], 1.0) * ts["high_w"]
+    theme_score = min(theme_hits, ts["theme_cap_hits"]) / float(ts["theme_cap_hits"]) * ts["theme_w"]
 
     # 异动催化加成（同花顺个股异动原因关键词）。无 Key/无命中时为 0，不影响原打分。
     catalyst_boost = float(row.get("异动催化分", 0.0) or 0.0)
 
     penalty = 0.0
-    if ret5 > 12:
-        penalty += 5.0
-    if ret20 > 45:
-        penalty += 5.0
+    if ret5 > ts["ret5_penalty_threshold"]:
+        penalty += ts["penalty"]
+    if ret20 > ts["ret20_penalty_threshold"]:
+        penalty += ts["penalty"]
 
     return round(turn_score + flow_score + mom_score + high_score + theme_score + catalyst_boost - penalty, 2)
 

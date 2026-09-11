@@ -41,7 +41,6 @@ DEFAULT_BOLL_CONTINUOUS_STREAK_CAP = 3   # 同一信号连续触发超过该天�
 DEFAULT_ADJUST = "qfq"
 ADJUST_FLAG_MAP = {"hfq": "1", "qfq": "2", "bfq": "3"}
 
-DEFAULT_DAYS_BACK = 180
 
 # ── 基本面过滤 ──
 DEFAULT_PRICE_UPPER_LIMIT = 30.0

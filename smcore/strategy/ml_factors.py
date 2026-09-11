@@ -133,9 +133,8 @@ def walk_forward_ml(signal_days, codes, cfg: dict) -> dict:
             continue
         pred = _ridge_predict(Xtr, ytr, Xte, c["alphas"])
         ic = _spearman_ic(pred, yte)
-        if ic == ic or ic is not None:  # 非 nan
-            if not np.isnan(ic):
-                ics.append(ic)
+        if ic is not None and not np.isnan(ic):
+            ics.append(ic)
     if len(ics) < int(c["min_folds"]):
         return {"ok": False, "reason": "insufficient_folds", "n_folds": len(ics),
                 "ics": ics, "mean_ic": None, "icir": None, "positive_frac": None}

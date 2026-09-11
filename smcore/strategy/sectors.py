@@ -251,7 +251,15 @@ def compute_sector_momentum(
 
         _bonus_amp = compute_sector_momentum_bonus(medians)
     except Exception:
-        _bonus_amp = SECTOR_MOMENTUM_BONUS
+        # risk_rules 不可达时取配置区间中点（floor+ceil)/2，与自适应输出的量纲一致；
+        # 旧版直接用字面量 6.0，与 floor/ceil 配置脱钩
+        try:
+            from smcore.strategy.risk_rules import CONFIG as _RR_CONFIG
+
+            _sb = _RR_CONFIG.get("sector_momentum_bonus", {})
+            _bonus_amp = (float(_sb.get("floor", 6.0)) + float(_sb.get("ceil", 6.0))) / 2
+        except Exception:
+            _bonus_amp = SECTOR_MOMENTUM_BONUS
 
     sector_bonus: dict[str, float] = {}
     valid = [m for m in medians.values() if m is not None]

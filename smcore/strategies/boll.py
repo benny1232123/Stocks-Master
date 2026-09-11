@@ -143,16 +143,6 @@ def safe_filename_component(s: str, max_len: int = 30) -> str:
     return s[:max_len]
 
 
-def _count_trailing_true(mask_series) -> int:
-    flags = pd.Series(mask_series).fillna(False).astype(bool).tolist()
-    count = 0
-    for item in reversed(flags):
-        if not item:
-            break
-        count += 1
-    return count
-
-
 def _sanitize_table_name(name: str) -> str:
     name = str(name)
     name = name.replace("stock_data/", "").replace(".csv", "").replace("-", "_")

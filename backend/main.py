@@ -35,7 +35,6 @@ from smcore.dashboard import build_dashboard_payload, prewarm_dashboard_cache
 from smcore.holdings import add_trade, clear_trades, portfolio_snapshot, trades_backend_name
 from smcore.selection import get_candidate_codes, run_strategy_fusion, scan_boll_batch
 
-import hmac
 
 from backend.trade_sanitize import _is_corrupt_trade
 from backend.api_auth import _check_api_key

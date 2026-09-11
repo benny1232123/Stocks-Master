@@ -249,7 +249,7 @@ def fuse_signals(
     # 动态过滤阈值（RS 容忍度 / 流动性门槛随市浮动）
     rs_tol, min_amt = (RS_TOL, min_signal_amount)
     if dynamic_thresholds:
-        rs_tol, min_amt = _dynamic_thresholds(regime, profile)
+        rs_tol, min_amt = _dynamic_thresholds(profile)
 
     # ── 自适应策略权重（核心）：纯数据驱动，零硬编码 ──
     # 权重 = softmax(近期 edge) + 贝叶斯收缩 + 向等权收缩 + 清零门，

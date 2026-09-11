@@ -28,21 +28,6 @@ STRATEGY_PATTERNS = {
 
 CACHE_TABLE = "strategy_cache"
 
-SCHEMA_SQL = """\
-CREATE TABLE IF NOT EXISTS strategy_cache (
-    id          BIGSERIAL PRIMARY KEY,
-    strategy    TEXT NOT NULL,
-    trade_date  TEXT NOT NULL,
-    csv_content TEXT NOT NULL,
-    row_count   INTEGER DEFAULT 0,
-    created_at  TIMESTAMPTZ DEFAULT now(),
-    UNIQUE(strategy, trade_date)
-);
-ALTER TABLE strategy_cache ENABLE ROW LEVEL SECURITY;
--- 注意（2026-09-12）：不要再创建 "allow_all" USING(true) 全放行策略——
--- 那等于把 anon key 变成全表读写删凭证。请改用 service-role key 访问
--- （service role 绕过 RLS）， anon role 不授任何 policy 即默认全部拒绝。
-"""
 
 
 def _load_env_file():

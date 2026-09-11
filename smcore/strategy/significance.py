@@ -42,8 +42,8 @@ def _skew(xs: list[float]) -> float:
     return (sum((x - m) ** 3 for x in xs) / n) / (s ** 3)
 
 
-def _excess_kurtosis(xs: list[float]) -> float:
-    """总峰度（scipy 约定，正态=3）。返回 3 表示 excess kurtosis=0。"""
+def _kurtosis(xs: list[float]) -> float:
+    """总峰度（正态=3）。注意：不是"超额峰度"——旧名 _excess_kurtosis 名不符实，已更正。"""
     n = len(xs)
     if n < 4:
         return 3.0
@@ -72,7 +72,7 @@ def probabilistic_sharpe(returns: list[float], sr_benchmark: float = 0.0) -> flo
     if sr is None or n < 3:
         return None
     g3 = _skew(returns)
-    g4 = _excess_kurtosis(returns)
+    g4 = _kurtosis(returns)
     denom = math.sqrt(max(1e-12, 1 - g3 * sr + (g4 - 1) / 4 * sr * sr))
     z = (sr - sr_benchmark) * math.sqrt(n - 1) / denom
     return NormalDist().cdf(z)
@@ -141,7 +141,7 @@ def t_stat_multiple_testing(returns: list[float], sr_benchmark: float = 0.0,
     if sr is None or n < 3:
         return 0.0, False
     g3 = _skew(returns)
-    g4 = _excess_kurtosis(returns)
+    g4 = _kurtosis(returns)
     denom = math.sqrt(max(1e-12, 1 - g3 * sr + (g4 - 1) / 4 * sr * sr))
     t = sr * math.sqrt(n - 1) / denom if denom > 0 else sr * math.sqrt(n - 1)
     return t, (t >= min_t_stat)
@@ -168,7 +168,7 @@ def significance_report(returns: list[float], n_trials: int = 1, sr_benchmark: f
             "significance": significance, "min_t_stat": min_t_stat,
         }
     g3 = _skew(returns)
-    g4 = _excess_kurtosis(returns)
+    g4 = _kurtosis(returns)
     t, t_ok = t_stat_multiple_testing(returns, sr_benchmark, min_t_stat)
     psr = probabilistic_sharpe(returns, sr_benchmark)
     sr_crit = deflated_sharpe_critical(sr_benchmark, n, n_trials, significance, g3, g4)

@@ -28,9 +28,19 @@ import requests
 
 from smcore.utils.code import to_thscode, format_stock_code
 
-_BASE = os.getenv("HITHINK_BASE", "https://fuyao.aicubes.cn").rstrip("/")
-_API_KEY = (os.getenv("HITHINK_FINANCE_API_KEY") or "").strip()
-_TIMEOUT = float(os.getenv("HITHINK_TIMEOUT", "20"))
+def _base() -> str:
+    return os.getenv("HITHINK_BASE", "https://fuyao.aicubes.cn").rstrip("/")
+
+
+def _api_key() -> str:
+    return (os.getenv("HITHINK_FINANCE_API_KEY") or "").strip()
+
+
+def _timeout() -> float:
+    try:
+        return float(os.getenv("HITHINK_TIMEOUT", "20"))
+    except (TypeError, ValueError):
+        return 20.0
 _SH = timezone(timedelta(hours=8))  # Asia/Shanghai，避免引入 pytz
 
 # 本项目 adjust(qfq/hfq/bfq) → 同花顺 adjust(forward/backward/none)
@@ -46,7 +56,7 @@ _ADJ_MAP = {
 
 def available() -> bool:
     """API Key 是否已配置（决定是否启用本后端）。"""
-    return bool(_API_KEY)
+    return bool(_api_key())
 
 
 def _ms(d) -> int:
@@ -75,13 +85,13 @@ def _num(v):
 
 def _get(path: str, params: dict | None = None, retries: int = 2):
     """GET 并解包 data；任何失败/业务错误返回 None（fail-soft）。"""
-    if not _API_KEY:
+    if not _api_key():
         return None
-    url = _BASE + path
-    headers = {"X-api-key": _API_KEY}
+    url = _base() + path
+    headers = {"X-api-key": _api_key()}
     for _ in range(retries + 1):
         try:
-            r = requests.get(url, params=params, headers=headers, timeout=_TIMEOUT)
+            r = requests.get(url, params=params, headers=headers, timeout=_timeout())
             body = r.json()
             if body.get("code") != 0:
                 return None
@@ -127,7 +137,7 @@ def fetch_historical_k(code, start: date, end: date, adjust: str = "qfq") -> pd.
 # ───────────────────────── 行情快照 ─────────────────────────
 def fetch_snapshot(codes) -> pd.DataFrame:
     """最新行情快照；codes 可 6位/ths；返回 thscode,last_price,... 的 DataFrame。"""
-    if not _API_KEY:
+    if not _api_key():
         return pd.DataFrame()
     if isinstance(codes, (list, tuple, set)):
         ts_list = [to_thscode(c) for c in codes]
@@ -194,7 +204,7 @@ def fetch_valuation(codes) -> dict:
     返回字段：pe_ttm/pe_mrq/pb_mrq/ps_ttm/pcf_ttm。本系统映射 pe=pe_ttm、pb=pb_mrq。
     **不含市值**（mkt_cap 仍走腾讯 qt.gtimg.cn）。fail-soft：无 Key/失败返回 {}。
     """
-    if not _API_KEY:
+    if not _api_key():
         return {}
     if isinstance(codes, (str, int)):
         codes = [str(codes)]
