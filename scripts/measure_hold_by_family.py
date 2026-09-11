@@ -35,18 +35,25 @@ OUT_DIR = STOCK_DATA_DIR / "measure_reports"
 def load_signals() -> pd.DataFrame:
     frames = []
     for dal in sorted(STOCK_DATA_DIR.glob("Daily-Action-List-*.csv")):
+        # 日期在文件名里（DAL 行内无「日期」列）
         tag = dal.stem.replace("Daily-Action-List-", "")
-        if not tag.isdigit():
+        if not tag.isdigit() or len(tag) != 8:
+            continue
+        try:
+            sig_date = pd.Timestamp(tag)
+        except ValueError:
             continue
         try:
             df = pd.read_csv(dal, encoding="utf-8-sig", dtype=str)
         except Exception:
             continue
-        if df.empty or "股票代码" not in df.columns or "日期" not in df.columns:
+        if df.empty or "股票代码" not in df.columns:
             continue
-        df = df[["日期", "股票代码", "来源策略"]].copy()
-        df["来源策略"] = df.get("来源策略", "").fillna("")
-        frames.append(df)
+        strat = df["来源策略"].fillna("") if "来源策略" in df.columns else ""
+        df = df[["股票代码"]].copy()
+        df["来源策略"] = strat
+        df["日期"] = sig_date
+        frames.append(df[["日期", "股票代码", "来源策略"]])
     if not frames:
         return pd.DataFrame(columns=["日期", "代码"])
     out = pd.concat(frames, ignore_index=True)
