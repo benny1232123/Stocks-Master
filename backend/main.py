@@ -47,8 +47,13 @@ from backend.admin_api import router as admin_router
 # Render 公网部署下等于写接口裸奔（2026-09-12 反转默认；本地开发不受影响）。
 def _require_api_key(request: Request, x_api_key: str | None = Header(default=None)) -> None:
     try:
-        client_host = request.client.host if request.client else ""
-        _check_api_key(x_api_key, client_host=client_host)
+        _check_api_key(
+            x_api_key,
+            client_host=request.client.host if request.client else "",
+            origin=request.headers.get("origin", ""),
+            referer=request.headers.get("referer", ""),
+            host=request.headers.get("host", ""),
+        )
     except ValueError as exc:
         raise HTTPException(status_code=401, detail=str(exc) or "API key required")
 

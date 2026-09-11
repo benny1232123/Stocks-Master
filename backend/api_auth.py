@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import hmac
 import os
+from urllib.parse import urlparse
 
 # 本机回环：token 未配置时唯一放行的来源
 _LOCAL_HOSTS = frozenset({"127.0.0.1", "::1", "localhost"})
@@ -17,11 +18,30 @@ class ApiKeyError(ValueError):
     """未授权：缺少或错误的 API key（或未配置 token 且来源非本机）。"""
 
 
-def _check_api_key(x_api_key: str | None, *, client_host: str = "") -> None:
+def _same_origin(origin: str, referer: str, host: str) -> bool:
+    """浏览器同源判定：Origin/Referer 的 host 与请求 Host 一致。
+
+    浏览器对所有 POST 自动携带 Origin（同源亦然），无法被跨站页面伪造；
+    curl 等非浏览器请求通常无 Origin/Referer → 按跨源处理（需 API key 或本机）。
+    """
+    for source in (origin, referer):
+        if source:
+            try:
+                if urlparse(source).netloc and urlparse(source).netloc == host:
+                    return True
+            except Exception:
+                continue
+    return False
+
+
+def _check_api_key(x_api_key: str | None, *, client_host: str = "",
+                   origin: str = "", referer: str = "", host: str = "") -> None:
     """校验请求携带的 API key。
 
     - ``API_AUTH_TOKEN`` 已配置 → key 必须与 token 完全一致，否则抛 ``ApiKeyError``。
-    - 未配置 → ``client_host`` 为本机回环时放行（本地开发），否则拒绝并提示配置方法。
+    - 未配置 → 放行三类请求：本机回环（本地开发）、**同源浏览器请求**（看板 UI 的
+      POST 自动带同源 Origin，主人远程使用不受影响）、其余一律拒绝（跨站攻击页
+      的 Origin 必然 ≠ 站点 Host；脚本无 Origin/Referer 同样被拒）。
     """
     token = os.getenv("API_AUTH_TOKEN", "").strip()
     if token:
@@ -33,7 +53,9 @@ def _check_api_key(x_api_key: str | None, *, client_host: str = "") -> None:
         return
     if client_host in _LOCAL_HOSTS:
         return
+    if _same_origin(origin, referer, host):
+        return
     raise ApiKeyError(
-        "API_AUTH_TOKEN not configured: public access to write/heavy endpoints is denied "
-        "(localhost allowed). Set API_AUTH_TOKEN and send X-API-Key to enable remote access."
+        "API_AUTH_TOKEN not configured: cross-origin/script access to write endpoints is denied "
+        "(same-origin dashboard and localhost allowed). Set API_AUTH_TOKEN + X-API-Key for API access."
     )

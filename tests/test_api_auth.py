@@ -41,6 +41,24 @@ def test_no_token_rejects_when_host_unknown():
         _check_api_key(None, client_host="")
 
 
+def test_no_token_allows_same_origin_browser():
+    # 看板 UI 的同源 POST（浏览器自动带 Origin）应放行——主人远程使用不受影响
+    _check_api_key(None, client_host="10.2.3.4",
+                   origin="https://myapp.onrender.com", host="myapp.onrender.com")
+    _check_api_key(None, client_host="10.2.3.4",
+                   referer="https://myapp.onrender.com/admin", host="myapp.onrender.com")
+    # 无 Origin/Referer 的脚本请求 → 拒绝
+    with pytest.raises(ApiKeyError):
+        _check_api_key(None, client_host="10.2.3.4", host="myapp.onrender.com")
+
+
+def test_no_token_rejects_cross_origin_forgery():
+    # 跨站攻击页的 Origin ≠ 站点 Host → 拒绝（CSRF 防线）
+    with pytest.raises(ApiKeyError):
+        _check_api_key(None, client_host="10.2.3.4",
+                       origin="https://evil.example", host="myapp.onrender.com")
+
+
 def test_token_set_correct_key_passes(monkeypatch):
     monkeypatch.setenv("API_AUTH_TOKEN", "secret-token")
     _check_api_key("secret-token", client_host="10.0.0.1")
