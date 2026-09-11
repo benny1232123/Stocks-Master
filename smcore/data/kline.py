@@ -13,7 +13,7 @@ import os
 import sys
 import threading
 import time
-from datetime import date, datetime, timedelta
+from datetime import date, datetime, time as _time, timedelta, timezone
 from pathlib import Path
 
 import pandas as pd
@@ -353,6 +353,53 @@ def _is_fresh(path: Path, max_age_hours: float) -> bool:
     return age <= max_age_hours * 3600
 
 
+# A 股时区固定 UTC+8（无夏令时）。GitHub Actions runner 与 Render 容器默认 UTC：
+# 若用本地时间判定「当日 bar 是否已收盘」，15:30 截止在 UTC 下等于北京 23:30，
+# 会导致整个盘后选股窗口把已收盘的当日 bar 当盘中半成品丢弃（信号静默退化为 D-1 数据）。
+_CN_TZ = timezone(timedelta(hours=8))
+
+
+def _now_cn() -> datetime:
+    """北京时间（显式 UTC+8，不依赖运行环境本地时区）。"""
+    return datetime.now(_CN_TZ)
+
+
+def _today_final_cutoff() -> datetime:
+    """当日 bar 视为「已收盘可落盘」的北京时间时点（15:00 收盘 + 数据源落盘缓冲）。
+
+    可用 KLINE_TODAY_CUTOFF=HH:MM 覆盖（如数据源延迟调晚）。
+    """
+    try:
+        hh, mm = os.getenv("KLINE_TODAY_CUTOFF", "15:30").split(":")[:2]
+        t = _time(int(hh), int(mm))
+    except (ValueError, TypeError):
+        t = _time(15, 30)
+    return datetime.combine(_now_cn().date(), t, tzinfo=_CN_TZ)
+
+
+def _drop_unfinished_today(df: pd.DataFrame) -> pd.DataFrame:
+    """北京时间收盘前丢弃「今天」的 bar。
+
+    盘中数据源返回的当日实时 bar 会被当成收盘价写进缓存并毒化之后所有同日请求
+    （signals/布林/收益全部基于半成品 bar）；统一丢弃保证日线指标只依赖已收盘数据。
+    """
+    if df is None or df.empty or "date" not in df.columns:
+        return df
+    now_cn = _now_cn()
+    if now_cn >= _today_final_cutoff():
+        return df
+    dts = pd.to_datetime(df["date"], errors="coerce").dt.date
+    mask = dts != now_cn.date()
+    dropped = int((~mask).sum())
+    if dropped:
+        print(
+            f"[kline] 丢弃 {dropped} 根未收盘的当日 bar（{now_cn.date()}，收盘前不落盘）",
+            file=sys.stderr,
+        )
+        return df[mask].reset_index(drop=True)
+    return df
+
+
 def _detect_adjust_drift(cached: pd.DataFrame, fresh: pd.DataFrame) -> float:
     """比对缓存与新拉数据在重叠交易日上的收盘价，返回最大相对偏差。
 
@@ -430,8 +477,17 @@ def fetch_daily_k(
     covers = bool(cache_min and cache_max and cache_min <= request_start and cache_max >= request_end)
     bucket_file = _write_bucket_file(code6, adjust)
     fresh = _is_fresh(bucket_file, max_cache_age_hours) if bucket_file.exists() else False
-    if covers and (fresh or request_end < date.today() - timedelta(days=1)):
-        return _slice(cached, request_start, request_end)
+    # 盘后自愈：请求包含今天（北京日历）、当前已过收盘时点、但缓存桶是收盘前写的 →
+    # 缓存里的当日 bar 必是盘中半成品，不允许 fresh 短路放行，落到下方增量重拉取回真实收盘 bar。
+    if (
+        request_end >= _now_cn().date()
+        and _now_cn() >= _today_final_cutoff()
+        and bucket_file.exists()
+        and datetime.fromtimestamp(bucket_file.stat().st_mtime, tz=_CN_TZ) < _today_final_cutoff()
+    ):
+        fresh = False
+    if covers and (fresh or request_end < _now_cn().date() - timedelta(days=1)):
+        return _drop_unfinished_today(_slice(cached, request_start, request_end))
 
     segments: list[tuple[date, date]] = []
     if force_refresh or cached.empty or cache_min is None:
@@ -570,6 +626,8 @@ def fetch_daily_k(
                 f"（可能是真实除权/停复牌导致的合法大跳变）。"
             )
 
+    # 收盘前丢弃当日未完成 bar（含缓存里历史残留的半成品），再落盘
+    merged = _drop_unfinished_today(merged)
     if use_cache and not merged.empty:
         write_kline_cache(merged, code6, adjust)
     return _slice(merged, request_start, request_end) if not merged.empty else _empty_df()

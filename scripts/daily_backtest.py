@@ -48,6 +48,8 @@ from smcore.strategy.fusion import (
     _compute_boll_levels,
     _get_hs300_close,
 )
+# 动态阈值 + 趋势守卫 + 市场闸门：内联过滤与生产 fusion 完全同源
+from smcore.strategy.regime_filter import _dynamic_thresholds, _passes_trend_guard
 # 多维市场仪表盘：波动率自适应风控的共同输入
 from smcore.strategy.market import compute_market_profile
 # 自适应现金：波动率分位 S 型曲线 + 趋势 regime 调整（替代硬编码 _VOL_POS_SCALE_MAP）
@@ -236,18 +238,30 @@ def _backtest_one(path: Path, sd: date, hold_days: int, market_profile=None, por
         df["_pre_s"] = pd.to_numeric(df["综合评分"], errors="coerce")
         df = df.sort_values("_pre_s", ascending=False).head(FILTER_PRE_TOP_N).drop(columns=["_pre_s"]).reset_index(drop=True)
 
-    # ② 内联 RS 过滤 + 流动性门槛（与 fusion.py 生产融合逻辑一致，
-    #    确保 daily_backtest 的回测输入与「当天新跑 fusion」的输出等价）
+    # ② 内联过滤（与 fusion.py 生产融合完全同源）：市场闸门 + RS 过滤（动态阈值）
+    #    + 流动性门槛（动态门槛）+ 趋势守卫，确保回测输入 = 「当天新跑 fusion」的输出。
+    #    旧版用固定 3%/¥1亿 且缺闸门与趋势守卫，系统性偏离生产口径。
     _inline_filter_enabled = os.environ.get("BACKTEST_INLINE_FILTER", "1") == "1"
-    rs_dropped = liq_dropped = vol_dropped = 0
+    rs_dropped = liq_dropped = vol_dropped = gate_dropped = tg_dropped = 0
     # 个股波动率上限（入场过滤实验开关）：20260905 交易归因显示 vol20>4% 的入场
     # （277笔）均值仅 +1.37%，且集中 66% 的 stop_hard（15% 上限止损+跌停尾部）；
     # 3~4% 区间反而是最优桶（+3.74%）。默认 0=关闭；设 0.04 启用。
     _max_vol20 = float(os.environ.get("BACKTEST_MAX_VOL20", "0"))
+    # 市场仪表盘按「信号日 as-of」计算（因果安全），供动态阈值/闸门/仓位缩放共用；
+    # compute_market_profile 对指数全量序列做进程内缓存，逐信号日切片开销可忽略。
+    _prof = None
+    try:
+        _prof = compute_market_profile(as_of=sd)
+    except Exception:
+        _prof = None
     if _inline_filter_enabled and len(df) > 0:
         sd_yyyymmdd = sd.strftime("%Y%m%d")
         idx_ret = _index_20d_return(sd_yyyymmdd)
-        _min_amt = float(os.environ.get("BACKTEST_MIN_AMOUNT", "100000000"))  # default ¥1亿
+        # 动态阈值与生产同一函数（随信号日市场状态浮动）；BACKTEST_MIN_AMOUNT 显式设置时可覆盖
+        rs_tol, min_amt_dyn = _dynamic_thresholds(getattr(_prof, "regime", "震荡轮动"), _prof)
+        _env_min_amt = os.environ.get("BACKTEST_MIN_AMOUNT")
+        _min_amt = float(_env_min_amt) if _env_min_amt else min_amt_dyn
+        _regime = getattr(_prof, "regime", None)
         _keep_mask = []
         _filter_total = len(df)
         for _fi, (_, row) in enumerate(df.iterrows()):
@@ -255,11 +269,16 @@ def _backtest_one(path: Path, sd: date, hold_days: int, market_profile=None, por
                 print(f"  [过滤] {_fi+1}/{_filter_total} ...", flush=True)
             code = str(row["股票代码"]).strip()
             hit = [s.strip().lower() for s in str(row.get("来源策略", "")).split("/") if s.strip()]
+            # 市场闸门：下行防御时剔除纯均值回归票（与 fusion 趋势闸门同源）
+            if _regime == "下行防御" and hit and set(hit) <= {"boll", "relativity"}:
+                gate_dropped += 1
+                _keep_mask.append(False)
+                continue
             # RS 过滤（K 线失败容错：lv 为空则放行，避免数据源抖动把整份清单误杀）
             lv = _lv(code)
             stock_ret = lv.get("ret20")
             amt = lv.get("amount")
-            if not _passes_relative_strength_filter(hit, stock_ret, idx_ret):
+            if not _passes_relative_strength_filter(hit, stock_ret, idx_ret, tol=rs_tol):
                 rs_dropped += 1
                 _keep_mask.append(False)
                 continue
@@ -277,9 +296,16 @@ def _backtest_one(path: Path, sd: date, hold_days: int, market_profile=None, por
                     continue
             _keep_mask.append(True)
         df = df[_keep_mask].reset_index(drop=True)
-        if rs_dropped or liq_dropped or vol_dropped:
-            print(f"  [内联过滤] RS剔除={rs_dropped} 流动性剔除={liq_dropped} "
-                  f"波动率剔除={vol_dropped} 保留={len(df)}")
+        # 趋势守卫：价格远低于 MA20 的破位股剔除（DAL 已带 最新价/MA20 列，缺失时保守放行）
+        if "最新价" in df.columns and "MA20" in df.columns and len(df) > 0:
+            _tg_mask = df.apply(
+                lambda r: _passes_trend_guard(r.get("最新价"), r.get("MA20")), axis=1
+            )
+            tg_dropped = int((~_tg_mask).sum())
+            df = df[_tg_mask].reset_index(drop=True)
+        if rs_dropped or liq_dropped or vol_dropped or gate_dropped or tg_dropped:
+            print(f"  [内联过滤] 闸门剔除={gate_dropped} RS剔除={rs_dropped} 流动性剔除={liq_dropped} "
+                  f"趋势守卫剔除={tg_dropped} 波动率剔除={vol_dropped} 保留={len(df)}")
 
     # 按综合评分取前 TOP_N，避免信号过多导致仓位被摊薄、权益曲线近乎不动
     if "综合评分" in df.columns:
@@ -317,16 +343,9 @@ def _backtest_one(path: Path, sd: date, hold_days: int, market_profile=None, por
     cash_pct = 0.0
     dd_breaker_dd = 0.0
     dd_breaker_extra = 0
-    # 市场仪表盘按「信号日 as-of」计算（因果安全）：旧版把「今天」的波动率分位/regime
-    # 套用到窗口内全部历史信号日——既引入未来函数，又使同一信号日每天重跑结果漂移。
-    # compute_market_profile 对指数全量序列做进程内缓存，逐信号日切片开销可忽略；
+    # 信号日 as-of 的市场仪表盘已在内联过滤前算好（_prof），此处直接复用：
     # 出场参数自适应（compute_adaptive_exit_params）同样只用该 as-of profile。
     # market_profile 形参保留仅为兼容旧调用方签名，不再使用（忽略传入值）。
-    _prof = None
-    try:
-        _prof = compute_market_profile(as_of=sd)
-    except Exception:
-        _prof = None
     _dd_val = portfolio_curve.drawdown_as_of(sd) if portfolio_curve is not None else None
     dd_breaker_dd = _dd_val or 0.0
     _dr = None

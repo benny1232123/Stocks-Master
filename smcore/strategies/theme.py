@@ -20,6 +20,7 @@ import pandas as pd
 
 from smcore.config.defaults import PROJECT_ROOT, STOCK_DATA_DIR
 from smcore.data.session import login
+from smcore.strategies.replay_guard import is_replay_mode, stamp_replay_meta
 
 try:
     from smcore.data import hithink as _hk
@@ -98,9 +99,35 @@ def _throttle_bs_request(interval_seconds):
         _BS_NEXT_ALLOWED_AT = now + interval
 
 
-def _latest_hot_sector_file():
+def _as_of_tag():
+    """信号日标签（YYYYMMDD）。重放经 run_strategy_for_date 冻结 datetime.now 后即信号日。"""
+    return datetime.datetime.now().strftime("%Y%m%d")
+
+
+def _file_date_tag(path) -> str:
+    """从文件名提取 8 位日期（如 CCTV-Hot-Sectors-20250815.csv → 20250815），无日期返回空串。"""
+    m = re.findall(r"(\d{8})", str(getattr(path, "name", path)))
+    return m[-1] if m else ""
+
+
+def _select_dated_file(files, as_of_tag: str):
+    """从候选文件（须已按 mtime 降序）中选与信号日匹配的那份：
+    优先精确同日；无同日则在日期 ≤ 信号日的文件里取最新（陈旧但因果安全）。
+    绝不使用日期晚于信号日的文件——回放历史日时 mtime 最新的文件往往是"未来"的热点，
+    直接借用等于把未来热点泄露给历史信号。"""
+    exact = [f for f in files if _file_date_tag(f) == as_of_tag]
+    if exact:
+        return exact[0]
+    older = [f for f in files if _file_date_tag(f) and _file_date_tag(f) < as_of_tag]
+    if older:
+        print(f"[theme] 信号日 {as_of_tag} 无同日热点文件，回退最近的历史文件: {getattr(older[0], 'name', older[0])}")
+        return older[0]
+    return None
+
+
+def _latest_hot_sector_file(as_of_tag=None):
     files = sorted(_iter_data_files(HOT_SECTOR_PATTERN), key=lambda p: p.stat().st_mtime, reverse=True)
-    return files[0] if files else None
+    return _select_dated_file(files, as_of_tag or _as_of_tag())
 
 
 def _iter_data_files(pattern):
@@ -146,7 +173,13 @@ def _load_shared_seed_universe(max_stocks, trade_day_text, include_gem=False):
         DATA_DIR / f"Stock-Selection-Shared-Seed-{today_tag}.csv",
         DATA_DIR / f"Stock-Selection-Shared-Seed-{trade_tag}.csv",
     ]
-    discovered = sorted(DATA_DIR.glob(SHARED_SEED_PATTERN), key=lambda p: p.stat().st_mtime, reverse=True)
+    # 回退发现路径必须按文件名日期过滤：只允许 ≤ 信号日的 seed（陈旧可容忍），
+    # mtime 最新的文件在回放场景可能是"未来"日期的 seed，会静默污染历史宇宙。
+    discovered = [
+        f
+        for f in sorted(DATA_DIR.glob(SHARED_SEED_PATTERN), key=lambda p: p.stat().st_mtime, reverse=True)
+        if _file_date_tag(f) and _file_date_tag(f) <= today_tag
+    ]
 
     ordered_files = []
     seen = set()
@@ -190,8 +223,8 @@ def _load_shared_seed_universe(max_stocks, trade_day_text, include_gem=False):
     return [], ""
 
 
-def _load_hot_sectors(top_n):
-    f = _latest_hot_sector_file()
+def _load_hot_sectors(top_n, as_of_tag=None):
+    f = _latest_hot_sector_file(as_of_tag)
     if f is None:
         return _fallback_hot_sectors(top_n)
     try:
@@ -245,7 +278,7 @@ def _load_sw_industry_names():
     return result
 
 
-def _load_sector_stock_pool_map(hot_sectors):
+def _load_sector_stock_pool_map(hot_sectors, as_of_tag=None):
     if not hot_sectors:
         return {}
 
@@ -253,7 +286,9 @@ def _load_sector_stock_pool_map(hot_sectors):
     if not files:
         return {}
 
-    path = files[0]
+    path = _select_dated_file(files, as_of_tag or _as_of_tag())
+    if path is None:
+        return {}
     try:
         df = pd.read_csv(path, encoding="utf-8-sig")
     except Exception:
@@ -293,7 +328,7 @@ def _load_sector_stock_pool_map(hot_sectors):
     return out
 
 
-def _load_hot_sector_pool_universe(hot_sectors, include_gem=False):
+def _load_hot_sector_pool_universe(hot_sectors, include_gem=False, as_of_tag=None):
     if not hot_sectors:
         return []
 
@@ -301,7 +336,9 @@ def _load_hot_sector_pool_universe(hot_sectors, include_gem=False):
     if not files:
         return []
 
-    path = files[0]
+    path = _select_dated_file(files, as_of_tag or _as_of_tag())
+    if path is None:
+        return []
     try:
         df = pd.read_csv(path, encoding="utf-8-sig")
     except Exception:
@@ -728,9 +765,10 @@ def _evaluate_theme_candidate(item, hot_sectors, sector_hints, sector_code_map, 
 
 
 def build_strategy_candidates(args, log_path=None):
-    hot_sectors = _load_hot_sectors(args.hot_sector_top_n)
+    as_of_tag = _as_of_tag()
+    hot_sectors = _load_hot_sectors(args.hot_sector_top_n, as_of_tag)
     sector_hints = _load_sector_hints(hot_sectors)
-    sector_code_map = _load_sector_stock_pool_map(hot_sectors)
+    sector_code_map = _load_sector_stock_pool_map(hot_sectors, as_of_tag)
 
     today_text = datetime.datetime.now().strftime("%Y-%m-%d")
     trade_day_text = _latest_trading_day(
@@ -749,15 +787,18 @@ def build_strategy_candidates(args, log_path=None):
             include_gem=args.include_gem,
         )
 
-    hot_pool_universe = _load_hot_sector_pool_universe(hot_sectors, args.include_gem)
+    hot_pool_universe = _load_hot_sector_pool_universe(hot_sectors, args.include_gem, as_of_tag)
     base_count = len(universe)
     universe = _merge_universe_with_hot_pool(universe, hot_pool_universe)
     added_hot_pool = max(len(universe) - base_count, 0)
 
     # 一次性拉取异动催化映射（同花顺个股异动原因 → 催化剂关键词），供候选查表加成。
     # 分批 ≤50 打 API，仅一次；无 Key/失败则空映射 → 打分零影响（fail-soft）。
+    # 回放模式必须跳过：异动是"当前时刻"的实时接口，重放历史日等于注入未来催化分。
     anomaly_kw_map = {}
-    if _hithink_ready():
+    if _hithink_ready() and is_replay_mode():
+        _append_log(log_path, "回放模式：跳过异动催化映射（实时接口，重放即前视污染）")
+    elif _hithink_ready():
         try:
             anomaly_kw_map = _hks.anomaly_keywords_map([it["code"] for it in universe])
             _append_log(log_path, f"异动催化映射: 命中 {len(anomaly_kw_map)} 只")
@@ -879,6 +920,13 @@ def run_theme():
             out_path = (ROOT_DIR / out_path).resolve()
     else:
         out_path = DATA_DIR / f"Stock-Selection-Ashare-Theme-Turnover-{today_text}.csv"
+
+    # 回放侧标：theme 的共享候选池来自 boll 的 Shared-Seed（boll 宇宙非 PIT），如实声明
+    stamp_replay_meta(
+        out_path,
+        universe_pit=False,
+        reasons=["共享候选池(Shared-Seed)来自 boll 资金流宇宙（EM 实时接口，非 point-in-time）"],
+    )
 
     if result_df.empty:
         # 即使 0 候选也写空文件（让 fusion 能区分「跑了但为空」vs「没跑过」）

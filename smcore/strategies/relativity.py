@@ -240,14 +240,22 @@ def resolve_report_dates(now: datetime) -> tuple[str, str, list[str], int]:
     return report_date_profit, report_date_holder, zcfz_dates, current_year
 
 
-def get_fund_flow_codes(price_upper_limit: float, price_lower_limit: float, sleep_seconds: float) -> dict[str, list[str]]:
+def get_fund_flow_codes(
+    price_upper_limit: float,
+    price_lower_limit: float,
+    sleep_seconds: float,
+    as_of: str | None = None,
+) -> dict[str, list[str]]:
     out: dict[str, list[str]] = {}
     period_map = [("3日排行", "3"), ("5日排行", "5"), ("10日排行", "10")]
+    # 资金流排行是逐日变化的数据，缓存键必须含日期：否则本地优先语义下首次成功后
+    # 宇宙被永久冻结在运行日（实盘 bug），回放历史信号日又会读到未来榜单（前视污染）。
+    day = as_of or datetime.now().strftime("%Y%m%d")
 
     for period, period_name in period_map:
         df = fetch_data_with_fallback(
             ak.stock_fund_flow_individual,
-            f"stock_data/{period_name}-days-positive-funds.csv",
+            f"stock_data/{period_name}-days-positive-funds-{day}.csv",
             symbol=period,
         )
         if not df.empty:
@@ -271,7 +279,10 @@ def get_fundamental_codes(
     zcfz_dates: list[str],
     current_year: int,
     sleep_seconds: float,
+    as_of: str | None = None,
 ) -> tuple[list[str], list[str], list[str], list[str]]:
+    # 盈利预测是实时快照（预测会被持续修正），缓存键必须含日期，理由同 get_fund_flow_codes
+    day = as_of or datetime.now().strftime("%Y%m%d")
     zcfz_codes_list: list[str] = []
     for date_str in zcfz_dates:
         s_zcfz_df = fetch_data_with_fallback(
@@ -309,7 +320,7 @@ def get_fundamental_codes(
 
     profit_forecast_df = fetch_data_with_fallback(
         ak.stock_profit_forecast_em,
-        "stock_data/stock_profit_forecast_em.csv",
+        f"stock_data/stock_profit_forecast_em-{day}.csv",
     )
     profit_forecast_codes: list[str] = []
     if not profit_forecast_df.empty:
@@ -1016,13 +1027,16 @@ def run_relativity() -> None:
         final_candidate_codes = seed_codes
         code_name_map = dict(seed_name_map)
     else:
-        fund_flow_codes = get_fund_flow_codes(args.price_upper_limit, args.price_lower_limit, args.sleep_seconds)
+        fund_flow_codes = get_fund_flow_codes(
+            args.price_upper_limit, args.price_lower_limit, args.sleep_seconds, as_of=today_text
+        )
         cashflow_codes, profit_codes, zcfz_codes, profit_forecast_codes = get_fundamental_codes(
             args.debt_asset_ratio_limit,
             report_date_profit,
             zcfz_dates,
             current_year,
             args.sleep_seconds,
+            as_of=today_text,
         )
 
         candidate_codes = build_candidate_codes(
@@ -1040,6 +1054,16 @@ def run_relativity() -> None:
             max_workers=max(1, int(args.holder_max_workers)),
         )
         code_name_map = get_code_name_map()
+
+    # ST/退市风险股一律不入选：名称含 ST（含 *ST/SST 变体）即剔除；名称缺失时保守放行
+    _pre_st = len(final_candidate_codes)
+    final_candidate_codes = [
+        c
+        for c in final_candidate_codes
+        if "ST" not in str(code_name_map.get(format_stock_code(c), "")).upper()
+    ]
+    if len(final_candidate_codes) != _pre_st:
+        print(f"[相对强弱] ST 过滤剔除 {_pre_st - len(final_candidate_codes)} 只风险警示股")
 
     if final_candidate_codes and any(not code_name_map.get(format_stock_code(c), "") for c in final_candidate_codes):
         # seed模式优先只读本地缓存，避免重复触发远端接口调用。
@@ -1091,6 +1115,14 @@ def run_relativity() -> None:
         pass  # 单例自动管理登出（进程退出时）
 
     out_path = STOCK_DATA_DIR / f"Stock-Selection-Relativity-{today_text}.csv"
+    # 回放侧标：relativity 宇宙来自 EM 资金流排行/财报名单（实时接口，无历史榜单），
+    # 历史重放的候选池不是 point-in-time，产物不可作为策略有效性证据
+    from smcore.strategies.replay_guard import stamp_replay_meta
+    stamp_replay_meta(
+        out_path,
+        universe_pit=False,
+        reasons=["候选池来自 EM 资金流排行 + 当前财报名单（实时接口，非 point-in-time）"],
+    )
     if selected_rows:
         out_df = pd.DataFrame(selected_rows)
         if RS_CHECKPOINT_PASS_COL in out_df.columns:

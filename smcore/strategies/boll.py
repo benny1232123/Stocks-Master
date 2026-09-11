@@ -53,6 +53,7 @@ from smcore.config.defaults import (
 )
 from smcore.data import fetch_daily_k
 from smcore.indicators.boll import calc_bollinger, evaluate_boll_signal
+from smcore.strategies.replay_guard import stamp_replay_meta
 from smcore.utils.code import format_stock_code
 
 # ── 默认参数（与原始脚本一致）──
@@ -225,6 +226,11 @@ def _compute_report_dates(today: str | None = None):
     }
 
 
+def _is_st_name(name: str) -> bool:
+    """名称含 ST（含 *ST/SST 变体）即视为风险警示股；A 股正常股票名不含字母 ST。"""
+    return bool(name) and "ST" in str(name).upper()
+
+
 def _fetch_kline_baostock(fncode_dotted: str, start_date: str, end_date: str) -> pd.DataFrame:
     """用 baostock 拉前复权日线，返回含 close 的 DataFrame。失败返回空。"""
     rs = bs.query_history_k_data_plus(
@@ -246,7 +252,11 @@ def _fetch_kline_baostock(fncode_dotted: str, start_date: str, end_date: str) ->
     required = ["date", "code", "open", "high", "low", "close", "preclose"]
     if not set(required).issubset(df.columns):
         return pd.DataFrame()
-    df = df[required]
+    # 保留 tradestatus/isST 供 ST/停牌过滤（akshare 回退路径无此字段，由名称过滤兜底）
+    keep = required + [c for c in ("tradestatus", "isST") if c in df.columns]
+    df = df[keep]
+    if "tradestatus" in df.columns:
+        df = df[df["tradestatus"].astype(str) == "1"]  # 停牌日平价 bar 会钝化 MA/STD，剔除
     df["close"] = pd.to_numeric(df["close"], errors="coerce")
     df = df.dropna(subset=["close"]).reset_index(drop=True)
     return df
@@ -492,6 +502,9 @@ def run_boll(
 
     for fncode in final_candidate_codes:
         stock_name = code_name_map.get(format_stock_code(fncode), "")
+        if _is_st_name(stock_name):
+            print(f"{fncode} {stock_name} 跳过: ST/退市风险股")
+            continue
         kdf = pd.DataFrame()
         if bs_login_ok:
             try:
@@ -501,6 +514,10 @@ def run_boll(
         if kdf.empty:
             kdf = _fetch_kline_akshare(format_stock_code(fncode), start_date, end_date_text)
         if kdf.empty or len(kdf) < 20:
+            continue
+        # baostock 路径的 isST 双重确认（akshare 回退无该字段，名称过滤已兜底）
+        if "isST" in kdf.columns and str(kdf["isST"].iloc[-1]).strip() in ("1", "1.0"):
+            print(f"{fncode} {stock_name} 跳过: isST=1")
             continue
 
         boll_df = calc_bollinger(kdf, window=20, k=k)
@@ -527,7 +544,7 @@ def run_boll(
         else:
             print(f"{fncode} {stock_name} 未触发(布林): {sig['signal']}")
 
-        if do_plot and plot_saved_count < PLOT_MAX_COUNT and (not PLOT_ONLY_SELECTED or selected):
+        if do_plot and plot_saved_count < PLOT_MAX_COUNT and (not PLOT_ONLY_SELECTED or sig["selected"]):
             _plot_bollinger(
                 result_df=boll_df, fncode=fncode, k=k, today=today,
                 save_dir=str(PLOT_SAVE_DIR), show=False, stock_name=stock_name,
@@ -537,6 +554,13 @@ def run_boll(
     # 单例自动管理登出（进程退出时 atexit 触发），此处无需手动 logout
 
     out_path = STOCK_DATA_DIR / f"Stock-Selection-Boll-{today}.csv"
+    # 回放侧标：boll 宇宙来自 EM 资金流排行/盈利预测（实时接口，无历史榜单可查），
+    # 历史重放的候选池不是 point-in-time，产物不可作为策略有效性证据
+    stamp_replay_meta(
+        out_path,
+        universe_pit=False,
+        reasons=["候选池来自 EM 资金流 3/5/10 日排行 + 实时盈利预测（实时接口，非 point-in-time）"],
+    )
     if boll_selected_codes:
         out_df = pd.DataFrame({
             "股票代码": [format_stock_code(c) for c in boll_selected_codes],

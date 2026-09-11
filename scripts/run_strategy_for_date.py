@@ -99,6 +99,11 @@ def main() -> int:
     strat = sys.argv[1]
     FrozenDate, FrozenDateTime, fixed_d, fixed_dt = _make_frozen(sig)
 
+    # 回放标记：策略模块据此跳过纯实时加成因子 / 给产出盖 universe_pit 侧标
+    # （见 smcore/strategies/replay_guard.py；重放产物不可作为策略有效性证据）
+    os.environ["REPLAY_MODE"] = "1"
+    os.environ["REPLAY_SIGNAL_DATE"] = sig
+
     # 1) 先 import 策略模块（执行其顶层 import 链，固化 from datetime import X 引用）
     mod = importlib.import_module(f"smcore.strategies.{strat}")
     # 2) 修模块 + 全局

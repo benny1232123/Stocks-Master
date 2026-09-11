@@ -259,6 +259,11 @@ def _backfill_records(sd: str, exit_kwargs=None) -> list[dict]:
 # 在 16+ 个权重组合下对同一 sd 重复重算（每组合遍历全部信号日），缓存可消除该冗余 I/O 与重算
 # （sweep 约 16×、recommend 约 49×），并缓解本地沙箱反复读 8000+ CSV 导致的内存压力。
 _DAY_RECORDS_CACHE: dict = {}
+# 生产数据日的记录与出场参数无关，(sd, None) 缓存可服务任意 exit_kwargs；
+# 回补日的 (sd, None) 缓存仅代表 naive 出场，不得短路具体出场参数的请求——
+# 否则 sweep_exits 对回补日全部拿到同一份 naive 记录，"最优出场参数"是空转假象。
+_EXIT_INDEPENDENT_DAYS: set[str] = set()
+_BACKFILL_DAYS: set[str] = set()
 
 
 def _day_records_key(exit_kwargs) -> str | None:
@@ -274,6 +279,8 @@ def _day_records_key(exit_kwargs) -> str | None:
 def clear_day_records_cache() -> None:
     """清除 _day_records 缓存（进程内重扫描或测试隔离时使用）。"""
     _DAY_RECORDS_CACHE.clear()
+    _EXIT_INDEPENDENT_DAYS.clear()
+    _BACKFILL_DAYS.clear()
 
 
 def _day_records(sd: str, exit_kwargs=None) -> list[dict]:
@@ -285,20 +292,24 @@ def _day_records(sd: str, exit_kwargs=None) -> list[dict]:
     与 shrinkage/floor 无关，但调用方常在权重网格下对同一 sd 重复请求，缓存避免重复读盘与重算。
     """
     key = (sd, _day_records_key(exit_kwargs))
-    # (sd, None) 缓存覆盖：①有生产数据的 sd（结果与 exit 无关）；②默认出口(naive)回补。
-    # 具体出场参数的回补只存 (sd, exit_key)，避免污染默认出口请求。缓存查询置于 prod 探测之前，
+    # (sd, None) 缓存仅在两种情况下可复用到当前请求：①请求本身是默认出口；
+    # ②该日已知有生产数据（记录与 exit 无关）。缓存查询置于 prod 探测之前，
     # 使重复请求不再触发底层读盘（这是 sweep/recommend 性能收益与沙箱 OOM 缓解的关键）。
-    cached = _DAY_RECORDS_CACHE.get((sd, None))
-    if cached is not None:
-        return cached
+    if key == (sd, None) or sd in _EXIT_INDEPENDENT_DAYS:
+        cached = _DAY_RECORDS_CACHE.get((sd, None))
+        if cached is not None:
+            return cached
     if key != (sd, None):
         cached = _DAY_RECORDS_CACHE.get(key)
         if cached is not None:
             return cached
-    prod = _multi_backtest_records(sd)
-    if prod:
-        _DAY_RECORDS_CACHE[(sd, None)] = prod
-        return prod
+    if sd not in _BACKFILL_DAYS:
+        prod = _multi_backtest_records(sd)
+        if prod:
+            _DAY_RECORDS_CACHE[(sd, None)] = prod
+            _EXIT_INDEPENDENT_DAYS.add(sd)
+            return prod
+        _BACKFILL_DAYS.add(sd)
     back = _backfill_records(sd, exit_kwargs=exit_kwargs)
     _DAY_RECORDS_CACHE[key] = back
     if exit_kwargs is None:

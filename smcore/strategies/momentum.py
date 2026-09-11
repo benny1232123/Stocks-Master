@@ -32,10 +32,12 @@ import time
 from datetime import datetime, timedelta
 
 import akshare as ak
+import baostock as bs
 import pandas as pd
 
 from smcore.config.defaults import STOCK_DATA_DIR
 from smcore.data.kline import fetch_daily_k
+from smcore.data.session import login as bs_login
 from smcore.utils.code import format_stock_code
 
 
@@ -166,6 +168,48 @@ def _load_all_codes() -> list[tuple[str, str]]:
         return []
 
 
+def _load_pit_codes(day_text: str) -> list[tuple[str, str]]:
+    """point-in-time 全市场代码表（信号日当日真实在市股票），消除幸存者偏差。
+
+    baostock `query_all_stock(day)` 返回该交易日所有在市证券（含指数）：
+    - 保留 sh.6xxxxx / sz.0xxxxx / sz.3xxxxx 个股；
+    - 剔除指数（sh.000xxx 上证系列、sz.39xxxx 深证系列）与北交所（bj./43/83/87/92）。
+    失败回退 `_load_all_codes()`（现存名单，带幸存者偏差告警）。
+    """
+    if not bs_login():
+        print("[动量] WARN: baostock 登录失败，回退现存代码表（有幸存者偏差）")
+        return _load_all_codes()
+    try:
+        rs = bs.query_all_stock(day=day_text)
+        if rs is None or rs.error_code != "0":
+            raise RuntimeError(f"error_code={getattr(rs, 'error_code', None)}")
+        rows = []
+        while rs.next():
+            rows.append(rs.get_row_data())
+        fields = list(getattr(rs, "fields", []) or [])
+        if not rows or "code" not in fields:
+            raise RuntimeError("返回为空")
+        df = pd.DataFrame(rows, columns=fields)
+        name_col = "code_name" if "code_name" in df.columns else None
+        out: list[tuple[str, str]] = []
+        for _, r in df.iterrows():
+            dotted = str(r["code"]).strip()  # 形如 sh.600000 / sz.000001
+            if dotted.startswith(("sh.000", "sz.39", "bj.")):
+                continue  # 指数 / 北交所
+            if not dotted.startswith(("sh.6", "sz.0", "sz.3")):
+                continue
+            code6 = dotted.split(".", 1)[1]
+            name = str(r[name_col]).strip() if name_col else ""
+            out.append((code6, name))
+        if out:
+            print(f"[动量] point-in-time 宇宙（{day_text}）：{len(out)} 只（baostock query_all_stock）")
+            return out
+        raise RuntimeError("过滤后为空")
+    except Exception as exc:
+        print(f"[动量] WARN: point-in-time 宇宙获取失败（{exc}），回退现存代码表（有幸存者偏差）")
+        return _load_all_codes()
+
+
 def _get_kline(code: str, start: str, end: str) -> pd.DataFrame | None:
     """K线获取：重放多日期时走进程级内存缓存（一次读取，跨日期复用）。"""
     cached = _KLINE_MEM_CACHE.get(code)
@@ -288,8 +332,11 @@ def _score_candidate(m: dict, args: argparse.Namespace) -> float | None:
     )
     if m["vol_confirm"]:
         score += VOL_CONFIRM_BONUS
-    # 距高点过近视为追高略降分；过远视为转弱剔除（阈值均走 config）
-    if m["dist_from_high"] > NEAR_HIGH_THRESHOLD:
+    # 距高点过近视为追高略降分；过远视为转弱剔除（阈值均走 config）。
+    # dist_from_high = last/high20 - 1 恒 ≤ 0（close 不可能超过 20 日最高），
+    # 「距 20 日高点 2% 以内」的正确判据是 dist > -NEAR_HIGH_THRESHOLD；
+    # 旧代码写成 > +0.02 恒为假，追高惩罚从未生效。
+    if m["dist_from_high"] > -NEAR_HIGH_THRESHOLD:
         score -= NEAR_HIGH_PENALTY
     if m["dist_from_high"] < FAR_FROM_HIGH_THRESHOLD:
         return None
@@ -320,9 +367,12 @@ def _save_rows(rows: list[dict], today_text: str, args: argparse.Namespace) -> N
 
 def _run_replay(args: argparse.Namespace, today_text: str) -> None:
     """重放模式：全市场 K 线宇宙（无快照前视）。宇宙/价格/成交额/动量全部取自信号日数据。"""
-    codes = _load_all_codes()
+    # 宇宙用 point-in-time 源（信号日当日真实在市），消除「现存名单」的幸存者偏差
+    codes = _load_pit_codes(today_text)
     codes = [(c, n) for c, n in codes if c[0] in "036"
              and not c.startswith("30") and not c.startswith("688")]
+    # ST/退市风险股剔除：动量策略天然偏好连续大涨股，ST 占比不低，必须在宇宙层拦掉
+    codes = [(c, n) for c, n in codes if "ST" not in n.upper()]
     print(f"[动量] 重放模式（信号日 {today_text}）：全市场 {len(codes)} 只，K线宇宙逐只确认 ...")
     rows = []
     done = 0
@@ -387,6 +437,8 @@ def _run_live(args: argparse.Namespace, today_text: str) -> None:
         & (spot["最新价"] <= args.price_upper_limit)
         & (spot["成交额"] >= args.min_turnover)
     )
+    if "名称" in spot.columns:
+        mask &= ~spot["名称"].astype(str).str.upper().str.contains("ST", na=False)
     if has_60:
         mask &= (spot["60日涨跌幅"] >= args.min_60d_return)
     if has_turn:

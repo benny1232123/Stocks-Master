@@ -10,6 +10,7 @@ from typing import Any, Optional
 
 import math
 import os
+import sys
 import numpy as np
 import pandas as pd
 
@@ -53,6 +54,16 @@ def _env_float(name: str, default: float) -> float:
         return default
 
 
+def _board_price_limit(code: str) -> float:
+    """单日涨跌幅约束：主板 ±10%、科创/创业 ±20%、北交所 ±30%。"""
+    c = str(code)
+    if c.startswith(("300", "301", "688")):
+        return 0.20
+    if c.startswith(("43", "83", "87", "92")):
+        return 0.30
+    return 0.10
+
+
 def _sanitize_board_limit(df: pd.DataFrame, code: str) -> pd.DataFrame | None:
     """数据可行性守卫：区间内存在超涨跌停约束的坏 bar（复权跳变/坏点）→ 整只剔除 + 告警。
 
@@ -66,7 +77,7 @@ def _sanitize_board_limit(df: pd.DataFrame, code: str) -> pd.DataFrame | None:
     if not _env_flag("BACKTEST_BOARD_GUARD", True):
         return df
     try:
-        limit = 0.20 if str(code).startswith(("300", "301", "688")) else 0.10
+        limit = _board_price_limit(code)
         tol = _env_float("BACKTEST_BOARD_GUARD_TOL", 1.01)
         skip = int(_env_float("BACKTEST_BOARD_GUARD_SKIP_BARS", 10))
         c = pd.to_numeric(df["close"], errors="coerce")
@@ -392,10 +403,12 @@ def run_forward_signal_backtest(
     # 预拉每只标的 K 线（信号区间 + 持有期 + 缓冲），供盯市与买卖价查询
     price_cache: dict[str, pd.DataFrame] = {}
     all_dates: set[date] = set()
-    # 预拉 K 线时向前多留 vol_target 所需的 20 日波动窗口：否则 _ann_vol 数据不足→scale=1.0
-    # 中性，vol_target 会静默失效。向前多取不影响买入后行情，各组口径一致。
+    # 预拉 K 线时向前多留 vol_target 所需的 20 日波动窗口 + trend_exit_ma 均线窗口：
+    # 60 根交易日 ≈ 90+ 自然日（含节假日），只回看 60 自然日会让 _ma_n 恒为 None、
+    # 趋势破位出场整段失效（回测系统性虚高）。向前多取不影响买入后行情，各组口径一致。
     _vt_window = int(_vt_cfg.get("window", 20))
-    _hist_start = min_sig - timedelta(days=_vt_window + 40)
+    _hist_days = max(_vt_window, int(trend_exit_ma or 0)) * 2 + 40
+    _hist_start = min_sig - timedelta(days=_hist_days)
     for code in norm["code"].astype(str).str.strip().unique():
         df = fetch_daily_k(code, _hist_start, end_pad)
         if df is not None and not df.empty:
@@ -418,7 +431,7 @@ def run_forward_signal_backtest(
 
     def _px(code: str, d: date, col: str):
         p = price_cache.get(code)
-        if p is None or p.empty:
+        if p is None or p.empty or col not in p.columns:
             return None
         row = p[p.index.date == d]
         if row.empty:
@@ -459,7 +472,7 @@ def run_forward_signal_backtest(
         且收盘等于当日最低（钉在跌停板）。满足则视为封跌停、当日卖不出，顺延次日。
         """
         p = price_cache.get(code)
-        if p is None or p.empty:
+        if p is None or p.empty or not {"low", "close"}.issubset(p.columns):
             return False
         rows = p.loc[p.index.date <= d]
         if len(rows) < 2:
@@ -476,7 +489,10 @@ def run_forward_signal_backtest(
             return False
         ret = c0 / c1 - 1
         pinned = abs(lo - c0) <= max(0.01, abs(c0) * 0.002)
-        return ret <= -_ld_thr and pinned
+        # 阈值按板块缩放（_ld_thr 锚定主板 0.10）：科创/创业 ±20%、北交所 ±30%，
+        # 否则 20cm 板 -9.6% 即被误判封跌停、错误顺延出场
+        _thr = _ld_thr * (_board_price_limit(code) / 0.10)
+        return ret <= -_thr and pinned
 
     def _at_limit_up_open(code: str, d: date) -> bool:
         """近似判断处理日开盘是否一字涨停（A股买单无法成交，入场放弃）。
@@ -486,7 +502,7 @@ def run_forward_signal_backtest(
         但非一字仍视为可成交（实际可排队）。当日无数据（停牌）→ 无法判定，放行。
         """
         p = price_cache.get(code)
-        if p is None or p.empty:
+        if p is None or p.empty or not {"open", "high", "low", "close"}.issubset(p.columns):
             return False
         rows = p.loc[p.index.date <= d]
         if len(rows) < 2:
@@ -506,7 +522,8 @@ def run_forward_signal_backtest(
             return False
         gap = o / c1 - 1
         flat = abs(h - o) <= max(0.01, o * 0.002) and abs(lo - o) <= max(0.01, o * 0.002)
-        return gap >= _lu_thr and flat
+        _thr = _lu_thr * (_board_price_limit(code) / 0.10)  # 与 _at_limit_down 同口径按板块缩放
+        return gap >= _thr and flat
 
     # 买入调度：每个信号日 → 其「之后第一个交易日」作为买入处理日（即信号日次日开盘买入）。
     # 信号日本身可能不是交易日（周末/休市），不能直接用信号日作为交易日历中的 key。
@@ -724,7 +741,12 @@ def run_forward_signal_backtest(
             else:
                 sell_price = _px(c, d, "close")
                 if sell_price is None:
-                    sell_price = h["buy_price"]  # 极端缺数据兜底
+                    # 缺数据（长期停牌/退市）不伪造零收益交易：按最后已知收盘价平仓并告警
+                    sell_price = h.get("last_px") or h["buy_price"]
+                    print(
+                        f"[engine] WARN: {c} 出场日无行情，按最后已知收盘价 {sell_price} 平仓",
+                        file=sys.stderr,
+                    )
             sell_price *= (1 - slippage)
             proceeds = sell_price * h["qty"]
             cash += proceeds - _sell_cost(proceeds)
@@ -747,7 +769,9 @@ def run_forward_signal_backtest(
             if h["buy_date"] > d:
                 continue
             close = _px(c, d, "close")
-            hv += h["qty"] * (close if close is not None else h["buy_price"])
+            if close is not None:
+                h["last_px"] = close  # 记录最后已知收盘价，供缺数据出场兜底
+            hv += h["qty"] * (h.get("last_px") or h["buy_price"])
         equity_curve.append(
             {
                 "date": d.strftime("%Y-%m-%d"),

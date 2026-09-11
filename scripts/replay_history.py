@@ -204,7 +204,8 @@ def _replay_one(date: str, only: list[str] | None = None) -> tuple[bool, str]:
     for strat in STRATS_FROZEN:
         if strat not in todo:
             continue
-        env = dict(os.environ, SIGNAL_DATE=date, MPLBACKEND="Agg")
+        env = dict(os.environ, SIGNAL_DATE=date, MPLBACKEND="Agg",
+                   REPLAY_MODE="1", REPLAY_SIGNAL_DATE=date)
         cmd = [sys.executable, str(ROOT / "scripts" / "run_strategy_for_date.py"), strat]
         rc, err = _run_subprocess_with_retry(
             cmd, env, REPLAY_LOG_DIR / f"{date}_{strat}.log", REPLAY_TIMEOUT, strat,
@@ -220,7 +221,7 @@ def _replay_one(date: str, only: list[str] | None = None) -> tuple[bool, str]:
             % (str(ROOT), date),
         ]
         rc, err = _run_subprocess_with_retry(
-            boll_cmd, dict(os.environ, MPLBACKEND="Agg"),
+            boll_cmd, dict(os.environ, MPLBACKEND="Agg", REPLAY_MODE="1", REPLAY_SIGNAL_DATE=date),
             REPLAY_LOG_DIR / f"{date}_boll.log", REPLAY_TIMEOUT, "boll",
         )
         if rc != 0:

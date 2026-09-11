@@ -116,6 +116,8 @@ def simulate_position(
 
     Returns:
         {"return_pct", "exit_reason", "sell_date", "buy_price", "sell_price"}
+        无数据时 return_pct=None（而非 0.0）：缺数据不是"恰好打平"，调用方必须跳过，
+        否则 walk-forward 的 edge/单调性统计会被伪零收益污染。
     """
     is_mr = any(s.strip().lower() in ("boll", "relativity") for s in strategy.replace("/", ",").split(",") if s.strip())
     # MA 需要回看窗口，故 K 线起点前移 trend_exit_ma+ 天
@@ -123,15 +125,15 @@ def simulate_position(
     end = (end_date + timedelta(days=2)).strftime("%Y-%m-%d")
     df = _load_k_window(code, start, end)
     if df.empty:
-        return {"return_pct": 0.0, "exit_reason": "no_data", "sell_date": None, "buy_price": None, "sell_price": None}
+        return {"return_pct": None, "exit_reason": "no_data", "sell_date": None, "buy_price": None, "sell_price": None}
 
     days = [d for d in df.index if buy_date <= d.date() <= end_date]
     if not days:
-        return {"return_pct": 0.0, "exit_reason": "no_data", "sell_date": None, "buy_price": None, "sell_price": None}
+        return {"return_pct": None, "exit_reason": "no_data", "sell_date": None, "buy_price": None, "sell_price": None}
 
     buy_row = df[df.index.date == days[0].date()]
     if buy_row.empty:
-        return {"return_pct": 0.0, "exit_reason": "no_data", "sell_date": None, "buy_price": None, "sell_price": None}
+        return {"return_pct": None, "exit_reason": "no_data", "sell_date": None, "buy_price": None, "sell_price": None}
     buy_price = float(buy_row["open"].iloc[0]) * (1 + slippage)
     peak = buy_price
     eff_stop = stop_pct if (stop_pct is not None and stop_pct > 0) else stop_loss_pct
