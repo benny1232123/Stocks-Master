@@ -1,0 +1,80 @@
+<!doctype html><html><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>持仓个股分析 20260824</title><style>
+*{box-sizing:border-box;margin:0;padding:0}
+body{background:#eef0f3;font-family:-apple-system,BlinkMacSystemFont,"PingFang SC","Microsoft YaHei",sans-serif;color:#1f2329;padding:16px}
+.wrap{max-width:680px;margin:0 auto}
+.top{background:linear-gradient(135deg,#2b5876,#4e4376);color:#fff;border-radius:16px;padding:18px 20px;margin-bottom:14px;box-shadow:0 4px 14px rgba(43,88,118,.25)}
+.top h1{font-size:20px;font-weight:700;letter-spacing:.5px}
+.meta{font-size:13px;opacity:.9;margin-top:6px}
+.card{background:#fff;border-radius:14px;padding:14px 16px;margin-bottom:12px;box-shadow:0 1px 4px rgba(0,0,0,.06)}
+.card-head{display:flex;align-items:center;gap:10px;flex-wrap:wrap}
+.code{font-size:19px;font-weight:700;letter-spacing:.5px}
+.badge{font-size:12px;padding:3px 11px;border-radius:20px;font-weight:600}
+.badge.bull{background:#fff1f0;color:#d4380d}
+.badge.bear{background:#f6ffed;color:#389e0d}
+.badge.neutral{background:#f0f1f3;color:#5a6068}
+.price{font-size:19px;font-weight:700;margin-left:auto}
+.chg{font-size:13px;font-weight:600;padding:3px 9px;border-radius:8px}
+.chg.bull{background:#fff1f0;color:#d4380d}
+.chg.bear{background:#f6ffed;color:#389e0d}
+.chg.neutral{color:#5a6068}
+.sig{font-size:13px;color:#5a6068;margin:8px 0 4px}
+.boll{margin:8px 0 4px}
+.boll-track{height:9px;background:linear-gradient(90deg,#389e0d,#fadb14,#d4380d);border-radius:6px;position:relative}
+.boll-mark{position:absolute;top:50%;width:15px;height:15px;background:#fff;border:3px solid #2b5876;border-radius:50%;transform:translate(-50%,-50%)}
+.boll-lab{font-size:11px;color:#8a9099;margin-top:5px}
+.metrics{display:flex;flex-wrap:wrap;gap:8px;margin:10px 0 4px}
+.m{background:#f7f8fa;border-radius:9px;padding:6px 10px;min-width:62px}
+.ml{display:block;font-size:11px;color:#8a9099}
+.mv{display:block;font-size:15px;font-weight:600;margin-top:2px}
+.mv.warn{color:#d4380d}
+.mv.cool{color:#389e0d}
+.state{font-size:12px;color:#5a6068;margin:4px 0 8px}
+.chips{display:flex;flex-wrap:wrap;gap:6px}
+.chip{font-size:11px;background:#eef2ff;color:#3b5bdb;padding:3px 9px;border-radius:20px}
+.chip.dim{background:#f0f1f3;color:#a0a6ad}
+.err{color:#d4380d;font-size:13px;margin-top:6px}
+.foot{font-size:11px;color:#a0a6ad;text-align:center;margin-top:12px;line-height:1.7}
+</style></head>
+<body><div class="wrap">
+  <div class="top"><h1>📊 持仓个股分析日报</h1>
+    <div class="meta">📅 20260824 ｜ 数据源 json ｜ 成功 2 只 / 失败 1 只 / 共 3 只</div></div>
+  
+    <div class="card">
+      <div class="card-head">
+        <span class="code">600519</span>
+        <span class="badge bull">多头</span>
+        <span class="price">1480.50</span>
+        <span class="chg bull">+1.40%</span>
+      </div>
+      <div class="sig">Boll 信号：接近上轨</div>
+      <div class="boll"><div class="boll-track"><div class="boll-mark" style="left:50.0%"></div></div><div class="boll-lab">布林带位置 50%（下轨 1436.09 → 上轨 1524.91）</div></div>
+      <div class="metrics">
+        <div class="m"><span class="ml">MA5</span><span class="mv ">1470.00</span></div> <div class="m"><span class="ml">MA10</span><span class="mv ">1460.00</span></div> <div class="m"><span class="ml">MA20</span><span class="mv ">1455.00</span></div> <div class="m"><span class="ml">MA60</span><span class="mv ">1400.00</span></div>
+        <div class="m"><span class="ml">RSI</span><span class="mv ">62.30</span></div> <div class="m"><span class="ml">DIF</span><span class="mv ">5.10</span></div> <div class="m"><span class="ml">DEA</span><span class="mv ">3.20</span></div> <div class="m"><span class="ml">MACD柱</span><span class="mv ">3.80</span></div>
+        <div class="m"><span class="ml">K</span><span class="mv ">70.00</span></div> <div class="m"><span class="ml">D</span><span class="mv ">60.00</span></div> <div class="m"><span class="ml">J</span><span class="mv ">90.00</span></div>
+      </div>
+      <div class="state">MACD：金叉·多头动能 ｜ KDJ：K=70 D=60 J=90</div>
+      <div class="chips"><span class="chip">PE 32.10</span><span class="chip">PB 9.80</span><span class="chip">市值 18500.00亿</span><span class="chip">ROE 30.2%</span><span class="chip">毛利 91.5%</span><span class="chip">营收增速 15.6%</span><span class="chip">换手 0.35%</span></div>
+    </div>
+    <div class="card">
+      <div class="card-head">
+        <span class="code">300750</span>
+        <span class="badge bear">空头</span>
+        <span class="price">210.00</span>
+        <span class="chg bear">-2.33%</span>
+      </div>
+      <div class="sig">Boll 信号：接近上轨</div>
+      <div class="boll"><div class="boll-track"><div class="boll-mark" style="left:50.0%"></div></div><div class="boll-lab">布林带位置 50%（下轨 203.70 → 上轨 216.30）</div></div>
+      <div class="metrics">
+        <div class="m"><span class="ml">MA5</span><span class="mv ">212.00</span></div> <div class="m"><span class="ml">MA10</span><span class="mv ">213.00</span></div> <div class="m"><span class="ml">MA20</span><span class="mv ">214.00</span></div> <div class="m"><span class="ml">MA60</span><span class="mv ">220.00</span></div>
+        <div class="m"><span class="ml">RSI</span><span class="mv cool">28.00</span></div> <div class="m"><span class="ml">DIF</span><span class="mv ">-2.10</span></div> <div class="m"><span class="ml">DEA</span><span class="mv ">-1.00</span></div> <div class="m"><span class="ml">MACD柱</span><span class="mv ">-2.20</span></div>
+        <div class="m"><span class="ml">K</span><span class="mv ">20.00</span></div> <div class="m"><span class="ml">D</span><span class="mv ">30.00</span></div> <div class="m"><span class="ml">J</span><span class="mv ">-10.00</span></div>
+      </div>
+      <div class="state">MACD：死叉·空头动能 ｜ KDJ：超卖 J=-10</div>
+      <div class="chips"><span class="chip">PE 25.00</span><span class="chip">PB 5.00</span><span class="chip">市值 9000.00亿</span><span class="chip">ROE 18.0%</span><span class="chip">毛利 22.0%</span><span class="chip">营收增速 -5.0%</span><span class="chip">换手 1.20%</span></div>
+    </div><div class="card"><div class="card-head"><span class="code">000001</span></div><div class="err">⚠️ 分析失败：未获取到K线数据</div></div>
+  <div class="foot">Stocks-Master 自动生成 · 技术面 Boll/MACD/RSI/KDJ/MA + 基本面/资金面<br>
+  仅供研究参考，不构成投资建议</div>
+</div></body></html>

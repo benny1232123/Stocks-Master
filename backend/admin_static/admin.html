@@ -53,6 +53,11 @@
   .del{padding:2px 8px;font-size:12px;color:var(--danger);border-color:#fecaca}
   .del:hover{background:#fef2f2}
   button.small{padding:3px 10px;font-size:12px;margin-right:4px}
+  /* 嵌入模式（主看板 iframe 以 /admin?embed=1 引用）：收起自身标题、透明背景、加宽版面。
+     退出按钮保留（管理能力不因嵌入而缺失）。 */
+  body.embedded{background:transparent}
+  body.embedded .wrap{max-width:1200px;padding:4px 18px 48px}
+  body.embedded .top h1,body.embedded .top .meta{display:none}
   td input{width:88px;padding:4px 6px;font-size:13px}
   code{background:#f3f4f6;padding:1px 5px;border-radius:4px;font-size:12px}
   /* 持仓日报卡片 */
@@ -619,5 +624,10 @@
     .catch(function () { showLogin({ enabled: true }); });
 })();
 </script>
+  <script>
+    if (new URLSearchParams(location.search).get('embed') === '1') {
+      document.body.classList.add('embedded')
+    }
+  </script>
 </body>
 </html>

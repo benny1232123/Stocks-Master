@@ -25,7 +25,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 45
     permissions:
-      contents: read
+      contents: write  # 回写持仓日报到仓库（Render 看板才能读到）
     env:
       TDX_ENABLED: "0"
       # 同花顺官方 Financial-API：有 Key 时云端最快首选；缺失时 kline.py 回退链降级到 akshare/baostock。
@@ -112,3 +112,31 @@ jobs:
             stock_data/holdings_analysis_*.html
           retention-days: 30
           if-no-files-found: warn
+
+      - name: 回写报告到仓库（Render 从仓库读，artifact 它看不到）
+        if: steps.gate.outputs.ok == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          ls stock_data/holdings_analysis_*.md >/dev/null 2>&1 && git add -f stock_data/holdings_analysis_*.md || true
+          ls stock_data/holdings_analysis_*.html >/dev/null 2>&1 && git add -f stock_data/holdings_analysis_*.html || true
+          if git diff --cached --quiet; then
+            echo "无报告变更，跳过提交"
+            exit 0
+          fi
+          git commit -m "data: 持仓日报 $(TZ=Asia/Shanghai date +%Y%m%d)"
+          # 三层推送容错（与 daily-pick 同款）
+          PUSH_OK=0
+          for i in 1 2 3; do
+            if git pull --rebase --autostash origin master 2>/dev/null && git push origin master; then
+              PUSH_OK=1
+              echo "报告已回写仓库"
+              break
+            fi
+            echo "推送失败，$((i*5))s 后重试 ($i/3)"
+            sleep $((i*5))
+          done
+          [ "$PUSH_OK" != "1" ] && echo "::warning::报告回写推送失败（artifact 仍可用，可手动重推）"
+          exit 0

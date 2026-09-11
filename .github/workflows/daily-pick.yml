@@ -336,7 +336,9 @@ jobs:
           #   触发 pathspec 错误，把整个提交步骤 abort，连上面的 k_data 都提交不出去。
           # 每个 add 先判路径存在，避免缺失路径再次触发 fatal exit 128。
           [ -d stock_data/daily_cache/ ] && git add -f stock_data/daily_cache/ || true
-          [ -d stock_data/k_data/ ] && git add -f stock_data/k_data/ || true
+          # 超过 90MB 的 parquet 会触发 GitHub 100MiB 硬限制、整单拒推（b00 桶已 100MB+）。
+          # 跳过大文件：其云端缓存靠增量拉取自愈（covers 检查发现陈旧即重拉）
+          [ -d stock_data/k_data/ ] && find stock_data/k_data -name '*.parquet' -size -90M -print0 | xargs -0 -r git add -f || true
           ls stock_data/Daily-Action-List-*.csv >/dev/null 2>&1 && git add -f stock_data/Daily-Action-List-*.csv || true
           ls stock_data/Multi-Backtest-*.csv >/dev/null 2>&1 && git add -f stock_data/Multi-Backtest-*.csv || true
           ls stock_data/Stock-Selection-*.csv >/dev/null 2>&1 && git add -f stock_data/Stock-Selection-*.csv || true

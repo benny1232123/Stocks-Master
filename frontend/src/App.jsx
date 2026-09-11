@@ -2965,15 +2965,15 @@ function App() {
             </div>
             {/* 既有 /admin 独立页（自包含登录 + 交易 CRUD）原样嵌入，避免双实现漂移 */}
             <iframe
-              src="/admin"
+              src="/admin?embed=1"
               title="管理后台"
               style={{
                 width: '100%',
-                height: 'calc(100vh - 150px)',
+                height: 'calc(100vh - 165px)',
                 minHeight: 560,
-                border: '1px solid var(--border-color, #e5e7eb)',
+                border: 'none',
                 borderRadius: 12,
-                background: 'var(--card-bg, #fff)',
+                background: 'transparent',
               }}
             />
           </>

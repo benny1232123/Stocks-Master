@@ -1,0 +1,216 @@
+<!doctype html><html><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>持仓个股分析 20260901</title><style>
+*{box-sizing:border-box;margin:0;padding:0}
+body{background:#eef0f3;font-family:-apple-system,BlinkMacSystemFont,"PingFang SC","Microsoft YaHei",sans-serif;color:#1f2329;padding:16px}
+.wrap{max-width:680px;margin:0 auto}
+.top{background:linear-gradient(135deg,#2b5876,#4e4376);color:#fff;border-radius:16px;padding:18px 20px;margin-bottom:14px;box-shadow:0 4px 14px rgba(43,88,118,.25)}
+.top h1{font-size:20px;font-weight:700;letter-spacing:.5px}
+.meta{font-size:13px;opacity:.9;margin-top:6px}
+.card{background:#fff;border-radius:14px;padding:14px 16px;margin-bottom:12px;box-shadow:0 1px 4px rgba(0,0,0,.06)}
+.card-head{display:flex;align-items:center;gap:10px;flex-wrap:wrap}
+.title{display:flex;flex-direction:column;line-height:1.15}
+.code{font-size:19px;font-weight:700;letter-spacing:.5px}
+.name{font-size:12px;color:#8a9099;font-weight:500;margin-top:1px}
+.badge{font-size:12px;padding:3px 11px;border-radius:20px;font-weight:600}
+.badge.bull{background:#fff1f0;color:#d4380d}
+.badge.bear{background:#f6ffed;color:#389e0d}
+.badge.neutral{background:#f0f1f3;color:#5a6068}
+.price{font-size:19px;font-weight:700;margin-left:auto}
+.chg{font-size:13px;font-weight:600;padding:3px 9px;border-radius:8px}
+.chg.bull{background:#fff1f0;color:#d4380d}
+.chg.bear{background:#f6ffed;color:#389e0d}
+.chg.neutral{color:#5a6068}
+.sig{font-size:13px;color:#5a6068;margin:8px 0 4px}
+.boll{margin:8px 0 4px}
+.boll-track{height:9px;background:linear-gradient(90deg,#389e0d,#fadb14,#d4380d);border-radius:6px;position:relative}
+.boll-mark{position:absolute;top:50%;width:15px;height:15px;background:#fff;border:3px solid #2b5876;border-radius:50%;transform:translate(-50%,-50%)}
+.boll-lab{font-size:11px;color:#8a9099;margin-top:5px}
+.metrics{display:flex;flex-wrap:wrap;gap:8px;margin:10px 0 4px}
+.m{background:#f7f8fa;border-radius:9px;padding:6px 10px;min-width:62px}
+.ml{display:block;font-size:11px;color:#8a9099}
+.mv{display:block;font-size:15px;font-weight:600;margin-top:2px}
+.mv.warn{color:#d4380d}
+.mv.cool{color:#389e0d}
+.state{font-size:12px;color:#5a6068;margin:4px 0 8px}
+.chips{display:flex;flex-wrap:wrap;gap:6px}
+.chip{font-size:11px;background:#eef2ff;color:#3b5bdb;padding:3px 9px;border-radius:20px}
+.chip.dim{background:#f0f1f3;color:#a0a6ad}
+.fund{margin:10px 0 2px;padding:11px 13px;background:#fafcff;border:1px solid #eef3fb;border-radius:11px}
+.fund-grid{display:flex;flex-wrap:wrap;gap:14px}
+.fg{flex:1;min-width:120px}
+.fgh{font-size:11px;color:#3b5bdb;font-weight:700;letter-spacing:.5px;margin-bottom:5px}
+.fg-row{display:flex;justify-content:space-between;font-size:13px;padding:2px 0;border-bottom:1px dashed #f0f1f3}
+.fg-row span{color:#8a9099}
+.fg-row b{font-weight:600}
+.fund-note{font-size:12px;color:#5a6068;margin-top:9px;line-height:1.6}
+.fund-note b{color:#2b5876}
+.flag{display:inline-block;font-size:11px;font-weight:600;padding:1px 7px;border-radius:6px;margin:2px 4px 2px 0}
+.flag.good{background:#f6ffed;color:#389e0d}
+.flag.bad{background:#fff1f0;color:#d4380d}
+.flag.mid{background:#f0f1f3;color:#5a6068}
+.pos{display:flex;flex-wrap:wrap;gap:14px;margin:10px 0 2px;padding:9px 12px;background:#fafbfc;border-radius:10px}
+.pos-item{display:flex;align-items:baseline;gap:5px}
+.pos-item .pl{font-size:11px;color:#8a9099}
+.pos-item b{font-size:14px;font-weight:700}
+.pnl.bull{color:#d4380d}
+.pnl.bear{color:#389e0d}
+.err{color:#d4380d;font-size:13px;margin-top:6px}
+.rec{font-size:13px;font-weight:600;margin:8px 0 4px;padding:7px 11px;border-radius:9px}
+.rec.bull{background:#fff1f0;color:#d4380d}
+.rec.bear{background:#f6ffed;color:#389e0d}
+.rec.neutral{background:#f0f1f3;color:#5a6068}
+.faces{display:flex;flex-wrap:wrap;gap:8px;margin-top:6px;font-weight:400;font-size:12px}
+.face{padding:2px 8px;border-radius:20px;background:#fff;opacity:.95}
+.face.up{background:#ffece8;color:#d4380d}
+.face.down{background:#eafbe6;color:#389e0d}
+.face.flat{background:#f0f1f3;color:#5a6068}
+.face.dim{background:#f7f8f9;color:#a0a6ad}
+.cmp{width:100%;border-collapse:collapse;margin-top:6px;font-size:13px;background:#fff;border-radius:12px;overflow:hidden;box-shadow:0 1px 4px rgba(0,0,0,.06)}
+.cmp th,.cmp td{padding:9px 8px;text-align:center;border-bottom:1px solid #f0f1f3}
+.cmp th{background:#f7f8fa;color:#5a6068;font-weight:600}
+.cmp td.name{text-align:left;font-weight:600}
+.cmp .tag{display:inline-block;font-size:12px;font-weight:700;padding:2px 8px;border-radius:7px}
+.cmp .tag.bull{background:#fff1f0;color:#d4380d}
+.cmp .tag.bear{background:#f6ffed;color:#389e0d}
+.cmp .tag.neutral{background:#f0f1f3;color:#5a6068}
+.cmp .tag.unknown{background:#f0f1f3;color:#a0a6ad}
+.cmp .px{display:block;font-size:11px;color:#8a9099;margin-top:2px}
+.sum{background:linear-gradient(135deg,#1f3b57,#3a5a7a);color:#fff;border-radius:16px;padding:16px 20px;margin-bottom:14px;box-shadow:0 4px 14px rgba(31,59,87,.28)}
+.sum h2{font-size:16px;font-weight:700;margin-bottom:10px}
+.sum-grid{display:flex;flex-wrap:wrap;gap:10px 26px}
+.sum-cell{display:flex;flex-direction:column}
+.sum-cell .sl{font-size:11px;opacity:.8}
+.sum-cell .sv{font-size:19px;font-weight:700;margin-top:2px}
+.sum-cell .sv.bull{color:#ff9c8a}
+.sum-cell .sv.bear{color:#9be7a8}
+.foot{font-size:11px;color:#a0a6ad;text-align:center;margin-top:12px;line-height:1.7}
+</style></head>
+<body><div class="wrap">
+  <div class="top"><h1>📊 持仓个股分析日报</h1>
+    <div class="meta">📅 20260901 ｜ 数据源 supabase ｜ 成功 4 只 / 失败 0 只 / 共 4 只</div></div>
+  <div class="sum"><h2>💼 组合概览 ｜ 4 只持仓</h2><div class="sum-grid"><div class="sum-cell"><span class="sl">持仓市值</span><span class="sv ">¥20,634</span></div><div class="sum-cell"><span class="sl">持仓成本</span><span class="sv ">¥26,156</span></div><div class="sum-cell"><span class="sl">累计盈亏</span><span class="sv bear">¥-5,522 (-21.11%)</span></div><div class="sum-cell"><span class="sl">当日浮动</span><span class="sv bull">+¥269 (+1.32%)</span></div></div></div>
+  
+    <div class="card">
+      <div class="card-head">
+        <div class="title"><span class="code">002284</span><span class="name">亚太股份</span></div>
+        <span class="badge neutral">震荡</span>
+        <span class="price">10.21</span>
+        <span class="chg bull">+2.51%</span>
+      </div>
+      <div class="sig">Boll 信号：偏热：收盘价高于上轨</div>
+      <div class="pos"><span class="pos-item"><span class="pl">成本</span><b>13.53</b></span><span class="pos-item"><span class="pl">数量</span><b>800</b></span><span class="pos-item"><span class="pl">持仓盈亏</span><b class="pnl bear">¥-2,656（-24.54%）</b></span><span class="pos-item"><span class="pl">当日</span><b class="pnl bull">+¥200</b></span></div>
+      <div class="rec bull">📌 持仓建议：加仓　｜　基本面优质、资金认可，技术震荡；RSI·高位，MACD·金叉红柱，KDJ·金叉，均线·多头排列<div class="faces"><span class="face up">技术面 68</span><span class="face up">基本面 70</span><span class="face up">资金面 77</span></div></div>
+      <div class="boll"><div class="boll-track"><div class="boll-mark" style="left:100.0%"></div></div><div class="boll-lab">布林带位置 100%（下轨 9.19 → 上轨 10.08）</div></div>
+      <div class="metrics">
+        <div class="m"><span class="ml">MA5</span><span class="mv ">9.93</span></div> <div class="m"><span class="ml">MA10</span><span class="mv ">9.72</span></div> <div class="m"><span class="ml">MA20</span><span class="mv ">9.64</span></div> <div class="m"><span class="ml">MA60</span><span class="mv ">9.65</span></div>
+        <div class="m"><span class="ml">RSI</span><span class="mv warn">70.06</span></div> <div class="m"><span class="ml">DIF</span><span class="mv ">0.11</span></div> <div class="m"><span class="ml">DEA</span><span class="mv ">0.04</span></div> <div class="m"><span class="ml">MACD柱</span><span class="mv ">0.14</span></div>
+        <div class="m"><span class="ml">K</span><span class="mv ">71.05</span></div> <div class="m"><span class="ml">D</span><span class="mv ">61.14</span></div> <div class="m"><span class="ml">J</span><span class="mv ">90.86</span></div>
+      </div>
+      <div class="state">MACD：金叉·多头动能 ｜ KDJ：K=71 D=61 J=91</div>
+      
+    <div class="fund">
+      <div class="fund-grid">
+        <div class="fg"><div class="fgh">估值</div><div class="fg-row"><span>PE</span><b>13.20</b></div><div class="fg-row"><span>PB</span><b>2.07</b></div><div class="fg-row"><span>PS</span><b>1.28</b></div><div class="fg-row"><span>PCF</span><b>5.50</b></div><div class="fg-row"><span>总市值</span><b>73.61亿</b></div></div>
+        <div class="fg"><div class="fgh">质量</div><div class="fg-row"><span>ROE</span><b>15.6%</b></div><div class="fg-row"><span>毛利率</span><b>20.8%</b></div></div>
+        <div class="fg"><div class="fgh">资金面</div><div class="fg-row"><span>换手率</span><b>3.91%</b></div><div class="fg-row"><span>20日成交额</span><b>2.57亿</b></div></div>
+      </div>
+      <div class="fund-note">估值点评：<span class="flag good">低估值 PE 13.2</span><span class="flag good">盈利优 ROE 15.6%</span><span class="flag mid">毛利中 21%</span><span class="flag mid">交投活跃 换手 3.9%</span></div>
+    </div>
+    </div>
+
+    <div class="card">
+      <div class="card-head">
+        <div class="title"><span class="code">600269</span><span class="name">赣粤高速</span></div>
+        <span class="badge neutral">震荡</span>
+        <span class="price">3.89</span>
+        <span class="chg bull">+1.04%</span>
+      </div>
+      <div class="sig">Boll 信号：连续中轨回踩：已连续5日（本日不重复触发）</div>
+      <div class="pos"><span class="pos-item"><span class="pl">成本</span><b>4.51</b></span><span class="pos-item"><span class="pl">数量</span><b>1800</b></span><span class="pos-item"><span class="pl">持仓盈亏</span><b class="pnl bear">¥-1,116（-13.75%）</b></span><span class="pos-item"><span class="pl">当日</span><b class="pnl bull">+¥72</b></span></div>
+      <div class="rec bull">📌 持仓建议：持有偏多　｜　多空因素交织，建议结合仓位管理观望；RSI·偏强，MACD·金叉红柱，KDJ·极端超买，均线·短期偏强<div class="faces"><span class="face flat">技术面 56</span><span class="face up">基本面 69</span><span class="face flat">资金面 50</span></div></div>
+      <div class="boll"><div class="boll-track"><div class="boll-mark" style="left:72.0%"></div></div><div class="boll-lab">布林带位置 72%（下轨 3.72 → 上轨 3.96）</div></div>
+      <div class="metrics">
+        <div class="m"><span class="ml">MA5</span><span class="mv ">3.86</span></div> <div class="m"><span class="ml">MA10</span><span class="mv ">3.82</span></div> <div class="m"><span class="ml">MA20</span><span class="mv ">3.84</span></div> <div class="m"><span class="ml">MA60</span><span class="mv ">3.95</span></div>
+        <div class="m"><span class="ml">RSI</span><span class="mv ">59.39</span></div> <div class="m"><span class="ml">DIF</span><span class="mv ">-0.03</span></div> <div class="m"><span class="ml">DEA</span><span class="mv ">-0.05</span></div> <div class="m"><span class="ml">MACD柱</span><span class="mv ">0.03</span></div>
+        <div class="m"><span class="ml">K</span><span class="mv ">89.02</span></div> <div class="m"><span class="ml">D</span><span class="mv ">82.87</span></div> <div class="m"><span class="ml">J</span><span class="mv ">101.32</span></div>
+      </div>
+      <div class="state">MACD：红柱转强 ｜ KDJ：超买 J=101</div>
+      
+    <div class="fund">
+      <div class="fund-grid">
+        <div class="fg"><div class="fgh">估值</div><div class="fg-row"><span>PE</span><b>12.43</b></div><div class="fg-row"><span>PB</span><b>0.47</b></div><div class="fg-row"><span>PS</span><b>1.53</b></div><div class="fg-row"><span>PCF</span><b>3.50</b></div><div class="fg-row"><span>总市值</span><b>89.91亿</b></div></div>
+        <div class="fg"><div class="fgh">质量</div><div class="fg-row"><span>ROE</span><b>6.7%</b></div><div class="fg-row"><span>毛利率</span><b>37.7%</b></div></div>
+        <div class="fg"><div class="fgh">资金面</div><div class="fg-row"><span>换手率</span><b>0.82%</b></div><div class="fg-row"><span>20日成交额</span><b>0.86亿</b></div></div>
+      </div>
+      <div class="fund-note">估值点评：<span class="flag bad">破净 PB 0.47</span><span class="flag good">低估值 PE 12.4</span><span class="flag bad">盈利弱 ROE 6.7%</span><span class="flag mid">毛利中 38%</span><span class="flag mid">交投清淡 换手 0.8%</span></div>
+    </div>
+    </div>
+
+    <div class="card">
+      <div class="card-head">
+        <div class="title"><span class="code">603187</span><span class="name">海容冷链</span></div>
+        <span class="badge bear">空头</span>
+        <span class="price">11.10</span>
+        <span class="chg bear">-0.09%</span>
+      </div>
+      <div class="sig">Boll 信号：中性：位于布林带中部</div>
+      <div class="pos"><span class="pos-item"><span class="pl">成本</span><b>14.32</b></span><span class="pos-item"><span class="pl">数量</span><b>400</b></span><span class="pos-item"><span class="pl">持仓盈亏</span><b class="pnl bear">¥-1,288（-22.49%）</b></span><span class="pos-item"><span class="pl">当日</span><b class="pnl bear">¥-4</b></span></div>
+      <div class="rec neutral">📌 持仓建议：持有观望　｜　多空因素交织，建议结合仓位管理观望；RSI·偏弱，MACD·死叉绿柱，KDJ·金叉，均线·短期偏弱<div class="faces"><span class="face down">技术面 32</span><span class="face flat">基本面 64</span><span class="face flat">资金面 50</span></div></div>
+      <div class="boll"><div class="boll-track"><div class="boll-mark" style="left:24.8%"></div></div><div class="boll-lab">布林带位置 25%（下轨 10.58 → 上轨 12.68）</div></div>
+      <div class="metrics">
+        <div class="m"><span class="ml">MA5</span><span class="mv ">11.15</span></div> <div class="m"><span class="ml">MA10</span><span class="mv ">11.10</span></div> <div class="m"><span class="ml">MA20</span><span class="mv ">11.63</span></div> <div class="m"><span class="ml">MA60</span><span class="mv ">11.90</span></div>
+        <div class="m"><span class="ml">RSI</span><span class="mv ">33.26</span></div> <div class="m"><span class="ml">DIF</span><span class="mv ">-0.29</span></div> <div class="m"><span class="ml">DEA</span><span class="mv ">-0.25</span></div> <div class="m"><span class="ml">MACD柱</span><span class="mv ">-0.08</span></div>
+        <div class="m"><span class="ml">K</span><span class="mv ">49.87</span></div> <div class="m"><span class="ml">D</span><span class="mv ">43.91</span></div> <div class="m"><span class="ml">J</span><span class="mv ">61.80</span></div>
+      </div>
+      <div class="state">MACD：死叉·空头动能 ｜ KDJ：K=50 D=44 J=62</div>
+      
+    <div class="fund">
+      <div class="fund-grid">
+        <div class="fg"><div class="fgh">估值</div><div class="fg-row"><span>PE</span><b>13.22</b></div><div class="fg-row"><span>PB</span><b>1.01</b></div><div class="fg-row"><span>PS</span><b>1.26</b></div><div class="fg-row"><span>PCF</span><b>10.13</b></div><div class="fg-row"><span>总市值</span><b>42.93亿</b></div></div>
+        <div class="fg"><div class="fgh">质量</div><div class="fg-row"><span>ROE</span><b>9.2%</b></div><div class="fg-row"><span>毛利率</span><b>27.6%</b></div></div>
+        <div class="fg"><div class="fgh">资金面</div><div class="fg-row"><span>换手率</span><b>0.97%</b></div><div class="fg-row"><span>20日成交额</span><b>0.94亿</b></div></div>
+      </div>
+      <div class="fund-note">估值点评：<span class="flag good">低估值 PE 13.2</span><span class="flag mid">盈利中 ROE 9.2%</span><span class="flag mid">毛利中 28%</span><span class="flag mid">交投清淡 换手 1.0%</span></div>
+    </div>
+    </div>
+
+    <div class="card">
+      <div class="card-head">
+        <div class="title"><span class="code">603390</span><span class="name">通达电气</span></div>
+        <span class="badge neutral">震荡</span>
+        <span class="price">10.24</span>
+        <span class="chg bull">+0.10%</span>
+      </div>
+      <div class="sig">Boll 信号：连续中轨回踩：已连续10日（本日不重复触发）</div>
+      <div class="pos"><span class="pos-item"><span class="pl">成本</span><b>14.86</b></span><span class="pos-item"><span class="pl">数量</span><b>100</b></span><span class="pos-item"><span class="pl">持仓盈亏</span><b class="pnl bear">¥-462（-31.09%）</b></span><span class="pos-item"><span class="pl">当日</span><b class="pnl bull">+¥1</b></span></div>
+      <div class="rec neutral">📌 持仓建议：持有观望　｜　多空因素交织，建议结合仓位管理观望；RSI·偏强，MACD·金叉红柱，KDJ·极端超买，均线·短期偏弱<div class="faces"><span class="face down">技术面 44</span><span class="face flat">基本面 58</span><span class="face flat">资金面 56</span></div></div>
+      <div class="boll"><div class="boll-track"><div class="boll-mark" style="left:70.6%"></div></div><div class="boll-lab">布林带位置 71%（下轨 9.87 → 上轨 10.39）</div></div>
+      <div class="metrics">
+        <div class="m"><span class="ml">MA5</span><span class="mv ">10.11</span></div> <div class="m"><span class="ml">MA10</span><span class="mv ">10.05</span></div> <div class="m"><span class="ml">MA20</span><span class="mv ">10.13</span></div> <div class="m"><span class="ml">MA60</span><span class="mv ">10.28</span></div>
+        <div class="m"><span class="ml">RSI</span><span class="mv ">61.43</span></div> <div class="m"><span class="ml">DIF</span><span class="mv ">0.02</span></div> <div class="m"><span class="ml">DEA</span><span class="mv ">0.00</span></div> <div class="m"><span class="ml">MACD柱</span><span class="mv ">0.05</span></div>
+        <div class="m"><span class="ml">K</span><span class="mv ">80.57</span></div> <div class="m"><span class="ml">D</span><span class="mv ">70.28</span></div> <div class="m"><span class="ml">J</span><span class="mv ">101.13</span></div>
+      </div>
+      <div class="state">MACD：金叉·多头动能 ｜ KDJ：超买 J=101</div>
+      
+    <div class="fund">
+      <div class="fund-grid">
+        <div class="fg"><div class="fgh">估值</div><div class="fg-row"><span>PE</span><b>28.53</b></div><div class="fg-row"><span>PB</span><b>2.12</b></div><div class="fg-row"><span>PS</span><b>3.63</b></div><div class="fg-row"><span>PCF</span><b>35.46</b></div><div class="fg-row"><span>总市值</span><b>35.97亿</b></div></div>
+        <div class="fg"><div class="fgh">质量</div><div class="fg-row"><span>ROE</span><b>5.3%</b></div><div class="fg-row"><span>毛利率</span><b>29.2%</b></div></div>
+        <div class="fg"><div class="fgh">资金面</div><div class="fg-row"><span>换手率</span><b>1.64%</b></div><div class="fg-row"><span>20日成交额</span><b>0.56亿</b></div></div>
+      </div>
+      <div class="fund-note">估值点评：<span class="flag bad">盈利弱 ROE 5.3%</span><span class="flag mid">毛利中 29%</span></div>
+    </div>
+    </div>
+<div class="card"><h3 style="font-size:15px;margin-bottom:6px">📅 近 5 天持仓建议对比</h3><table class="cmp"><tr><th>股票</th><th>08-26</th><th>08-27</th><th>08-28</th><th>08-31</th><th>09-01</th></tr><tr><td class="name">002284 亚太股份</td><td><span class="tag bull">持有偏多</span><span class="px">9.84</span></td><td><span class="tag bull">加仓</span><span class="px">9.80</span></td><td><span class="tag bull">加仓</span><span class="px">9.84</span></td><td><span class="tag bull">加仓</span><span class="px">9.96</span></td><td><span class="tag bull">加仓</span><span class="px">10.21</span></td></tr><tr><td class="name">600269 赣粤高速</td><td><span class="tag neutral">持有观望</span><span class="px">3.87</span></td><td><span class="tag bull">持有偏多</span><span class="px">3.83</span></td><td><span class="tag bull">持有偏多</span><span class="px">3.86</span></td><td><span class="tag bull">持有偏多</span><span class="px">3.85</span></td><td><span class="tag bull">持有偏多</span><span class="px">3.89</span></td></tr><tr><td class="name">603187 海容冷链</td><td><span class="tag neutral">持有观望</span><span class="px">11.18</span></td><td><span class="tag neutral">持有观望</span><span class="px">11.15</span></td><td><span class="tag neutral">持有观望</span><span class="px">11.19</span></td><td><span class="tag neutral">持有观望</span><span class="px">11.11</span></td><td><span class="tag neutral">持有观望</span><span class="px">11.10</span></td></tr><tr><td class="name">603390 通达电气</td><td><span class="tag bull">持有偏多</span><span class="px">10.00</span></td><td><span class="tag bull">持有偏多</span><span class="px">10.04</span></td><td><span class="tag neutral">持有观望</span><span class="px">10.06</span></td><td><span class="tag neutral">持有观望</span><span class="px">10.23</span></td><td><span class="tag neutral">持有观望</span><span class="px">10.24</span></td></tr></table><div class="state" style="margin-top:8px">单元格 = 当日三维度综合建议（技术面随日变化；基本面/资金面无历史序列，取当前缓存、各日固定）。红=偏多/加仓，绿=偏空/减仓，下方数字为当日收盘价。仅供参考，不构成投资建议。</div></div>
+
+    <div class="card">
+      <div class="card-head"><span class="code">📊 跨持仓基本面对比</span></div>
+      <table class="cmp">
+        <tr><th>股票</th><th>PE</th><th>PB</th><th>ROE</th><th>毛利率</th><th>市值(亿)</th><th>换手</th><th>点评</th></tr>
+        <tr><td class="name">002284 亚太股份</td><td>13.20</td><td>2.07</td><td>15.6%</td><td>20.8%</td><td>73.61</td><td>3.91%</td><td style="text-align:left;font-size:12px;color:#5a6068">低估值 PE 13.2、盈利优 ROE 15.6%、毛利中 21%、交投活跃 换手 3.9%</td></tr><tr><td class="name">600269 赣粤高速</td><td>12.43</td><td>0.47</td><td>6.7%</td><td>37.7%</td><td>89.91</td><td>0.82%</td><td style="text-align:left;font-size:12px;color:#5a6068">破净 PB 0.47、低估值 PE 12.4、盈利弱 ROE 6.7%、毛利中 38%、交投清淡 换手 0.8%</td></tr><tr><td class="name">603187 海容冷链</td><td>13.22</td><td>1.01</td><td>9.2%</td><td>27.6%</td><td>42.93</td><td>0.97%</td><td style="text-align:left;font-size:12px;color:#5a6068">低估值 PE 13.2、盈利中 ROE 9.2%、毛利中 28%、交投清淡 换手 1.0%</td></tr><tr><td class="name">603390 通达电气</td><td>28.53</td><td>2.12</td><td>5.3%</td><td>29.2%</td><td>35.97</td><td>1.64%</td><td style="text-align:left;font-size:12px;color:#5a6068">盈利弱 ROE 5.3%、毛利中 29%</td></tr>
+      </table>
+    </div>
+  <div class="foot">Stocks-Master 自动生成 · 技术面 Boll/MACD/RSI/KDJ/MA + 基本面/资金面<br>
+  仅供研究参考，不构成投资建议</div>
+</div></body></html>
