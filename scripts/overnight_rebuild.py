@@ -12,6 +12,7 @@
 """
 from __future__ import annotations
 
+import json
 import os
 import shutil
 import subprocess
@@ -70,6 +71,35 @@ def run_step(name: str, cmd: list[str], timeout_s: int, env_extra: dict | None =
     return rec
 
 
+def step2_apply_validated_holds() -> dict:
+    """读 hold_by_family.json，把「验证通过」的分档值写进 risk_config.json。
+
+    纪律：只采纳 recommendation.validated=true 的策略（训练段最优且验证段
+    不劣于全局 12 日）；其余维持全局。写配置而非环境变量——分档值就此成为
+    生产行为的一部分，重跑/实盘共用同一份。
+    """
+    src = REPORT_DIR / "hold_by_family.json"
+    applied: dict = {}
+    try:
+        rep = json.loads(src.read_text(encoding="utf-8"))
+    except Exception as exc:
+        log(f"Step2.5 分档报告不可读（{exc}），全部维持全局 12")
+        return applied
+    cfg_path = ROOT / "smcore" / "strategy" / "risk_config.json"
+    cfg = json.loads(cfg_path.read_text(encoding="utf-8"))
+    by_strat = dict((cfg.get("exit", {}) or {}).get("hold_days_by_strategy") or {})
+    for strat, b in rep.get("buckets", {}).items():
+        rec = b.get("recommendation", {})
+        if rec.get("validated") and rec.get("suggested_hold"):
+            by_strat[strat] = int(rec["suggested_hold"])
+            applied[strat] = int(rec["suggested_hold"])
+    cfg.setdefault("exit", {})["hold_days_by_strategy"] = by_strat
+    cfg_path.write_text(json.dumps(cfg, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+    log(f"Step2.5 应用持有分档: {applied or '无（均未通过验证，维持全局 12）'}")
+    RESULTS.append({"step": "apply_holds", "ok": True, "applied": applied})
+    return applied
+
+
 def step1_archive() -> None:
     moved = 0
     ARCHIVE_DIR.mkdir(parents=True, exist_ok=True)
@@ -115,12 +145,20 @@ def step6_git_push() -> None:
 
 
 def main() -> int:
-    log("════ 连夜重建开始 ════")
+    log("════ 连夜重建开始（顺序：先测出自适应分档 → 再用分档跑全量）════")
     step1_archive()
 
+    # ① 先测量：持有期分档建议（不依赖回测归档）
+    run_step("hold_by_family", [PY, str(ROOT / "scripts" / "measure_hold_by_family.py")], timeout_s=2 * 3600)
+
+    # ② 应用验证通过的分档值到 risk_config（无通过项 = 维持全局 12）
+    step2_apply_validated_holds()
+
+    # ③ 再跑全量重回测——daily_backtest 子进程此刻读取的就是分档后的配置
     run_step("rebacktest", [PY, str(ROOT / "scripts" / "daily_backtest.py")],
              timeout_s=4 * 3600, env_extra={"HOLD_DAYS": "12", "LOOKBACK_DAYS": "400"})
-    run_step("hold_by_family", [PY, str(ROOT / "scripts" / "measure_hold_by_family.py")], timeout_s=2 * 3600)
+
+    # ④ 其余两项测量（与回测归档无依赖）
     run_step("price_band", [PY, str(ROOT / "scripts" / "measure_price_band.py")], timeout_s=60 * 60)
     run_step("boll_k", [PY, str(ROOT / "scripts" / "measure_boll_k.py")], timeout_s=2 * 3600)
 
@@ -138,7 +176,9 @@ def main() -> int:
         status = "✅" if r.get("ok") else "❌"
         extra = r.get("error") or r.get("note") or (f"moved={r['moved']}" if "moved" in r else "")
         lines.append(f"| {r['step']} | {status} | {r.get('seconds', '-')}s | {extra} |")
-    lines += ["", "## 产物", "",
+    applied = next((r.get("applied") for r in RESULTS if r["step"] == "apply_holds"), {})
+    lines += ["", f"## 本次应用的持有分档: {applied or '无（均未通过验证）'}", "",
+              "## 产物", "",
               "- 历史回测: stock_data/Multi-Backtest-*/（新口径，已回写仓库 → 网站回测 Tab）",
               "- 旧口径归档: stock_data/archive/backtest_v1/（对照用，勿与新数字直接比较）",
               "- hold_by_family.json: 持有期分档建议（validated=true 才建议配置）",
