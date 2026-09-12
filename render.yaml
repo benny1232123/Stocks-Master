@@ -4,9 +4,9 @@ services:
     env: python
     plan: free
     branch: master
-    # npm ci 全新安装（构建缓存损坏曾致 vite 可执行位丢失 → Permission denied）；
-    # chmod 兜底确保 .bin 垫片可执行
-    buildCommand: cd frontend && npm ci && chmod +x node_modules/.bin/* 2>/dev/null; npm run build && cd .. && pip install -r requirements.txt
+    # vite 经 node 直接调用（不走 .bin 垫片）：Render 构建环境曾出现垫片
+    # Permission denied（npm ci/chmod 均无效），node 直调绕开可执行位问题
+    buildCommand: cd frontend && npm ci && npm run build && cd .. && pip install -r requirements.txt
     startCommand: uvicorn backend.main:app --host 0.0.0.0 --port $PORT
     healthCheckPath: /
     envVars:
