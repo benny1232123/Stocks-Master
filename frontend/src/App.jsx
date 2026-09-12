@@ -693,6 +693,7 @@ function App() {
   const [error, setError] = useState('')
   const [backendDown, setBackendDown] = useState(false) // 持续性状态（驱动「离线」chip），不随 toast 自动消失
   const [adminHeight, setAdminHeight] = useState(1100) // 管理页 iframe 自适应高度（admin 页 postMessage 上报）
+  const [diag, setDiag] = useState(null) // 连通性自诊断面板：null=关闭 {running, rows, build, deploy}
   const [scanLogs, setScanLogs] = useState([])
   const [dbStatus, setDbStatus] = useState(null)
   const [fullDaily, setFullDaily] = useState(null)
@@ -1115,6 +1116,35 @@ function App() {
     return () => { alive = false; if (timer) clearTimeout(timer) }
   }, [loadDashboard])
 
+  // 连通性自诊断：逐端点测状态码+耗时（串行，时延清晰），一屏给出完整结论
+  const runDiag = async () => {
+    setDiag({ running: true, rows: [], build: BUILD_SHA, deploy: dbStatus && dbStatus.backend_commit || '' })
+    const targets = [
+      ['健康检查 /health', '/health'],
+      ['看板 /api/dashboard', '/api/dashboard'],
+      ['日报索引', '/api/artifacts/daily-action-list'],
+      ['持仓 /api/portfolio', '/api/portfolio'],
+      ['最新回测', '/api/backtests/latest'],
+      ['候选池(可能后台生成中)', '/api/selection/candidates?price_min=5&price_max=30'],
+    ]
+    const rows = []
+    for (const [label, url] of targets) {
+      const t0 = performance.now()
+      const ctl = new AbortController()
+      const to = setTimeout(() => ctl.abort(), 20000)
+      try {
+        const r = await fetch(url, { cache: 'no-store', signal: ctl.signal })
+        rows.push({ name: label, ok: r.ok, status: r.status, ms: Math.round(performance.now() - t0) })
+      } catch (e) {
+        rows.push({ name: label, ok: false, status: 0, ms: Math.round(performance.now() - t0),
+                    err: e.name === 'AbortError' ? '超时(>20s)' : (e.message || '网络失败') })
+      }
+      clearTimeout(to)
+      setDiag({ running: true, rows: [...rows], build: BUILD_SHA, deploy: dbStatus && dbStatus.backend_commit || '' })
+    }
+    setDiag({ running: false, rows, build: BUILD_SHA, deploy: dbStatus && dbStatus.backend_commit || '' })
+  }
+
   // 首次加载（宏观数据日更，无需轮询；用户可手动点击刷新）
   useEffect(() => {
     loadDashboard()
@@ -1222,7 +1252,8 @@ function App() {
       <div className="command">
         <span className="command-wordmark">Stocks Master</span>
         <div className="command-right">
-          <span className={cn('chip', backendDown ? 'alert' : '')}>
+          <span className={cn('chip', backendDown ? 'alert' : '')} style={{ cursor: 'pointer' }}
+                onClick={() => runDiag()} title="点击运行连通性自诊断">
             <span className="dot" />
             {backendDown ? '离线' : '在线'}
           </span>
@@ -1232,9 +1263,10 @@ function App() {
           </span>
           <span
             className="chip"
-            style={{ opacity: 0.75 }}
-            title={`前端构建: ${BUILD_SHA} · ${BUILD_TIME}${dbStatus && dbStatus.backend_commit ? `
-后端部署: ${dbStatus.backend_commit}` : ''}`}
+            style={{ opacity: 0.75, cursor: 'pointer' }}
+            onClick={() => runDiag()}
+            title={`点击运行连通性自诊断
+前端构建: ${BUILD_SHA} · ${BUILD_TIME}`}
           >
             v{BUILD_SHA}
             {dbStatus && dbStatus.backend_commit
@@ -3095,6 +3127,48 @@ function App() {
         <div className="fixed bottom-4 right-4 px-4 py-2 rounded-lg bg-primary/10 text-primary text-sm border border-primary/25 flex items-center gap-2 shadow-lg">
           <span>{error}</span>
           <button onClick={() => setError('')} className="ml-2 text-primary/60 hover:text-primary text-xs">&times;</button>
+        </div>
+      ) : null}
+
+      {diag ? (
+        <div className="fixed inset-0 z-50 flex items-center justify-center" style={{ background: 'rgba(0,0,0,0.35)' }}
+             onClick={() => setDiag(null)}>
+          <div className="glass-card" style={{ width: 520, maxWidth: '92vw', padding: 20 }}
+               onClick={(e) => e.stopPropagation()}>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 12 }}>
+              <h3 style={{ margin: 0 }}>连通性自诊断</h3>
+              <div style={{ display: 'flex', gap: 8 }}>
+                <Button variant="outline" onClick={runDiag}>{diag.running ? '检测中…' : '重新检测'}</Button>
+                <Button variant="ghost" onClick={() => setDiag(null)}>关闭</Button>
+              </div>
+            </div>
+            <div style={{ fontSize: 12, color: 'hsl(var(--muted))', marginBottom: 10 }}>
+              前端构建: v{diag.build}　|　后端部署: {diag.deploy ? `v${diag.deploy}` : '未知（/api/status 不可达）'}
+            </div>
+            <table style={{ width: '100%', fontSize: 13, borderCollapse: 'collapse' }}>
+              <thead><tr style={{ color: 'hsl(var(--muted))', textAlign: 'left' }}>
+                <th style={{ padding: '4px 6px' }}>端点</th><th>状态</th><th>结果</th><th>耗时</th>
+              </tr></thead>
+              <tbody>
+                {diag.rows.map((r, i) => (
+                  <tr key={i} style={{ borderTop: '1px solid hsl(var(--border))' }}>
+                    <td style={{ padding: '6px' }}>{r.name}</td>
+                    <td>{r.ok ? <span style={{ color: '#16a34a' }}>✅ {r.status}</span>
+                             : <span style={{ color: '#dc2626' }}>❌ {r.status || '—'}</span>}</td>
+                    <td style={{ color: '#dc2626' }}>{r.err || ''}</td>
+                    <td>{r.ms}ms</td>
+                  </tr>
+                ))}
+                {diag.running && diag.rows.length === 0 ? (
+                  <tr><td colSpan={4} style={{ padding: 12, color: 'hsl(var(--muted))' }}>检测中…</td></tr>
+                ) : null}
+              </tbody>
+            </table>
+            <p style={{ fontSize: 12, color: 'hsl(var(--muted))', margin: '10px 0 0' }}>
+              全部 ✅ = 链路与后端正常（异常为瞬时，刷新即可）；任一 ❌ = 该接口故障，截图发我即可定位。
+              候选池显示「生成中」属正常（后台生成模式）。
+            </p>
+          </div>
         </div>
       ) : null}
     </>
