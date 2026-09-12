@@ -764,22 +764,25 @@ function App() {
 
   // 加载每日 CI 自动回测结果（全部历史信号日前向回测批次）
   async function loadDailyBacktest() {
-    try {
-      const resp = await fetch('/api/backtests/daily-latest')
-      if (resp.ok) {
-        const data = await resp.json()
-        setDailyBacktests(data.items || [])
-        setExcludedTrades(Number(data.excluded_trades ?? 0))
-        setSelDaily(0)
-      }
-    } catch { /* 忽略加载失败 */ }
-    try {
-      const sresp = await fetch(`/api/backtests/daily-summary?lookback=${summaryLookback}`)
-      if (sresp.ok) {
-        const sdata = await sresp.json()
-        setDailySummary(sdata)
-      }
-    } catch { /* 忽略加载失败 */ }
+    // 静态托管（CF Pages）回退：API 不可达或返回 HTML 时读 web_data 快照
+    const safeJson = async (url, staticFile) => {
+      try {
+        const r = await fetch(url, { cache: 'no-store' })
+        if (r.ok) return await r.json()
+      } catch { /* 走静态回退 */ }
+      try {
+        const r2 = await fetch(`web_data/${staticFile}`, { cache: 'no-store' })
+        return r2.ok ? await r2.json() : null
+      } catch { return null }
+    }
+    const data = await safeJson('/api/backtests/daily-latest', 'daily_items.json')
+    if (data) {
+      setDailyBacktests(data.items || [])
+      setExcludedTrades(Number(data.excluded_trades ?? 0))
+      setSelDaily(0)
+    }
+    const sdata = await safeJson(`/api/backtests/daily-summary?lookback=${summaryLookback}`, 'daily_summary.json')
+    if (sdata) setDailySummary(sdata)
   }
 
   // 切换总体总结的聚合窗口（20 / 40 / 近一年）后重新拉取总体指标。
@@ -1196,10 +1199,17 @@ function App() {
   useEffect(() => {
     const controller = new AbortController()
     async function loadFullDaily() {
+      const load = async (url) => {
+        const r = await fetch(url, { signal: controller.signal })
+        if (!r.ok) throw new Error(String(r.status))
+        return r.json()
+      }
       try {
-        const resp = await fetch('/api/artifacts/daily-action-list/full', { signal: controller.signal })
-        if (resp.ok) setFullDaily(await resp.json())
-      } catch { /* 离线时保持 null */ }
+        setFullDaily(await load('/api/artifacts/daily-action-list/full'))
+      } catch {
+        // 静态托管（CF Pages）回退：读每日导出的快照
+        try { setFullDaily(await load('web_data/daily_full.json')) } catch { /* 保持 null */ }
+      }
     }
     loadFullDaily()
     return () => controller.abort()
