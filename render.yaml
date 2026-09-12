@@ -12,6 +12,10 @@ services:
         value: akshare
       - key: TDX_ENABLED
         value: "0"
+      # 候选池全市场扫描在 512MB 实例上会 OOM（ak.stock_zh_a_spot 全市场快照），
+      # 云端关闭：候选池保持空，本地跑扫描后提交缓存即可
+      - key: CANDIDATE_SCAN_BG
+        value: "0"
       - key: TRADES_BACKEND
         value: auto
       - key: SUPABASE_URL

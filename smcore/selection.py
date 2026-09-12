@@ -1,6 +1,7 @@
 """Shared helpers for stock selection scans and candidate lookup."""
 from __future__ import annotations
 
+import os
 from datetime import date, timedelta
 from typing import Any
 
@@ -82,6 +83,12 @@ def get_candidate_codes(price_min: float, price_max: float) -> tuple[list[str], 
 
     today_file = CACHE_DIR / f"{cache_key}_{beijing_today().strftime('%Y-%m-%d')}.pkl"
     if not today_file.exists():
+        # 内存门控（2026-09-12）：fetch_candidate_codes 里的 ak.stock_zh_a_spot 是
+        # 全市场快照（5000 行 × 20 列），Render free 512MB 实例上会 OOM 重启，
+        # 且重启后下一个请求再次触发 → 崩溃循环。云端（CANDIDATE_SCAN_BG=0）
+        # 不做扫描、候选池保持空；本地默认开启。
+        if os.getenv("CANDIDATE_SCAN_BG", "1").strip() == "0":
+            return [], None
         _kick_candidate_scan(cache_key, price_min, price_max)
         return [], "生成中"
     codes, cache_date = get_daily(cache_key, fetch_candidate_codes, price_min, price_max)
