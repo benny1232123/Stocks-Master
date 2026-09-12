@@ -21,6 +21,10 @@ services:
       # 云端关闭：候选池保持空，本地跑扫描后提交缓存即可
       - key: CANDIDATE_SCAN_BG
         value: "0"
+      # 云端精简模式：个股分析/扫描/融合/回测触发等重内存端点返回 503
+      # （512MB 免费实例跑不动，见 2026-09-12 OOM 告警）
+      - key: RENDER_LITE
+        value: "1"
       - key: TRADES_BACKEND
         value: auto
       - key: SUPABASE_URL

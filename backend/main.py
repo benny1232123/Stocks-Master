@@ -57,6 +57,20 @@ def _require_api_key(request: Request, x_api_key: str | None = Header(default=No
         raise HTTPException(status_code=401, detail=str(exc) or "API key required")
 
 
+# ── 云端精简模式（RENDER_LITE=1）──
+# 免费实例 512MB 跑不动个股分析/全市场扫描/回测触发（实测 OOM 循环）。
+# 开启后这些重内存端点直接返回 503 + 明确提示；看数据/管理/录交易不受影响。
+RENDER_LITE = os.getenv("RENDER_LITE", "0").strip() == "1"
+
+
+def _lite_reject(feature: str):
+    if RENDER_LITE:
+        raise HTTPException(
+            status_code=503,
+            detail=f"云端精简模式未包含{feature}（内存受限）——请在本地运行使用，或升级实例",
+        )
+
+
 @asynccontextmanager
 async def lifespan(_app: FastAPI):
     threading.Thread(target=prewarm_dashboard_cache, daemon=True).start()
@@ -212,6 +226,7 @@ def app_status() -> dict:
         # 后端部署的 git 版本（Render 注入；本地运行无 → None）。前端据此对比
         # 自身构建版本，不一致即提示「部署中/浏览器缓存旧版，请强刷」
         "backend_commit": (os.getenv("RENDER_GIT_COMMIT") or os.getenv("GIT_COMMIT") or "")[:12] or None,
+        "lite_mode": RENDER_LITE,
     }
 
 
@@ -674,6 +689,7 @@ def daily_backtest_summary(lookback: int | None = None) -> dict:
 
 @app.post("/api/backtests/run-latest", dependencies=[Depends(_require_api_key)])
 def run_latest_backtest(payload: dict | None = None) -> dict:
+    _lite_reject("回测触发")
     payload = payload or {}
     latest = find_latest_file("Daily-Action-List-*.csv")
     if latest is None:
@@ -696,6 +712,7 @@ def run_latest_backtest(payload: dict | None = None) -> dict:
 
 @app.post("/api/backtests/run", dependencies=[Depends(_require_api_key)])
 def run_backtest(payload: dict) -> dict:
+    _lite_reject("回测触发")
     codes = payload.get("codes") or []
     signal_date = payload.get("date") or date.today().strftime("%Y%m%d")
     if isinstance(codes, str):
@@ -783,6 +800,7 @@ def _parse_date(value, default: date) -> date:
 
 @app.get("/api/analysis/{code}")
 def analysis(code: str, window: int = 20, k: float = 1.645, days_back: int = 180) -> dict:
+    _lite_reject("个股分析")
     return build_stock_analysis(code, window=window, k=k, days_back=days_back)
 
 
@@ -794,6 +812,7 @@ def selection_candidates(price_min: float = 5.0, price_max: float = 30.0) -> dic
 
 @app.post("/api/selection/boll-scan", dependencies=[Depends(_require_api_key)])
 def selection_boll_scan(payload: dict) -> dict:
+    _lite_reject("全市场扫描")
     codes = payload.get("codes") or []
     if isinstance(codes, str):
         codes = [item.strip() for item in codes.replace("\n", ",").replace(" ", ",").split(",") if item.strip()]
@@ -859,6 +878,7 @@ def selection_cancel_task(task_id: str) -> dict:
 
 @app.post("/api/selection/fusion", dependencies=[Depends(_require_api_key)])
 def selection_fusion(payload: dict) -> dict:
+    _lite_reject("策略融合")
     task_id = _create_heavy_task("fusion")
     if task_id is None:
         raise HTTPException(status_code=429, detail=f"已有 {_MAX_HEAVY_TASKS} 个重任务在运行，请稍后再试")
