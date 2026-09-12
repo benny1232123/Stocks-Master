@@ -1044,13 +1044,17 @@ function App() {
     try {
       setError('')
       setRefreshing(true)
+      // 每个请求独立命名 + no-store：失败时提示点名到具体接口/状态码，
+      // 且彻底绕过浏览器 HTTP 缓存（强刷只旁路文档，JS fetch 的坏缓存会残留）
+      let failed = ''
+      const guard = (name) => (r) => { if (!r.ok) failed = `${name}(HTTP ${r.status})`; return r }
       const [d, a, p, b] = await Promise.all([
-        fetch('/api/dashboard', { signal }),
-        fetch('/api/artifacts/daily-action-list', { signal }),
-        fetch('/api/portfolio', { signal }),
-        fetch('/api/backtests/latest', { signal }),
+        fetch('/api/dashboard', { signal, cache: 'no-store' }).then(guard('看板')),
+        fetch('/api/artifacts/daily-action-list', { signal, cache: 'no-store' }).then(guard('日报索引')),
+        fetch('/api/portfolio', { signal, cache: 'no-store' }).then(guard('持仓')),
+        fetch('/api/backtests/latest', { signal, cache: 'no-store' }).then(guard('回测')),
       ])
-      if (!d.ok || !a.ok || !p.ok || !b.ok) throw new Error('api error')
+      if (failed) throw new Error(failed)
       setDashboard(await d.json())
       setArtifacts(await a.json())
       setPortfolio(await p.json())
@@ -1063,21 +1067,22 @@ function App() {
         const cCtl = new AbortController()
         const cTo = setTimeout(() => cCtl.abort(), 15000)
         try {
-          const c = await fetch('/api/selection/candidates?price_min=5&price_max=30', { signal: cCtl.signal })
+          const c = await fetch('/api/selection/candidates?price_min=5&price_max=30', { signal: cCtl.signal, cache: 'no-store' })
           if (c.ok) setCandidateCodes((await c.json()).codes ?? [])
         } finally { clearTimeout(cTo) }
         const aCtl = new AbortController()
         const aTo = setTimeout(() => aCtl.abort(), 30000)
         try {
-          const an = await fetch(`/api/analysis/${analysisCode}`, { signal: aCtl.signal })
+          const an = await fetch(`/api/analysis/${analysisCode}`, { signal: aCtl.signal, cache: 'no-store' })
           if (an.ok) setAnalysis(await an.json())
         } finally { clearTimeout(aTo) }
       } catch (e2) {
         if (e2.name !== 'AbortError') setError('部分辅助数据加载失败——主数据正常，可点刷新补齐')
       }
     } catch (err) {
-      if (err.name !== 'AbortError') { setError('后端未启动或接口不可用'); setBackendDown(true) }
-      else if (timedOut) { setError('刷新超时：后端正在拉取行情数据，请稍后再试') }
+      if (err.name !== 'AbortError') {
+        setError('后端连接失败（' + (err.message || '网络异常') + '）'); setBackendDown(true)
+      } else if (timedOut) { setError('刷新超时：后端正在拉取行情数据，请稍后再试') }
     }
     finally { clearTimeout(timeoutTimer); setRefreshing(false) }
   }, [analysisCode])
