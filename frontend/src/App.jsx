@@ -1113,6 +1113,8 @@ function App() {
         } catch (e) { if (e.name !== 'AbortError' && !auxFail) auxFail = '个股分析(网络)' }
         finally { clearTimeout(aTo) }
         if (auxFail) setError('辅助数据加载失败（' + auxFail + '）——主数据正常，个股分析面板暂不可用')
+      } catch (e2) {
+        // aux 内部错误已在各段独立上报；此处兜底防抛出
       }
     } catch (err) {
       if (err.name !== 'AbortError') {
