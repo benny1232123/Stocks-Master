@@ -18,6 +18,7 @@ JSON 快照，后端读端点「快照优先、缺失回退实时」——网站
 from __future__ import annotations
 
 import json
+import os
 import sys
 from pathlib import Path
 
@@ -58,6 +59,9 @@ def _sanitize(obj):
 
 def main() -> int:
     OUT_DIR.mkdir(parents=True, exist_ok=True)
+    # 关键：导出时必须禁用后端的静态优先层——否则 GET 端点会把「旧快照」原样
+    # 读回来写盘（自我吞咽），dashboard.json 永远停在第一次导出的内容。
+    os.environ["WEB_DATA_STATIC"] = "0"
     from backend.main import app
 
     client = TestClient(app)

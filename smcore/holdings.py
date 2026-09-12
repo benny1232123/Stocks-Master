@@ -2,10 +2,12 @@
 from __future__ import annotations
 
 import threading
+from datetime import date, timedelta
 from typing import Any
 
 import pandas as pd
 
+from smcore.data.kline import fetch_daily_k
 from smcore.storage.trades_repo import get_trade_repository
 from smcore.utils.code import format_stock_code
 
@@ -226,10 +228,11 @@ def portfolio_snapshot() -> dict[str, Any]:
     }
 
     if not pos_df.empty:
+        codes = pos_df["代码"].astype(str).tolist()
+        price_map: dict[str, float] = {}
         try:
             from smcore.data.quote import fetch_realtime_quotes
 
-            codes = pos_df["代码"].astype(str).tolist()
             quotes = fetch_realtime_quotes(codes)
             price_map = {
                 str(row["code"]): float(row["price"])
@@ -238,6 +241,23 @@ def portfolio_snapshot() -> dict[str, Any]:
             }
         except Exception:
             price_map = {}
+        # 实时行情缺失的代码 → 本地 K 线最近收盘价回退（离线最稳；行情源瞬断时
+        # 持仓现价/市值/盈亏不再整排 --，与 holdings_snapshot 定价模式对齐）
+        for _code in codes:
+            if price_map.get(str(_code)):
+                continue
+            try:
+                _df = fetch_daily_k(
+                    str(_code),
+                    (date.today() - timedelta(days=15)).strftime("%Y-%m-%d"),
+                    date.today().strftime("%Y-%m-%d"),
+                    adjust="qfq",
+                )
+                _c = pd.to_numeric(_df["close"], errors="coerce").dropna() if _df is not None else pd.Series(dtype=float)
+                if len(_c):
+                    price_map[str(_code)] = float(_c.iloc[-1])
+            except Exception:
+                continue
 
         for _, row in pos_df.iterrows():
             code = str(row["代码"])

@@ -12,6 +12,8 @@ from typing import Optional
 import pandas as pd
 
 from smcore.data.quote import fetch_realtime_quotes
+from smcore.data.kline import fetch_daily_k
+from datetime import date, timedelta
 from smcore.utils.code import format_stock_code
 
 
@@ -51,6 +53,23 @@ def compute_position_pnl(positions: list[dict]) -> pd.DataFrame:
         today_pct = q.get("pct")
         if not name and q.get("name"):
             name = q["name"]
+
+        # 实时行情缺失（数据源抖动/离线/导出时刻）→ 回退本地 K 线最近收盘价：
+        # 持仓市值与盈亏不应因行情源瞬断而整排 --（与 holdings_snapshot 的
+        # 「本地 K 线优先」定价模式对齐）
+        if current_price is None:
+            try:
+                _df = fetch_daily_k(
+                    code,
+                    (date.today() - timedelta(days=15)).strftime("%Y-%m-%d"),
+                    date.today().strftime("%Y-%m-%d"),
+                    adjust="qfq",
+                )
+                _c = pd.to_numeric(_df["close"], errors="coerce").dropna() if _df is not None else pd.Series(dtype=float)
+                if len(_c):
+                    current_price = float(_c.iloc[-1])
+            except Exception:
+                current_price = None
 
         if current_price is None or quantity <= 0:
             rows.append({
