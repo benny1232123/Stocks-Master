@@ -523,7 +523,12 @@
     $('loginView').style.display = 'none';
     $('mainView').style.display = 'block';
     $('logout').style.display = 'inline-block';
-    loadHoldings().catch(function (e) { showMsg(e.message, 'err'); });
+    loadHoldings().catch(function (e) {
+      // 仅令牌失效回登录框；网络抖动/部署重启留在主界面提示重试
+      // （旧版任何错误都踢回登录框，部署窗口里自动登录"卡一会后要重输密码"即此因）
+      if (/登录已过期/.test(e.message || '')) { showLogin(); return; }
+      showMsg((e.message || '数据加载失败') + '——可能是部署重启，稍后点操作可重试', 'err');
+    });
     loadReports().catch(function () {}); // 日报列表加载失败不阻断主流程
   }
 
@@ -616,20 +621,16 @@
   var today = new Date().toISOString().slice(0, 10);
   $('f_date').value = today;
 
-  // 启动：先看状态，有令牌就直接进
+  // 启动：有令牌 → 乐观立即进主界面（数据在 showMain 里加载），仅令牌失效才回登录框。
+  // 旧版先串行拉一遍 holdings 验证成功才显示界面——自动登录"卡一会"且部署重启时
+  // 会把已登录用户踢回登录框，都要重输密码。
   fetch('/api/admin/status')
     .then(function (r) { return r.json(); })
+    .catch(function () { return { enabled: true }; }) // status 探测失败（部署重启窗口）按启用处理，不挡登录态恢复
     .then(function (st) {
       if (!st.enabled) { showLogin(st); return; }
-      if (token) {
-        api('/api/admin/holdings')
-          .then(function (d) { showMain(); })
-          .catch(function () { showLogin(st); });
-      } else {
-        showLogin(st);
-      }
-    })
-    .catch(function () { showLogin({ enabled: true }); });
+      if (token) { showMain(); } else { showLogin(st); }
+    });
 })();
 </script>
   <script>
