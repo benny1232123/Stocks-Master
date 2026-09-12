@@ -1067,6 +1067,34 @@ function App() {
     finally { clearTimeout(timeoutTimer); setRefreshing(false) }
   }, [analysisCode])
 
+  // 后端存活探测（自愈）：「离线」chip 与重数据解耦——/health 轻量端点 60s 一探。
+  // 背景：Render 部署重启窗口里页面拉数据失败一次，「离线」就锁死（数据是最后一次
+  // 成功加载的，看起来正常但 chip 卡在离线）。现在：恢复后 60s 内自动翻回「在线」，
+  // 并自动补拉一次看板数据（部署后自愈，不再需要手动刷新）。
+  const backendDownRef = useRef(false)
+  useEffect(() => { backendDownRef.current = backendDown }, [backendDown])
+  useEffect(() => {
+    let alive = true
+    let timer = null
+    const probe = async () => {
+      const ctl = new AbortController()
+      const to = setTimeout(() => ctl.abort(), 8000)
+      let up = false
+      try {
+        const r = await fetch('/health', { cache: 'no-store', signal: ctl.signal })
+        up = r.ok
+      } catch { up = false }
+      finally { clearTimeout(to) }
+      if (!alive) return
+      const wasDown = backendDownRef.current
+      setBackendDown(!up)
+      if (up && wasDown) loadDashboard()
+      timer = setTimeout(probe, 60000)
+    }
+    probe()
+    return () => { alive = false; if (timer) clearTimeout(timer) }
+  }, [loadDashboard])
+
   // 首次加载（宏观数据日更，无需轮询；用户可手动点击刷新）
   useEffect(() => {
     loadDashboard()
@@ -1189,7 +1217,9 @@ function App() {
 后端部署: ${dbStatus.backend_commit}` : ''}`}
           >
             v{BUILD_SHA}
-            {dbStatus && dbStatus.backend_commit && dbStatus.backend_commit !== BUILD_SHA ? (
+            {dbStatus && dbStatus.backend_commit
+              && !dbStatus.backend_commit.startsWith(BUILD_SHA)
+              && !BUILD_SHA.startsWith(dbStatus.backend_commit) ? (
               <span
                 style={{ color: '#d97706', marginLeft: 6 }}
                 title={`后端部署版本(${dbStatus.backend_commit})与前端不一致——可能部署中或浏览器缓存了旧版，请 Ctrl+F5 强刷`}

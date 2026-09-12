@@ -211,7 +211,7 @@ def app_status() -> dict:
                     else "disabled(仅本机回环可调用写接口；公网需配置 API_AUTH_TOKEN)",
         # 后端部署的 git 版本（Render 注入；本地运行无 → None）。前端据此对比
         # 自身构建版本，不一致即提示「部署中/浏览器缓存旧版，请强刷」
-        "backend_commit": (os.getenv("RENDER_GIT_COMMIT") or os.getenv("GIT_COMMIT") or "")[:7] or None,
+        "backend_commit": (os.getenv("RENDER_GIT_COMMIT") or os.getenv("GIT_COMMIT") or "")[:12] or None,
     }
 
 
