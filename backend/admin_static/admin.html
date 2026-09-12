@@ -56,8 +56,11 @@
   /* 嵌入模式（主看板 iframe 以 /admin?embed=1 引用）：收起自身标题、透明背景、加宽版面。
      退出按钮保留（管理能力不因嵌入而缺失）。 */
   body.embedded{background:transparent}
-  body.embedded .wrap{max-width:1200px;padding:4px 18px 48px}
+  body.embedded .wrap{max-width:1500px;padding:4px 18px 48px}
   body.embedded .top h1,body.embedded .top .meta{display:none}
+  /* 嵌入模式：日报 iframe 高度随内容撑开（消除 内层→管理页→主站 三级滚动，
+     只保留主站一条滚动条）；高度由下方 pushHeight 联动上报 */
+  body.embedded .report-frame{height:auto;min-height:120px;overflow:visible}
   td input{width:88px;padding:4px 6px;font-size:13px}
   code{background:#f3f4f6;padding:1px 5px;border-radius:4px;font-size:12px}
   /* 持仓日报卡片 */
@@ -590,6 +593,11 @@
             d.content.replace(/</g, '&lt;') + '</pre>';
         }
         frame.style.display = 'block';
+        if (document.body.classList.contains('embedded')) {
+          frame.onload = function () {
+            try { frame.style.height = (frame.contentDocument.body.scrollHeight + 24) + 'px'; } catch (e) {}
+          };
+        }
       })
       .catch(function (e) { showMsg(e.message, 'err'); frame.style.display = 'none'; });
   }
@@ -627,6 +635,26 @@
   <script>
     if (new URLSearchParams(location.search).get('embed') === '1') {
       document.body.classList.add('embedded')
+      // 向主看板（外层 iframe 父页）上报自身高度 → 主站把 iframe 撑到内容高，
+      // 消除 iframe 内滚动与滚动位置错乱问题（同源，postMessage 仅作约定通道）
+      var __push = function () {
+        try {
+          if (window.parent && window.parent !== window) {
+            var h = Math.max(document.body.scrollHeight, document.documentElement.scrollHeight)
+            window.parent.postMessage({ type: 'admin-height', h: h + 20 }, location.origin)
+          }
+        } catch (e) {}
+      }
+      window.addEventListener('load', function () { setTimeout(__push, 60) })
+      window.addEventListener('resize', function () { setTimeout(__push, 120) })
+      var rf = document.getElementById('reportFrame')
+      if (rf) rf.addEventListener('load', function () { setTimeout(__push, 120) })
+      if (window.MutationObserver) {
+        var __mo = new MutationObserver(function () { setTimeout(__push, 150) })
+        __mo.observe(document.body, { childList: true, subtree: true })
+      }
+      setTimeout(__push, 300)
+      setTimeout(__push, 1200)
     }
   </script>
 </body>

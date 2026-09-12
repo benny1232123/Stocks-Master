@@ -688,6 +688,7 @@ function App() {
   })
   const [error, setError] = useState('')
   const [backendDown, setBackendDown] = useState(false) // 持续性状态（驱动「离线」chip），不随 toast 自动消失
+  const [adminHeight, setAdminHeight] = useState(1100) // 管理页 iframe 自适应高度（admin 页 postMessage 上报）
   const [scanLogs, setScanLogs] = useState([])
   const [dbStatus, setDbStatus] = useState(null)
   const [fullDaily, setFullDaily] = useState(null)
@@ -1010,6 +1011,21 @@ function App() {
     const timer = setTimeout(() => setError(''), 5000)
     return () => clearTimeout(timer)
   }, [error])
+
+  // 管理页 iframe 高度联动：admin.html 嵌入模式上报内容高度，iframe 撑到内容高，
+  // 消除「iframe 内滚动 + 滚动位置错乱」的双重滚动体验
+  useEffect(() => {
+    if (activeView !== 'admin') return
+    const onMsg = (e) => {
+      const d = e.data
+      if (d && d.type === 'admin-height' && e.origin === window.location.origin
+          && typeof d.h === 'number' && d.h > 300 && d.h < 30000) {
+        setAdminHeight(d.h)
+      }
+    }
+    window.addEventListener('message', onMsg)
+    return () => window.removeEventListener('message', onMsg)
+  }, [activeView])
 
   // 看板数据加载（宏观/组合/日报等）——页面加载时拉一次，手动刷新按钮按需触发
   const dashboardCtrl = useRef(null)
@@ -2969,10 +2985,10 @@ function App() {
               title="管理后台"
               style={{
                 width: '100%',
-                height: 'calc(100vh - 165px)',
-                minHeight: 560,
+                height: adminHeight,
+                minHeight: 620,
                 border: 'none',
-                borderRadius: 12,
+                display: 'block',
                 background: 'transparent',
               }}
             />
