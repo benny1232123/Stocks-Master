@@ -1055,11 +1055,16 @@ function App() {
       setArtifacts(await a.json())
       setPortfolio(await p.json())
       setBacktest(await b.json())
-      const c = await fetch('/api/selection/candidates?price_min=5&price_max=30', { signal })
-      if (c.ok) setCandidateCodes((await c.json()).codes ?? [])
-      const an = await fetch(`/api/analysis/${analysisCode}`, { signal })
-      if (an.ok) setAnalysis(await an.json())
-      setBackendDown(false)
+      setBackendDown(false) // 主数据成功 = 后端在线；尾部辅助接口失败不再误报「后端未启动」
+      // 辅助数据（候选池/个股分析）失败只降级提示，不影响主数据已就绪的事实
+      try {
+        const c = await fetch('/api/selection/candidates?price_min=5&price_max=30', { signal })
+        if (c.ok) setCandidateCodes((await c.json()).codes ?? [])
+        const an = await fetch(`/api/analysis/${analysisCode}`, { signal })
+        if (an.ok) setAnalysis(await an.json())
+      } catch (e2) {
+        if (e2.name !== 'AbortError') setError('部分辅助数据加载失败——主数据正常，可点刷新补齐')
+      }
     } catch (err) {
       if (err.name !== 'AbortError') { setError('后端未启动或接口不可用'); setBackendDown(true) }
       else if (timedOut) { setError('刷新超时：后端正在拉取行情数据，请稍后再试') }
