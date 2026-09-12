@@ -87,7 +87,13 @@ def get_candidate_codes(price_min: float, price_max: float) -> tuple[list[str], 
         # 全市场快照（5000 行 × 20 列），Render free 512MB 实例上会 OOM 重启，
         # 且重启后下一个请求再次触发 → 崩溃循环。云端（CANDIDATE_SCAN_BG=0）
         # 不做扫描、候选池保持空；本地默认开启。
-        if os.getenv("CANDIDATE_SCAN_BG", "1").strip() == "0":
+        _scan_bg = os.getenv("CANDIDATE_SCAN_BG")
+        if _scan_bg is None or _scan_bg == "":
+            from smcore.config.defaults import is_low_memory_host
+
+            if is_low_memory_host():
+                return [], None  # 低内存托管容器：不跑全市场扫描（OOM 防护）
+        elif os.getenv("CANDIDATE_SCAN_BG", "1").strip() == "0":
             return [], None
         _kick_candidate_scan(cache_key, price_min, price_max)
         return [], "生成中"

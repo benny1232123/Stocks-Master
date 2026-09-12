@@ -60,7 +60,13 @@ def _require_api_key(request: Request, x_api_key: str | None = Header(default=No
 # ── 云端精简模式（RENDER_LITE=1）──
 # 免费实例 512MB 跑不动个股分析/全市场扫描/回测触发（实测 OOM 循环）。
 # 开启后这些重内存端点直接返回 503 + 明确提示；看数据/管理/录交易不受影响。
-RENDER_LITE = os.getenv("RENDER_LITE", "0").strip() == "1"
+_env_lite = os.getenv("RENDER_LITE")
+if _env_lite is None or _env_lite == "":
+    from smcore.config.defaults import is_low_memory_host
+
+    RENDER_LITE = is_low_memory_host()  # 512MB 托管容器自动进精简模式
+else:
+    RENDER_LITE = _env_lite == "1"
 
 
 def _lite_reject(feature: str):

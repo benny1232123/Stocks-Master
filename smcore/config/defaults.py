@@ -230,3 +230,20 @@ RECOMMENDATION_CONFIG = {
         "回避": "减仓",
     },
 }
+
+
+def is_low_memory_host() -> bool:
+    """内存 ≤1.5GB 的 Linux 容器（Render free 等托管环境）判定。
+
+    用于重内存功能（个股分析/全市场扫描）的自动降级：本地开发机不受影响
+    （Windows 无 /proc/meminfo → False）。可用 RENDER_LITE / CANDIDATE_SCAN_BG
+    等环境变量显式覆盖。
+    """
+    try:
+        with open("/proc/meminfo", encoding="utf-8") as f:
+            for line in f:
+                if line.startswith("MemTotal:"):
+                    return int(line.split()[1]) < 1_500_000
+    except Exception:
+        pass
+    return False
