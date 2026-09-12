@@ -16,7 +16,11 @@ on:
 
 concurrency:
   group: daily-pick
-  cancel-in-progress: true
+  # 不取消排队中的 run：外部精准触发（cron-job.org 16:30 dispatch）与 schedule
+  # 槽位共存时，后启动者进入排队、轮到后经 gate（DAL 已落库）秒级跳过。
+  # 若用 cancel-in-progress，20 分钟一槽的 schedule 会反复掐死正在跑的精准触发
+  # run，导致当天永远跑不完。
+  cancel-in-progress: false
 
 jobs:
   daily-pick:

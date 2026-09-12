@@ -18,7 +18,7 @@ on:
 
 concurrency:
   group: daily-holdings
-  cancel-in-progress: true
+  cancel-in-progress: false  # 排队模式：与精准触发共存，后来者经 gate/防重自动跳过
 
 jobs:
   holdings-analysis:

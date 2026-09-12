@@ -202,13 +202,36 @@ python Frequently-Used-Program/auto_notify_boll.py
 
 ### GitHub Actions 选股（`daily-pick.yml`）
 
-- **触发**：工作日 16:30 北京时间（cron `30 8 * * 1-5` UTC，约 5–15 分钟延迟）
+- **触发**：工作日 16:30 北京时间。**推荐用外部精准触发**（cron-job.org 打
+  `workflow_dispatch`，即时排队无延迟，配置见下），GitHub schedule
+  （`*/20 8-13 * * 1-5` UTC 轮询槽）保留作兜底——两者共存：先到先跑，
+  后到者经 gate「当日已落库」自动跳过（concurrency 为排队模式，不互相掐杀）
 - **K 线后端**：新浪 `stock_zh_a_daily` / baostock 双后端（**已全面去除东财依赖**，见下「数据链路去东财」）
 
 > **数据链路去东财（2026-07-11）**：原动量策略快照用东财 `stock_zh_a_spot_em`、CCTV 自评估用东财 `stock_zh_a_hist`，均已替换为**新浪 `stock_zh_a_spot` + `fetch_daily_k`（baostock/新浪后端）**，沙箱/海外均可达、无需东财。动量快照偶发空加 3 次重试；`MOMENTUM_USE_EASTMONEY=1` 仅作兜底（15s 线程超时防挂）。
 - **流程**：每个策略先 `strategy_cache.py pull` 查缓存 → 命中则 `exit 0` 跳过 → 否则跑选股 → `push` 上传；五个策略跑完后依次执行**融合生成操作清单 → 上传 COS → 看板预热 → 每日前向回测**
 - **超时**（单 step）：Boll 25min / 题材 20min / CCTV 25min / 相对强弱 20min / 动量 25min / 回测 40min；总 job 90min
 - **费用**：私有仓库 2000 分钟/月免费，选股约 660 分钟/月，够用（0 元）
+
+### 精准触发配置（消除 schedule 延迟）
+
+GitHub schedule 高峰期排队延迟可达数小时。`daily-pick.yml` 支持 `workflow_dispatch`
+（即时排队），用免费外部 cron 在 16:30 精确触发即可：
+
+1. **建 fine-grained PAT**（github.com → Settings → Developer settings →
+   Fine-grained tokens → 新建）：仅选本仓库，权限只给
+   **Actions: Read and write**，有效期按需（90 天后记得轮换）
+2. **cron-job.org**（免费）建任务：
+   - Schedule：`30 16 * * 1-5`，时区 **Asia/Shanghai**
+   - Method：**POST**，URL：
+     `https://api.github.com/repos/benny1232123/Stocks-Master/actions/workflows/daily-pick.yml/dispatches`
+   - Headers：`Authorization: Bearer <你的PAT>`、`Accept: application/vnd.github+json`
+   - Body：`{"ref":"master"}`
+3. **验证**：保存后点 Test run，到仓库 Actions 页应立刻出现一条排队/运行中的
+   「每日选股」；到点后 16:30 会自动触发
+
+安全说明：PAT 权限只有「触发工作流」，泄漏的最坏后果是别人帮你多跑几次选股；
+出现异常直接吊销重建即可。`daily-holdings` 同理（换 yml 文件名，触发时间 18:30）。
 
 ### Render 部署 Web 看板（`render.yaml`）
 
