@@ -1095,20 +1095,24 @@ function App() {
       try {
         // 辅助请求各自独立短超时：Render 上候选池（后台生成中）与个股分析可能很慢，
         // 不得吊住整个加载流程；超时静默跳过（软失败），主数据不受影响
+        let auxFail = ''
         const cCtl = new AbortController()
         const cTo = setTimeout(() => cCtl.abort(), 15000)
         try {
           const c = await fetch('/api/selection/candidates?price_min=5&price_max=30', { signal: cCtl.signal, cache: 'no-store' })
           if (c.ok) setCandidateCodes((await c.json()).codes ?? [])
-        } finally { clearTimeout(cTo) }
+          else auxFail = '候选池(HTTP ' + c.status + ')'
+        } catch (e) { if (e.name !== 'AbortError') auxFail = '候选池(网络)' }
+        finally { clearTimeout(cTo) }
         const aCtl = new AbortController()
         const aTo = setTimeout(() => aCtl.abort(), 30000)
         try {
           const an = await fetch(`/api/analysis/${analysisCode}`, { signal: aCtl.signal, cache: 'no-store' })
           if (an.ok) setAnalysis(await an.json())
-        } finally { clearTimeout(aTo) }
-      } catch (e2) {
-        if (e2.name !== 'AbortError') setError('部分辅助数据加载失败——主数据正常，可点刷新补齐')
+          else if (!auxFail) auxFail = '个股分析(HTTP ' + an.status + ')'
+        } catch (e) { if (e.name !== 'AbortError' && !auxFail) auxFail = '个股分析(网络)' }
+        finally { clearTimeout(aTo) }
+        if (auxFail) setError('辅助数据加载失败（' + auxFail + '）——主数据正常，个股分析面板暂不可用')
       }
     } catch (err) {
       if (err.name !== 'AbortError') {
