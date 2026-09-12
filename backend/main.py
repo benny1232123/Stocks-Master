@@ -406,6 +406,11 @@ def daily_latest_backtest() -> dict:
     from smcore.artifacts import STOCK_DATA_DIR
 
     files = sorted(_glob.glob(str(STOCK_DATA_DIR / "Multi-Backtest-*-summary.csv")), reverse=True)
+    # 内存护栏（2026-09-12 OOM #2）：全量读取 84 天 × (summary+equity+trades) CSV
+    # 会把 512MB 实例打爆。默认只装载最近 90 天的批次（回测 Tab 的信号日选择器
+    # 覆盖范围足够）；需要更久可调 BACKTEST_DAILY_LIST_DAYS。
+    _max_days = int(os.environ.get("BACKTEST_DAILY_LIST_DAYS", "90"))
+    files = files[:_max_days]
     items = []
     excluded_total = 0
 
