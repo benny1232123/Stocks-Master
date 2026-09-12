@@ -235,15 +235,24 @@ RECOMMENDATION_CONFIG = {
 def is_low_memory_host() -> bool:
     """内存 ≤1.5GB 的 Linux 容器（Render free 等托管环境）判定。
 
-    用于重内存功能（个股分析/全市场扫描）的自动降级：本地开发机不受影响
-    （Windows 无 /proc/meminfo → False）。可用 RENDER_LITE / CANDIDATE_SCAN_BG
-    等环境变量显式覆盖。
+    关键：容器里 /proc/meminfo 显示的是宿主机总量（Render 宿主机几十 GB），
+    真实限额在 cgroup（v2: memory.max / v1: memory.limit_in_bytes）——
+    必须读 cgroup，否则 512MB 容器检测失败、自动精简永不生效。
+    本地 Windows 无这些文件 → False（全功能）。环境变量可显式覆盖。
     """
+    for path in ("/sys/fs/cgroup/memory.max", "/sys/fs/cgroup/memory/memory.limit_in_bytes"):
+        try:
+            with open(path) as f:
+                raw = f.read().strip()
+            if raw and raw != "max":
+                return int(raw) < 1_500_000_000  # 1.5GB（字节）
+        except (OSError, ValueError):
+            continue
     try:
         with open("/proc/meminfo", encoding="utf-8") as f:
             for line in f:
                 if line.startswith("MemTotal:"):
-                    return int(line.split()[1]) < 1_500_000
+                    return int(line.split()[1]) < 1_500_000  # kB
     except Exception:
         pass
     return False
