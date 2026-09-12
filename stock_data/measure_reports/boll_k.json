@@ -1,0 +1,99 @@
+{
+  "k_grid": [
+    1.5,
+    1.645,
+    2.0
+  ],
+  "near_ratio": 1.015,
+  "hold_bars": 12,
+  "signals_processed": 39,
+  "min_samples": 30,
+  "grid": {
+    "low|1.5": {
+      "n": 0,
+      "avg_return_pct": null,
+      "win_rate_pct": null,
+      "enough_samples": false
+    },
+    "low|1.645": {
+      "n": 0,
+      "avg_return_pct": null,
+      "win_rate_pct": null,
+      "enough_samples": false
+    },
+    "low|2.0": {
+      "n": 0,
+      "avg_return_pct": null,
+      "win_rate_pct": null,
+      "enough_samples": false
+    },
+    "mid|1.5": {
+      "n": 1,
+      "avg_return_pct": -1.853,
+      "win_rate_pct": 0.0,
+      "enough_samples": false
+    },
+    "mid|1.645": {
+      "n": 1,
+      "avg_return_pct": -1.853,
+      "win_rate_pct": 0.0,
+      "enough_samples": false
+    },
+    "mid|2.0": {
+      "n": 0,
+      "avg_return_pct": null,
+      "win_rate_pct": null,
+      "enough_samples": false
+    },
+    "high|1.5": {
+      "n": 2,
+      "avg_return_pct": 3.881,
+      "win_rate_pct": 100.0,
+      "enough_samples": false
+    },
+    "high|1.645": {
+      "n": 2,
+      "avg_return_pct": 3.881,
+      "win_rate_pct": 100.0,
+      "enough_samples": false
+    },
+    "high|2.0": {
+      "n": 2,
+      "avg_return_pct": 3.881,
+      "win_rate_pct": 100.0,
+      "enough_samples": false
+    },
+    "all|1.5": {
+      "n": 3,
+      "avg_return_pct": 1.969,
+      "win_rate_pct": 66.7,
+      "enough_samples": false
+    },
+    "all|1.645": {
+      "n": 3,
+      "avg_return_pct": 1.969,
+      "win_rate_pct": 66.7,
+      "enough_samples": false
+    },
+    "all|2.0": {
+      "n": 2,
+      "avg_return_pct": 3.881,
+      "win_rate_pct": 100.0,
+      "enough_samples": false
+    }
+  },
+  "suggestion": {
+    "low": {
+      "k": 1.645,
+      "note": "无稳定优势，维持 1.645"
+    },
+    "mid": {
+      "k": 1.645,
+      "note": "无稳定优势，维持 1.645"
+    },
+    "high": {
+      "k": 1.645,
+      "note": "无稳定优势，维持 1.645"
+    }
+  }
+}
