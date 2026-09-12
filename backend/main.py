@@ -215,8 +215,33 @@ def app_status() -> dict:
     }
 
 
+import json as _json
+
+
+def _web_snapshot(name: str):
+    """数据静态化（2026-09-12）：读 CI/本地预生成的看板首屏快照。
+
+    快照优先策略——存在即直接返回（毫秒级、零上游依赖、Render 512MB 零压力）；
+    缺失或 WEB_DATA_STATIC=0 时回退原有实时路径。快照由
+    scripts/export_web_data.py 在每日 CI 末尾（或本地/连夜任务）生成，
+    随仓库分发 → 部署清空文件系统也不丢。
+    """
+    if os.getenv("WEB_DATA_STATIC", "1").strip() == "0":
+        return None
+    p = STOCK_DATA_DIR / "web_data" / name
+    if not p.exists():
+        return None
+    try:
+        return _json.loads(p.read_text(encoding="utf-8"))
+    except Exception:
+        return None
+
+
 @app.get("/api/dashboard")
 def dashboard() -> dict:
+    snap = _web_snapshot("dashboard.json")
+    if snap is not None:
+        return snap
     return build_dashboard_payload()
 
 
@@ -227,6 +252,9 @@ def prewarm_dashboard() -> dict:
 
 @app.get("/api/artifacts/daily-action-list")
 def daily_action_list() -> dict:
+    snap = _web_snapshot("artifacts.json")
+    if snap is not None:
+        return snap
     latest = find_latest_file("Daily-Action-List-*.csv")
     if latest is None:
         return {"latest": None, "preview": {"rows": [], "columns": []}}
@@ -238,6 +266,10 @@ def daily_action_list() -> dict:
 def daily_action_list_full(date: str = None) -> dict:
     """返回完整日报数据（全部行），供前端「日报」页全量查看。
     可选 ?date=YYYYMMDD 指定某天；缺省返回最新一天。"""
+    if not date:
+        snap = _web_snapshot("daily_full.json")
+        if snap is not None:
+            return snap
     target = None
     if date:
         # 只接受纯数字日期（YYYYMMDD），杜绝 ../ 路径穿越读取 stock_data 之外的任意文件
@@ -345,6 +377,9 @@ def remove_trades() -> dict:
 
 @app.get("/api/backtests/latest")
 def latest_backtest() -> dict:
+    snap = _web_snapshot("backtests_latest.json")
+    if snap is not None:
+        return snap
     latest = find_latest_file_any(
         [
             "Signal-Backtest-*-summary.csv",

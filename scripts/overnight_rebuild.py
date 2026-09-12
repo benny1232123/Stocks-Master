@@ -162,6 +162,9 @@ def main() -> int:
     run_step("price_band", [PY, "-u", str(ROOT / "scripts" / "measure_price_band.py")], timeout_s=60 * 60)
     run_step("boll_k", [PY, "-u", str(ROOT / "scripts" / "measure_boll_k.py")], timeout_s=2 * 3600)
 
+    # ⑥ 重跑完成后刷新看板静态快照（网站读快照 → 新口径数据即时上站）
+    run_step("export_web_data", [PY, str(ROOT / "scripts" / "export_web_data.py")], timeout_s=30 * 60)
+
     # ── 总结报告 ──
     lines = [
         "# 连夜重建报告",

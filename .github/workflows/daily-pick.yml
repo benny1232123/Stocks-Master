@@ -305,6 +305,14 @@ jobs:
           KLINE_BACKEND: hithink
         run: python scripts/prewarm_dashboard.py
 
+      - name: 导出看板静态数据快照（网站首屏读快照，毫秒级）
+        if: steps.gate.outputs.ok == 'true'
+        timeout-minutes: 10
+        env:
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_KEY: ${{ secrets.SUPABASE_KEY }}
+        run: python scripts/export_web_data.py
+
       - name: 每日清单前向信号回测
         continue-on-error: true
         if: steps.gate.outputs.ok == 'true'
@@ -347,6 +355,8 @@ jobs:
           ls stock_data/Multi-Backtest-*.csv >/dev/null 2>&1 && git add -f stock_data/Multi-Backtest-*.csv || true
           ls stock_data/Stock-Selection-*.csv >/dev/null 2>&1 && git add -f stock_data/Stock-Selection-*.csv || true
           ls stock_data/CCTV-Sector-Stock-Pool-*.csv >/dev/null 2>&1 && git add -f stock_data/CCTV-Sector-Stock-Pool-*.csv || true
+          # 看板静态数据快照：Render 端点快照优先直读，网站首屏毫秒级
+          [ -d stock_data/web_data/ ] && git add -f stock_data/web_data/ || true
           [ -f stock_data/backtest_status.txt ] && git add -f stock_data/backtest_status.txt || true
           if git diff --cached --quiet; then
             echo "无变更，跳过提交"
