@@ -1,0 +1,4 @@
+﻿code,buy_date,sell_date,buy_price,sell_price,qty,return_pct,exit_reason
+600900,2025-12-15,2025-12-16,27.017,26.943,500,-0.27,trend_break
+603269,2025-12-15,2025-12-16,9.58,8.801,2100,-8.13,trend_break
+600690,2025-12-15,2025-12-29,25.836,25.484,1100,-1.36,max_hold

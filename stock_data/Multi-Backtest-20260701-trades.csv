@@ -1,0 +1,4 @@
+﻿code,buy_date,sell_date,buy_price,sell_price,qty,return_pct,exit_reason
+002648,2026-07-02,2026-07-03,24.524,23.996,400,-2.16,trend_break
+600118,2026-07-02,2026-07-03,83.919,86.044,100,2.53,take_band
+603610,2026-07-02,2026-07-09,18.789,13.916,600,-25.93,stop_hard
