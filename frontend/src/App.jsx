@@ -1233,7 +1233,32 @@ function App() {
 
       {/* ── Content ── */}
       <main className="content">
-        {activeView === 'overview' ? (
+        {activeView === 'overview' && dashboard == null ? (
+          error ? (
+            <div className="glass-card animate-fade-in" style={{ padding: '56px 24px', textAlign: 'center' }}>
+              <AlertTriangle style={{ width: 36, height: 36, color: '#d97706', margin: '0 auto' }} />
+              <h3 style={{ margin: '12px 0 6px' }}>看板数据加载失败</h3>
+              <p style={{ color: 'hsl(var(--muted))', margin: '0 0 16px', fontSize: 14 }}>
+                {error}——后端可能在部署重启，通常一分钟内自愈；也可点击重试
+              </p>
+              <Button onClick={() => loadDashboard()}>重试</Button>
+            </div>
+          ) : (
+            <div className="glass-card animate-fade-in" style={{ padding: '72px 24px', textAlign: 'center' }}>
+              <div style={{
+                width: 36, height: 36, margin: '0 auto 18px',
+                border: '3px solid hsl(var(--border))', borderTopColor: 'hsl(var(--primary))',
+                borderRadius: '50%', animation: 'sm-spin 1s linear infinite',
+              }} />
+              <h3 style={{ margin: '0 0 8px' }}>数据加载中…</h3>
+              <p style={{ color: 'hsl(var(--muted))', margin: 0, fontSize: 14 }}>
+                首次加载或后端冷启动约需 30–60 秒（正在拉取行情与宏观数据），完成后自动显示
+              </p>
+            </div>
+          )
+        ) : null}
+
+        {activeView === 'overview' && dashboard != null ? (
           <>
             {/* 签名元素：指数行情带 */}
             {indexSnapshot.length > 0 ? (

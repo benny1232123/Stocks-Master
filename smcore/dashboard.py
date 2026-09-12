@@ -964,14 +964,21 @@ def build_dashboard_payload() -> dict[str, Any]:
                         print(f"[dashboard] 指数快照实时获取异常: {exc}")
             finally:
                 _DASHBOARD_BUILD_LOCK.release()
-    if "index_snapshot" not in payload:
-        payload["index_snapshot"] = (
-            cached_index.to_dict(orient="records")
-            if isinstance(cached_index, pd.DataFrame) and not cached_index.empty
-            else []
-        )
+    if not payload.get("index_snapshot"):
+        # 同步拉取也失败（冷启动数据源慢/不可达）→ 回退最近一份历史缓存，至少有数可看
+        stale2, stale2_date = _load_latest_cache("index_snapshot")
+        if stale2 is not None and isinstance(stale2, pd.DataFrame) and not stale2.empty:
+            payload["index_snapshot"] = stale2.to_dict(orient="records")
+            payload["index_snapshot_as_of"] = stale2_date
+            print(f"[dashboard] 指数快照实时获取失败，回退 {stale2_date} 的历史缓存")
+        else:
+            payload["index_snapshot"] = []
 
     cached_breadth = _load_cache("market_breadth")
+    if not isinstance(cached_breadth, dict) or not cached_breadth:
+        stale_b, _bd = _load_latest_cache("market_breadth")
+        if isinstance(stale_b, dict) and stale_b:
+            cached_breadth = stale_b
     payload["market_breadth"] = cached_breadth if isinstance(cached_breadth, dict) else {}
 
     # ── 宏观快照：缓存完整校验 + TTL 懒刷新 ─────────────────
@@ -979,6 +986,21 @@ def build_dashboard_payload() -> dict[str, Any]:
     cached_macro = _load_cache("macro_snapshot")
     if not isinstance(cached_macro, dict):
         cached_macro = {}
+    # 冷启动兜底：完全无宏观数据时，短暂等待后台刷新线程完成（≤20s，前端超时 45s 之内），
+    # 等到即有首屏数据；仍无则回退最近一份历史缓存——避免部署后首屏整排「--」
+    if not cached_macro:
+        waited = 0.0
+        while _MACRO_REFRESH_LOCK.locked() and waited < 20:
+            time.sleep(1.0)
+            waited += 1.0
+        cached_macro = _load_cache("macro_snapshot")
+        if not isinstance(cached_macro, dict):
+            cached_macro = {}
+        if not cached_macro:
+            stale_m, _md = _load_latest_cache("macro_snapshot")
+            if isinstance(stale_m, dict):
+                cached_macro = stale_m
+                print(f"[dashboard] 宏观缓存等超时，回退 {_md} 的历史缓存")
     # 如果缓存中任何核心指标为空（旧代码遗留的 None），强制同步重拉
     _CORE_MACRO_KEYS = [
         "美元/人民币", "Shibor隔夜", "LPR_1年", "10Y国债收益率",
@@ -1004,6 +1026,10 @@ def build_dashboard_payload() -> dict[str, Any]:
                     cached_macro = fresh
             else:
                 print("[dashboard] fetch_macro_snapshot 返回空")
+                _stale_m, _md = _load_latest_cache("macro_snapshot")
+                if isinstance(_stale_m, dict) and _stale_m:
+                    cached_macro = _stale_m
+                    print(f"[dashboard] 重拉为空，回退 {_md} 的历史缓存")
         except Exception as exc:
             # Render 上 akshare 可能装了但网络全挂 → 不让整个 dashboard 炸掉
             print(f"[dashboard] 宏观强制重拉异常（保留旧缓存）: {exc}")

@@ -2450,3 +2450,6 @@
   .comp-total-score { align-self: flex-start; }
   .ns-wrap { grid-template-columns: 1fr; gap: 16px; }
 }
+
+/* 看板加载等待页 */
+@keyframes sm-spin { to { transform: rotate(360deg); } }
