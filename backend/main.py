@@ -409,7 +409,9 @@ def daily_latest_backtest() -> dict:
     # 内存护栏（2026-09-12 OOM #2）：全量读取 84 天 × (summary+equity+trades) CSV
     # 会把 512MB 实例打爆。默认只装载最近 90 天的批次（回测 Tab 的信号日选择器
     # 覆盖范围足够）；需要更久可调 BACKTEST_DAILY_LIST_DAYS。
-    _max_days = int(os.environ.get("BACKTEST_DAILY_LIST_DAYS", "90"))
+    # 90 天全量读取在 512MB 实例上逼近内存上限（曾触发 OOM 重启循环）：
+    # 网站默认展示最近 14 天（信号日选择器覆盖范围）；本地/需要更久时调大此环境变量
+    _max_days = int(os.environ.get("BACKTEST_DAILY_LIST_DAYS", "14"))
     files = files[:_max_days]
     items = []
     excluded_total = 0
