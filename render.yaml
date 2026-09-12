@@ -10,6 +10,9 @@ services:
     startCommand: uvicorn backend.main:app --host 0.0.0.0 --port $PORT
     healthCheckPath: /
     envVars:
+      # Python 版本声明（原 runtime.txt 已删——CF Pages 会误检测去装 Python 导致构建失败）
+      - key: PYTHON_VERSION
+        value: 3.12.3
       - key: KLINE_BACKEND
         value: akshare
       - key: TDX_ENABLED
