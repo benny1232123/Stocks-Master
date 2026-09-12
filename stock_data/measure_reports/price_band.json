@@ -30,17 +30,17 @@
   "hold_bars": 12,
   "bands": {
     "<5": {
-      "n": 5725,
-      "avg_return_pct": 3.061,
+      "n": 5714,
+      "avg_return_pct": 3.06,
       "win_rate_pct": 53.2
     },
     "5-10": {
-      "n": 6892,
+      "n": 6908,
       "avg_return_pct": 1.693,
       "win_rate_pct": 49.8
     },
     "10-20": {
-      "n": 5739,
+      "n": 5743,
       "avg_return_pct": 1.382,
       "win_rate_pct": 50.6
     },
@@ -65,5 +65,5 @@
       "win_rate_pct": 58.9
     }
   },
-  "verdict": "带内外差异 +0.16pp/期 → 不显著，上限影响中性"
+  "verdict": "带内外差异 +0.15pp/期 → 不显著，上限影响中性"
 }
