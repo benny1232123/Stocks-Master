@@ -694,6 +694,7 @@ function App() {
   const [backendDown, setBackendDown] = useState(false) // 持续性状态（驱动「离线」chip），不随 toast 自动消失
   const [adminHeight, setAdminHeight] = useState(1100) // 管理页 iframe 自适应高度（admin 页 postMessage 上报）
   const [diag, setDiag] = useState(null) // 连通性自诊断面板：null=关闭 {running, rows, build, deploy}
+  const [adminStaticHost, setAdminStaticHost] = useState(false) // 静态托管（CF Pages）检测：/health 非 JSON 即静态
   const [scanLogs, setScanLogs] = useState([])
   const [dbStatus, setDbStatus] = useState(null)
   const [fullDaily, setFullDaily] = useState(null)
@@ -1017,6 +1018,18 @@ function App() {
     return () => clearTimeout(timer)
   }, [error])
 
+  // 静态托管检测：/health 应返回 JSON（Render 后端）；返回 HTML/404 = 静态托管
+  //（CF Pages）——管理 Tab 改为外链 Render 管理页，避免 iframe 里再套一层 SPA
+  useEffect(() => {
+    if (activeView !== 'admin') return
+    let alive = true
+    fetch('/health', { cache: 'no-store' })
+      .then((r) => r.headers.get('content-type') || '')
+      .then((ct) => { if (alive && !ct.includes('json')) setAdminStaticHost(true) })
+      .catch(() => { if (alive) setAdminStaticHost(true) })
+    return () => { alive = false }
+  }, [activeView])
+
   // 管理页 iframe 高度联动：admin.html 嵌入模式上报内容高度，iframe 撑到内容高，
   // 消除「iframe 内滚动 + 滚动位置错乱」的双重滚动体验
   useEffect(() => {
@@ -1045,22 +1058,39 @@ function App() {
     try {
       setError('')
       setRefreshing(true)
-      // 每个请求独立命名 + no-store：失败时提示点名到具体接口/状态码，
-      // 且彻底绕过浏览器 HTTP 缓存（强刷只旁路文档，JS fetch 的坏缓存会残留）
-      let failed = ''
-      const guard = (name) => (r) => { if (!r.ok) failed = `${name}(HTTP ${r.status})`; return r }
+      // 每个请求独立命名 + no-store（绕过浏览器 HTTP 缓存）+ 静态快照回退：
+      // API 失败（部署重启/后端离线）时改读 web_data/*.json 静态快照
+      // （数据静态化产物，与 API 响应结构一致）——部署窗口不再白屏/报错
+      const degraded = []
+      const fetchRes = async (apiPath, staticFile, name) => {
+        try {
+          const r = await fetch(apiPath, { signal, cache: 'no-store' })
+          if (!r.ok) throw new Error(`${name}(HTTP ${r.status})`)
+          return await r.json()
+        } catch (e1) {
+          if (signal.aborted) throw e1 // 45s 超时/切换视图：不做静态回退，直接上抛
+          try {
+            const r2 = await fetch(`web_data/${staticFile}`, { cache: 'no-store' })
+            if (!r2.ok) throw e1
+            degraded.push(`${name}来自静态快照`)
+            return await r2.json()
+          } catch {
+            throw e1
+          }
+        }
+      }
       const [d, a, p, b] = await Promise.all([
-        fetch('/api/dashboard', { signal, cache: 'no-store' }).then(guard('看板')),
-        fetch('/api/artifacts/daily-action-list', { signal, cache: 'no-store' }).then(guard('日报索引')),
-        fetch('/api/portfolio', { signal, cache: 'no-store' }).then(guard('持仓')),
-        fetch('/api/backtests/latest', { signal, cache: 'no-store' }).then(guard('回测')),
+        fetchRes('/api/dashboard', 'dashboard.json', '看板'),
+        fetchRes('/api/artifacts/daily-action-list', 'artifacts.json', '日报索引'),
+        fetchRes('/api/portfolio', 'portfolio.json', '持仓'),
+        fetchRes('/api/backtests/latest', 'backtests_latest.json', '回测'),
       ])
-      if (failed) throw new Error(failed)
-      setDashboard(await d.json())
-      setArtifacts(await a.json())
-      setPortfolio(await p.json())
-      setBacktest(await b.json())
+      setDashboard(d)
+      setArtifacts(a)
+      setPortfolio(p)
+      setBacktest(b)
       setBackendDown(false) // 主数据成功 = 后端在线；尾部辅助接口失败不再误报「后端未启动」
+      if (degraded.length) setError(`静态快照模式（后端暂不可达）：${degraded.join('、')}——数据为每日快照`)
       // 辅助数据（候选池/个股分析）失败只降级提示，不影响主数据已就绪的事实
       try {
         // 辅助请求各自独立短超时：Render 上候选池（后台生成中）与个股分析可能很慢，
@@ -3107,6 +3137,18 @@ function App() {
               <p>交易记录管理 · 独立登录（ADMIN_PASSWORD），与主看板权限隔离</p>
             </div>
             {/* 既有 /admin 独立页（自包含登录 + 交易 CRUD）原样嵌入，避免双实现漂移 */}
+            {adminStaticHost ? (
+              <div className="glass-card animate-fade-in" style={{ padding: '48px 24px', textAlign: 'center' }}>
+                <ShieldCheck style={{ width: 32, height: 32, margin: '0 auto 10px', color: 'hsl(var(--primary))' }} />
+                <h3 style={{ margin: '0 0 8px' }}>管理后台运行在 Render 后端</h3>
+                <p style={{ color: 'hsl(var(--muted))', fontSize: 14, margin: '0 0 16px' }}>
+                  当前为静态托管（Cloudflare Pages）——录交易等写操作请前往 Render 站点的管理页
+                </p>
+                <Button onClick={() => window.open('https://stocks-master.onrender.com/admin', '_blank')}>
+                  打开管理后台（新窗口）
+                </Button>
+              </div>
+            ) : (
             <iframe
               src="/admin?embed=1"
               title="管理后台"
@@ -3119,6 +3161,7 @@ function App() {
                 background: 'transparent',
               }}
             />
+            )}
           </>
         ) : null}
       </main>
