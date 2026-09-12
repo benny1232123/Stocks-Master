@@ -173,10 +173,11 @@ def _finish_task(task_id: str, result=None, error: str | None = None) -> None:
 
 @app.get("/")
 def root():
+    # HTML 入口禁缓存（与 spa_fallback 同理）：资产带内容哈希可长缓存，入口必须新鲜
     if FRONTEND_DIST.exists():
         index_file = FRONTEND_DIST / "index.html"
         if index_file.exists():
-            return FileResponse(index_file)
+            return FileResponse(index_file, headers={"Cache-Control": "no-store, must-revalidate"})
     return {"message": "Stocks-Master API", "status": "ok"}
 
 
@@ -208,6 +209,9 @@ def app_status() -> dict:
         # 不回显 SUPABASE_URL（含项目 ref，会给攻击者补齐构造 Supabase REST 调用的半边）
         "api_auth": "enabled" if os.getenv("API_AUTH_TOKEN", "").strip()
                     else "disabled(仅本机回环可调用写接口；公网需配置 API_AUTH_TOKEN)",
+        # 后端部署的 git 版本（Render 注入；本地运行无 → None）。前端据此对比
+        # 自身构建版本，不一致即提示「部署中/浏览器缓存旧版，请强刷」
+        "backend_commit": (os.getenv("RENDER_GIT_COMMIT") or os.getenv("GIT_COMMIT") or "")[:7] or None,
     }
 
 
@@ -839,19 +843,22 @@ def admin_page():
     """持仓管理单页（自包含 HTML，无需前端构建）。
 
     必须定义在下面的 /{path:path} catch-all 之前，否则会被 SPA 兜底吞掉。
+    HTML 入口禁缓存：否则浏览器拿旧 admin.html 配新后端接口，行为错配难排查。
     """
     page = Path(__file__).resolve().parent / "admin_static" / "admin.html"
     if page.exists():
-        return FileResponse(page)
+        return FileResponse(page, headers={"Cache-Control": "no-store, must-revalidate"})
     return JSONResponse({"error": "admin page not found"}, status_code=404)
 
 
 @app.get("/{path:path}")
 def spa_fallback(path: str):
+    # index.html 禁缓存：资产文件带内容哈希可长缓存，但入口 HTML 必须每次新鲜，
+    # 否则浏览器缓存旧入口 → 引用已不存在的旧哈希资产 → 白屏/旧版本难排查
     if FRONTEND_DIST.exists():
         index_file = FRONTEND_DIST / "index.html"
         if index_file.exists():
-            return FileResponse(index_file)
+            return FileResponse(index_file, headers={"Cache-Control": "no-store, must-revalidate"})
     return JSONResponse({"error": "not found"}, status_code=404)
 
 

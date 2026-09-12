@@ -25,6 +25,10 @@ import DailyExpandableList from './components/DailyExpandableList'
 import { cn } from './lib/utils'
 import { useScoringConfig, bandScore, bandLabel } from './config/useScoringConfig'
 
+// 构建版本（vite define 注入；本地 dev 下未定义时回退 dev）
+const BUILD_SHA = typeof __BUILD_SHA__ === 'string' ? __BUILD_SHA__ : 'dev'
+const BUILD_TIME = typeof __BUILD_TIME__ === 'string' ? __BUILD_TIME__ : ''
+
 // 本地时区日期字符串 YYYY-MM-DD（toISOString 是 UTC，CST 早 8 点前会错成前一天）
 const localDateStr = (d = new Date()) =>
   `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`
@@ -1177,6 +1181,22 @@ function App() {
           <span className={cn('chip', 'supabase')}>
             <span className="dot" />
             {dbStatus == null ? 'DB…' : dbStatus.storage_backend === 'supabase' ? 'Supabase' : '本地'}
+          </span>
+          <span
+            className="chip"
+            style={{ opacity: 0.75 }}
+            title={`前端构建: ${BUILD_SHA} · ${BUILD_TIME}${dbStatus && dbStatus.backend_commit ? `
+后端部署: ${dbStatus.backend_commit}` : ''}`}
+          >
+            v{BUILD_SHA}
+            {dbStatus && dbStatus.backend_commit && dbStatus.backend_commit !== BUILD_SHA ? (
+              <span
+                style={{ color: '#d97706', marginLeft: 6 }}
+                title={`后端部署版本(${dbStatus.backend_commit})与前端不一致——可能部署中或浏览器缓存了旧版，请 Ctrl+F5 强刷`}
+              >
+                ⇋ 后端 {dbStatus.backend_commit}
+              </span>
+            ) : null}
           </span>
         </div>
       </div>
