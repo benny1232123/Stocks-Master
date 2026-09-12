@@ -4,6 +4,8 @@ from __future__ import annotations
 from datetime import date, timedelta
 from typing import Any
 
+import threading
+
 import pandas as pd
 
 from smcore.cache_daily import get_daily
@@ -42,9 +44,46 @@ def fetch_candidate_codes(price_min: float, price_max: float) -> list[str]:
     return codes
 
 
+# 后台生成单飞：并发访客只触发一次全市场扫描
+_CAND_SCAN_LOCK = threading.Lock()
+_CAND_SCAN_INFLIGHT: set[str] = set()
+
+
+def _kick_candidate_scan(cache_key: str, price_min: float, price_max: float) -> None:
+    """后台线程执行全市场扫描并写入当日缓存；已在生成中则跳过。"""
+    if cache_key in _CAND_SCAN_INFLIGHT:
+        return
+    with _CAND_SCAN_LOCK:
+        if cache_key in _CAND_SCAN_INFLIGHT:
+            return
+        _CAND_SCAN_INFLIGHT.add(cache_key)
+
+    def _run():
+        try:
+            get_daily(cache_key, fetch_candidate_codes, price_min, price_max)
+        except Exception as exc:
+            print(f"[selection] WARN: 候选池后台生成失败: {exc}")
+        finally:
+            _CAND_SCAN_INFLIGHT.discard(cache_key)
+
+    threading.Thread(target=_run, daemon=True, name=f"cand-scan-{cache_key}").start()
+
+
 def get_candidate_codes(price_min: float, price_max: float) -> tuple[list[str], str | None]:
-    """Return cached candidate codes and the cache date."""
+    """Return cached candidate codes and the cache date.
+
+    缓存缺失时改为**后台生成、立即返回空**（2026-09-12）：旧版在请求线程里做
+    全市场扫描，Render 上要数分钟 → 网关 502 / 前端 60s 超时。生成由后台线程
+    完成并落当日缓存，下一次请求即命中。
+    """
     cache_key = f"candidate_codes_{int(price_min)}_{int(price_max)}"
+    from smcore.cache_daily import CACHE_DIR
+    from smcore.utils.dates import beijing_today
+
+    today_file = CACHE_DIR / f"{cache_key}_{beijing_today().strftime('%Y-%m-%d')}.pkl"
+    if not today_file.exists():
+        _kick_candidate_scan(cache_key, price_min, price_max)
+        return [], "生成中"
     codes, cache_date = get_daily(cache_key, fetch_candidate_codes, price_min, price_max)
     return codes or [], cache_date
 

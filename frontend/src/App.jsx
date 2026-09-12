@@ -1058,10 +1058,20 @@ function App() {
       setBackendDown(false) // 主数据成功 = 后端在线；尾部辅助接口失败不再误报「后端未启动」
       // 辅助数据（候选池/个股分析）失败只降级提示，不影响主数据已就绪的事实
       try {
-        const c = await fetch('/api/selection/candidates?price_min=5&price_max=30', { signal })
-        if (c.ok) setCandidateCodes((await c.json()).codes ?? [])
-        const an = await fetch(`/api/analysis/${analysisCode}`, { signal })
-        if (an.ok) setAnalysis(await an.json())
+        // 辅助请求各自独立短超时：Render 上候选池（后台生成中）与个股分析可能很慢，
+        // 不得吊住整个加载流程；超时静默跳过（软失败），主数据不受影响
+        const cCtl = new AbortController()
+        const cTo = setTimeout(() => cCtl.abort(), 15000)
+        try {
+          const c = await fetch('/api/selection/candidates?price_min=5&price_max=30', { signal: cCtl.signal })
+          if (c.ok) setCandidateCodes((await c.json()).codes ?? [])
+        } finally { clearTimeout(cTo) }
+        const aCtl = new AbortController()
+        const aTo = setTimeout(() => aCtl.abort(), 30000)
+        try {
+          const an = await fetch(`/api/analysis/${analysisCode}`, { signal: aCtl.signal })
+          if (an.ok) setAnalysis(await an.json())
+        } finally { clearTimeout(aTo) }
       } catch (e2) {
         if (e2.name !== 'AbortError') setError('部分辅助数据加载失败——主数据正常，可点刷新补齐')
       }
