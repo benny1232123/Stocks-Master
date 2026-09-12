@@ -332,6 +332,7 @@ def news_surface() -> dict:
 
 
 
+@app.get("/api/portfolio")
 def portfolio() -> dict:
     return portfolio_snapshot()
 

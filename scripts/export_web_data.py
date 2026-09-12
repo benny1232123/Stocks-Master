@@ -36,6 +36,8 @@ ENDPOINTS = [
     ("/api/artifacts/daily-action-list", "artifacts.json", True),
     ("/api/artifacts/daily-action-list/full", "daily_full.json", False),
     ("/api/backtests/latest", "backtests_latest.json", False),
+    ("/api/portfolio", "portfolio.json", False),
+    ("/api/backtests/daily-summary", "daily_summary.json", False),
 ]
 
 
