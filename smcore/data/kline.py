@@ -116,6 +116,116 @@ def find_price_breaks(df: pd.DataFrame, code6: str) -> list[dict]:
     ]
 
 
+# ── 「平滑累积缩放」巡检（2026-09-14 新增）──
+# 病灶：缓存 close 相对「真实成交价」被**逐步缩放**（缓存 close = 真值 × g(t)，g 缓慢变化），
+# close 全为正、相邻日也看不出极端跳变，属于最隐蔽的一类复权错误。
+# 与既有两层守卫的分工（**2026-09-14 实测校正后的结论，勿照抄旧描述**）：
+#   ① _detect_adjust_drift 只比「本次请求段」的重叠交易日 → 缓存中段的历史污染完全看不见；
+#   ② find_price_breaks 只看**相邻日**跳变 → 覆盖「阶跃型」污染。实测旧缓存的分段重锚
+#      正是阶跃型（000001 有 13 处 >11.5% 的物理不可能跳变），这类归 ② 管，本巡检抓不到；
+#   ③ 本巡检补的是**平滑漂移型**：每日只移动 ~0.2%，远小于 close 与真实均价之间的
+#      日间噪声（±1~2%），② 在物理上必然漏检。实测现库 213/4358 只（4.9%）属此类，
+#      全部集中在 hithink qfq 的深历史段（2015-2016），与已知「加法式失真」一致；
+#      而最近 250 交易日仅 145 个跳变点（旧库 1244 个）—— 近端是干净的。
+# 依据的不变量：同一行里 amount/volume 是**当日真实成交均价**（不做复权），close 是复权价。
+#   于是 r = close / (amount/volume) 对健康数据只在**除权除息日**发生阶跃，
+#   两次除权之间近似常数。
+# 判法（两个时间尺度）：先用滚动中位数抹掉 VWAP↔close 的日间噪声，再看「窗口级」变化占比：
+#   健康序列 r 呈阶梯状 → 只有极少数窗口在变（实测 ~1~15%，取决于分红频次）
+#   缩放污染 r 呈平滑漂移 → 几乎每个窗口都在变（~100%）
+# 两项同时成立才判命中：变化窗口占比 > SHARE_TOL **且** r 总跨度 > FOLD_TOL。
+# 该判据是纯比例量：与价格量纲、成交额单位（元/千元/万元）、复权档位全部无关，
+# 也与涨跌停规则、分红率无关，因此无需按板块/市值分档。
+KLINE_SCALE_WIN = int(os.getenv("KLINE_SCALE_WIN", "21"))
+KLINE_SCALE_CHANGE_TOL = float(os.getenv("KLINE_SCALE_CHANGE_TOL", "0.01"))
+KLINE_SCALE_SHARE_TOL = float(os.getenv("KLINE_SCALE_SHARE_TOL", "0.5"))
+KLINE_SCALE_FOLD_TOL = float(os.getenv("KLINE_SCALE_FOLD_TOL", "3.0"))
+KLINE_SCALE_MIN_BARS = int(os.getenv("KLINE_SCALE_MIN_BARS", "120"))
+# amount/volume 自身若几乎不变，说明该源没给真实成交均价，本巡检无信息量 → 不判（防误报）
+KLINE_SCALE_VWAP_MIN_FOLD = float(os.getenv("KLINE_SCALE_VWAP_MIN_FOLD", "1.05"))
+KLINE_SCALE_CHECK = os.getenv("KLINE_SCALE_CHECK", "1") == "1"
+
+
+def detect_scale_drift(df: pd.DataFrame, code6: str = "") -> dict:
+    """巡检「平滑累积缩放」失真（复权基准被逐段重锚）。
+
+    返回度量字典，字段：
+      ok       —— 样本是否足够做判定（False = 不判，宁可不判也不误报）
+      flagged  —— 是否命中（True = 疑似累积缩放污染）
+      n        —— 有效行数（close/amount/volume 均为正）
+      r_first / r_last —— 复权因子（含污染）的端点值
+      fold     —— r 的总跨度 max/min
+      share    —— 窗口级变化占比（健康 ~1~15%，平滑漂移 ~100%）
+      rho      —— r 随时间的秩相关系数（平滑漂移趋近 ±1）
+      vwap_fold —— amount/volume 自身跨度（< VWAP_MIN_FOLD 表示源没给真实均价）
+    """
+    import math  # 函数级导入：保持模块顶部零新增 import（Render 精简模式内存铁律）
+
+    res = {"ok": False, "flagged": False, "n": 0, "r_first": None, "r_last": None,
+           "fold": None, "share": None, "rho": None, "vwap_fold": None}
+    if df is None or len(df) < KLINE_SCALE_MIN_BARS:
+        return res
+    if not {"date", "close", "volume", "amount"}.issubset(df.columns):
+        return res
+
+    d = df.loc[:, ["date", "close", "volume", "amount"]].copy()
+    for col in ("close", "volume", "amount"):
+        d[col] = pd.to_numeric(d[col], errors="coerce")
+    d = d[(d["close"] > 0) & (d["volume"] > 0) & (d["amount"] > 0)]
+    d = d.dropna(subset=["date"]).sort_values("date").drop_duplicates(subset=["date"], keep="last")
+    if len(d) < KLINE_SCALE_MIN_BARS:
+        return res
+
+    vwap = (d["amount"] / d["volume"]).astype(float)  # 当日真实成交均价（未复权）
+    r = (d["close"] / vwap).astype(float)             # = 复权因子 × 缩放污染
+    ok_mask = r.notna() & (r > 0) & vwap.notna() & (vwap > 0)
+    r, vwap = r[ok_mask], vwap[ok_mask]
+    if len(r) < KLINE_SCALE_MIN_BARS:
+        return res
+    vwap_fold = float(vwap.max() / vwap.min())
+    res["vwap_fold"] = round(vwap_fold, 3)
+    if vwap_fold < KLINE_SCALE_VWAP_MIN_FOLD:
+        # 成交均价几乎不动 → 该源没有真实成交均价，r 退化成 close 的常数倍，
+        # 任何价格趋势都会被误判成「缩放漂移」。没有信息量就不判。
+        return res
+
+    # 抹掉 VWAP↔close 的日间噪声（滚动中位数，对尖峰稳健）
+    s = r.map(math.log).rolling(
+        KLINE_SCALE_WIN, min_periods=max(3, KLINE_SCALE_WIN // 4), center=True
+    ).median()
+    step = s.diff(KLINE_SCALE_WIN).dropna()
+    if len(step) < 4:
+        return res
+
+    share = float((step.abs() > KLINE_SCALE_CHANGE_TOL).mean())
+    fold = float(r.max() / r.min())
+    rho = None
+    try:
+        ss = s.dropna()
+        if len(ss) >= 8:
+            val = float(ss.rank().corr(pd.Series(range(len(ss)), index=ss.index).rank()))
+            rho = None if val != val else val  # NaN → None
+    except Exception:
+        rho = None
+
+    res.update({
+        "ok": True,
+        "n": int(len(d)),
+        "r_first": round(float(r.iloc[0]), 6),
+        "r_last": round(float(r.iloc[-1]), 6),
+        "fold": round(fold, 3),
+        "share": round(share, 4),
+        "rho": None if rho is None else round(rho, 4),
+    })
+    # 单调性只用于**抑制误报**：平滑漂移必单调（|rho|→1）；
+    # rho 缺失（样本过少）时不否决，交由 share/fold 判定。
+    monotone = (rho is None) or (abs(rho) >= 0.5)
+    res["flagged"] = bool(
+        share > KLINE_SCALE_SHARE_TOL and fold > KLINE_SCALE_FOLD_TOL and monotone
+    )
+    return res
+
+
 def _backend() -> str:
     """返回当前 K 线后端：tdx（最快）> baostock（本地）> akshare（云端兜底）。
 
@@ -305,6 +415,23 @@ def write_kline_cache(df: pd.DataFrame, code, adjust: str = DEFAULT_ADJUST, base
             file=sys.stderr,
         )
         return
+    # 平滑累积缩放巡检（2026-09-14）：非正价是「显性」失真，好抓；
+    # 而「缓存 = 真值 × 平滑单调的 g(t)」是**隐性**失真 —— close 全为正、
+    # 相邻日也无跳变，_detect_adjust_drift / find_price_breaks 双双漏检。
+    # 这里按 amount/volume（当日真实均价）与 close 的比值做长期巡检。
+    # 只告警、不拒写：该判据是统计性的（阈值见 KLINE_SCALE_* 段），宁多报不漏报，
+    # 由调用方决定是否对该股全量重拉。样本不足/源无真实均价时内部自会 skip。
+    if KLINE_SCALE_CHECK:
+        _sd = detect_scale_drift(out, code6)
+        if _sd["flagged"]:
+            print(
+                f"[kline] WARN: {code6} 疑似「平滑累积缩放」失真："
+                f"close/(amount/volume) 有 {_sd['share']:.0%} 的窗口在变、"
+                f"总跨度 {_sd['fold']}x、rho={_sd['rho']}"
+                f"（r: {_sd['r_first']} → {_sd['r_last']}）"
+                f"→ 复权基准疑被逐段重锚，建议对该股全量重拉",
+                file=sys.stderr,
+            )
     pf = _write_bucket_file(code6, adjust, base)
     existing = pd.read_parquet(pf) if pf.exists() else None
     if existing is not None and not existing.empty:
