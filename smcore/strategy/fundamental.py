@@ -2,9 +2,13 @@
 
 数据源（全部为项目内已验证可达的稳定源，替代原 akshare 东方财富 em 接口——
 em 接口在当前/沙箱网络下间歇性 ConnectionError，不可用）：
-- **估值**(PE/PB/总市值)：腾讯行情 qt.gtimg.cn（海外/本地均稳定，单请求批量）。
-- **质量**(ROE/毛利率) / **成长**(营收增长)：baostock query_profit_data / query_growth_data。
+- **估值**(PE/PB/PS/PCF)：同花顺官方云 API（hithink）为主源；**总市值**(mkt_cap) 走腾讯
+  qt.gtimg.cn（THS 估值端点不含市值字段），腾讯同时作为估值兜底。
+- **质量**(ROE/毛利率) / **成长**(营收增长)：同花顺官方五类财务指标（hithink）为主源，
+  缺失/失败回退 baostock query_profit_data / query_growth_data；
+  设 `FUNDAMENTAL_SOURCE=baostock` 可一键回滚（跨源口径差异需 OOS 复核时用）。
 - **换手率** / **资金流量价代理**(近20日成交额均值)：baostock 日线 K 线（含 turn/amount）。
+  ⚠️ THS 快照不暴露换手率字段，此项**暂不迁移**。
 
 设计原则（与 factor_scoring 一致的「配置驱动 + 离线安全」范式）：
 - 任何数据源失败**绝不抛异常**，返回 None；因子层据此将该因子贡献置 0（中性降级）。
@@ -301,13 +305,74 @@ def _fetch_valuation_hithink(code6: str) -> Optional[dict]:
     return v.get(code6) if v else None
 
 
-# ───────────────────────── 质量 + 成长（baostock） ─────────────────────────
+# ───────────────────────── 质量 + 成长（baostock 回退源） ─────────────────────────
 def _bs_login() -> bool:
     try:
         from smcore.data.session import login
         return login()
     except Exception:
         return False
+
+
+# ───────────────────────── 质量 + 成长（同花顺官方，主源） ─────────────────────────
+# 同花顺报告期期号 → 报告期末日（"2025-4" → "2025-12-31"）
+_THS_QUARTER_END = {1: "03-31", 2: "06-30", 3: "09-30", 4: "12-31"}
+# 同花顺 index_id → 本项目因子字段 + 单位换算。THS 这三类指标**一律返回百分数**，
+# 而本项目 roe / gross_margin / revenue_growth 统一用**小数**（与 baostock
+# roeAvg/gpMargin 口径一致，并与 `RECOMMENDATION_CONFIG["fundamental"]["rg"]` 的
+# 0.1/0.2/0.3 分段、`analysis.py` 的 `value*100` 展示一致）→ 三者一律 ×0.01。
+# ⚠️ 2026-09-14 修正：revenue_growth 曾按 ×1.0 直通，会把 1.42(%) 当成 142% 打进
+# 「高增长(>0.3)→92 分」档，几乎全市场命中 → 基本面面分被系统性抬高。改为 ×0.01。
+_HITHINK_IND_MAP = {
+    "index_weighted_avg_roe": ("roe", 0.01),
+    "sale_gross_margin": ("gross_margin", 0.01),
+    "calculate_operating_income_yoy_growth_ratio": ("revenue_growth", 0.01),
+}
+
+
+def _fetch_profit_growth_periods_hithink(code6: str, years: int = 0) -> dict:
+    """同花顺五类财务指标 → 按报告期归集的 {statDate: {roe, gross_margin, revenue_growth}}。
+
+    与 `_fetch_profit_growth_periods_baostock` 同构，供 PIT 选期复用。差异：THS 指标端点
+    不返回公告日，`_pub` 留空 → 由 `_period_available_date` 按法定披露大限兜底（既有设计）。
+
+    ⚠️ **成本**：逐期调用（期数 ≈ years×4，默认 4 年 → ~14~16 次/只），比 baostock 的 2 次
+    批量查询慢得多。故用 `HITHINK_FUND_YEARS` 可调（默认 4，覆盖约 4 年 PIT 回放）；若只做
+    实时因子、不需长历史 PIT，调小可显著提速。失败即回退 baostock。
+    fail-soft：无 Key / 异常返回空 dict。
+    """
+    out: dict[str, dict] = {}
+    try:
+        from smcore.data import hithink as _hk
+
+        if not _hk.available():
+            return out
+        if years <= 0:
+            try:
+                years = int(__import__("os").environ.get("HITHINK_FUND_YEARS", "4"))
+            except (TypeError, ValueError):
+                years = 4
+        today = date.today()
+        this_year = today.year
+        for year in range(this_year - years + 1, this_year + 1):
+            for q, mmdd in _THS_QUARTER_END.items():
+                period_end = f"{year}-{mmdd}"
+                pe = _parse_date_str(period_end)
+                if pe is None or pe > today:  # 报告期尚未结束 → 跳过无谓请求
+                    continue
+                ind = _hk.fetch_indicators(code6, f"{year}-{q}")
+                if not ind:
+                    continue
+                rec: dict = {}
+                for index_id, (field, scale) in _HITHINK_IND_MAP.items():
+                    v = ind.get(index_id)
+                    if v is not None:
+                        rec[field] = v * scale
+                if rec:
+                    out[period_end] = rec
+    except Exception:
+        return out
+    return out
 
 
 def _fetch_profit_growth_periods_baostock(code6: str) -> dict:
@@ -457,8 +522,17 @@ def fund_cache_exists(code: str) -> bool:
 
 
 def _build_fundamental_online(code6: str, as_of=None) -> Optional[dict]:
-    """联网构建 v2 缓存结构：{periods, spot, kline_stats, _spot_as_of}。fail-soft。"""
-    periods = _fetch_profit_growth_periods_baostock(code6)
+    """联网构建 v2 缓存结构：{periods, spot, kline_stats, _spot_as_of}。fail-soft。
+
+    质量/成长取数源默认同花顺官方（hithink，全环境统一）；THS 无数据（缺 Key / 未覆盖）
+    自动回退 baostock。设 FUNDAMENTAL_SOURCE=baostock 可一键回滚（跨源口径差异需 OOS 复核时用）。
+    """
+    if __import__("os").environ.get("FUNDAMENTAL_SOURCE", "hithink").strip().lower() == "baostock":
+        periods = _fetch_profit_growth_periods_baostock(code6)
+    else:
+        periods = _fetch_profit_growth_periods_hithink(code6)
+        if not periods:
+            periods = _fetch_profit_growth_periods_baostock(code6)
     val = get_valuation(code6)
     ks = _fetch_kline_stats_baostock(code6, as_of)
     if not periods and not val and not ks:

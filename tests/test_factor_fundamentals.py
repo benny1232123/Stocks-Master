@@ -51,26 +51,39 @@ FUND = {
     "600000": _v2(11.0, 35.0, 5.0, 4.5, 0.6, 2800.0, 0.8, 8e8),
     "000002": _v2(8.0, 25.0, -2.0, 12.0, 1.5, 2000.0, 1.5, 2e8),
 }
-CACHE_DIR = fund_mod.CACHE_DIR
-SPOT_FILE = fund_mod.SPOT_FILE
-
 FAKE_RAW = lambda code, as_of, window=20: {"mom20": 0.05, "mom60": 0.1, "vol": 0.2, "liq": 1e9}
+
+
+@pytest.fixture(autouse=True)
+def _isolate_cache(tmp_path, monkeypatch):
+    """把基本面缓存目录重定向到临时目录（本模块所有测试生效）。
+
+    ⚠️ 原实现直接写/删 `stock_data/fundamental_cache/{codes}.json` —— 那**是仓库里带真实
+    数据的目录**（000001/600000 等是真缓存、已提交进 git）。跑一次本模块就会把真缓存删掉、
+    污染工作区（2026-09-14 实测两次，需 `git checkout --` 还原）。故统一指向 `tmp_path`。
+    `CACHE_DIR`/`SPOT_FILE` 都是 `fundamental` 模块级全局量、被各函数直接引用 → 猴子补丁有效。
+    """
+    monkeypatch.setattr(fund_mod, "CACHE_DIR", tmp_path)
+    monkeypatch.setattr(fund_mod, "SPOT_FILE", tmp_path / "spot_snapshot.csv")
+    yield
 
 
 def _seed_cache():
     import pandas as pd
-    CACHE_DIR.mkdir(parents=True, exist_ok=True)
-    pd.DataFrame(SPOT_ROWS, columns=SPOT_COLS).to_csv(SPOT_FILE, index=False, encoding="utf-8-sig")
+    cache_dir = fund_mod.CACHE_DIR
+    cache_dir.mkdir(parents=True, exist_ok=True)
+    pd.DataFrame(SPOT_ROWS, columns=SPOT_COLS).to_csv(
+        fund_mod.SPOT_FILE, index=False, encoding="utf-8-sig"
+    )
     for c, d in FUND.items():
-        (CACHE_DIR / f"{c}.json").write_text(json.dumps(d), encoding="utf-8")
+        (cache_dir / f"{c}.json").write_text(json.dumps(d), encoding="utf-8")
 
 
 def _clear_cache():
-    import ctypes
-    for f in [SPOT_FILE] + [CACHE_DIR / f"{c}.json" for c in CODES]:
+    for f in [fund_mod.SPOT_FILE] + [fund_mod.CACHE_DIR / f"{c}.json" for c in CODES]:
         try:
             if f.exists():
-                ctypes.windll.kernel32.DeleteFileW(str(f).replace("/", "\\"))
+                f.unlink()
         except Exception:
             pass
 

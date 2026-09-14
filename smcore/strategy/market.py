@@ -15,8 +15,8 @@
 - `volatility_level`（low/mid/high）—— 给波动率自适应风控用
 - `breadth_score`（0-1）、`activity_ratio` —— 供看板展示与后续扩展
 
-数据源：baostock 主源（指数代码 sh.000300 / sh.000905 / sh.000852）+ akshare 兜底，东财-free。
-任一指数拉取失败时保守降级，不崩流程。
+数据源：同花顺官方云 API（hithink）主源，回退 新浪历史K线 → baostock → akshare
+（指数代码 sh.000300 / sh.000905 / sh.000852），东财-free。任一指数拉取失败时保守降级，不崩流程。
 """
 from __future__ import annotations
 
@@ -56,7 +56,7 @@ class MarketProfile:
 
 
 def _fetch_index_series(code: str, fields: str = "date,close,volume") -> pd.DataFrame | None:
-    """拉单只指数日线（baostock 主源 + akshare 兜底）。返回含 date(索引)/close/volume 的 DataFrame。"""
+    """拉单只指数日线（baostock → akshare；现为 `_get_index_series` 的末级兜底，不再直接主用）。返回含 date(索引)/close/volume 的 DataFrame。"""
     # baostock 主源
     try:
         import baostock as bs
@@ -103,6 +103,34 @@ def _fetch_index_series(code: str, fields: str = "date,close,volume") -> pd.Data
     except Exception:
         pass
     return None
+
+
+def _fetch_index_series_hithink(code: str) -> pd.DataFrame | None:
+    """同花顺官方指数历史K（全环境可达主源）：返回含 close/volume 的 DataFrame。
+
+    code 为 baostock 形式（sh.000300）→ 转 hithink thscode（000300.SH）。
+    缺少 Key / 接口异常返回 None，由调用方降级到新浪 → baostock/akshare。
+    """
+    try:
+        from smcore.data import hithink as _hk
+
+        if not _hk.available():
+            return None
+        parts = code.split(".")
+        if len(parts) != 2:
+            return None
+        ths = f"{parts[1]}.{parts[0].upper()}"
+        df = _hk.fetch_index_historical(ths, "2020-01-01", pd.Timestamp.today().strftime("%Y-%m-%d"))
+        if df is None or df.empty or len(df) < 22:
+            return None
+        close = pd.to_numeric(df["close"], errors="coerce")
+        vol = pd.to_numeric(df.get("volume"), errors="coerce")
+        dts = pd.to_datetime(df["date"], errors="coerce")
+        out = pd.DataFrame({"close": close.values, "volume": vol.values}, index=dts)
+        out = out[~out.index.isna()].sort_index()
+        return out if len(out) >= 22 else None
+    except Exception:
+        return None
 
 
 def _fetch_index_series_sina(code: str) -> pd.DataFrame | None:
@@ -160,11 +188,22 @@ _INDEX_SERIES_CACHE: dict = {}  # code -> 全量索引序列 DataFrame（date-in
 
 
 def _get_index_series(code: str) -> Optional["pd.DataFrame"]:
-    """取单只指数全量日线（新浪主源→baostock/akshare兜底），模块级缓存避免重复联网。"""
+    """取单只指数全量日线（同花顺 → 新浪 → baostock/akshare 兜底），模块级缓存避免重复联网。
+
+    ⚠️ 这是 **smcore 内「指数日线」的统一入口**（2026-09-14 梳理）。另有一处遗留实现
+    `smcore.data.index.fetch_index_close_series`（任意区间 + SQLite 缓存），smcore 内已无
+    调用方，仅遗留脚本 `auto_notify_boll.py` 使用 —— 新增调用请走本函数。
+    沪深300 的**收盘 Series**（RS 过滤 / 归因 / 组合β 用）另有
+    `regime_filter._get_hs300_close`，两者接口语义不同，勿混用。
+    """
     if code in _INDEX_SERIES_CACHE:
         return _INDEX_SERIES_CACHE[code]
-    sina = _fetch_index_series_sina(code)
-    df = sina if sina is not None else _fetch_index_series(code)
+    # 数据源优先级：同花顺官方云 API（hithink，全环境统一）→ 新浪历史K线 → baostock → akshare
+    df = _fetch_index_series_hithink(code)
+    if df is None:
+        df = _fetch_index_series_sina(code)
+    if df is None:
+        df = _fetch_index_series(code)
     if df is None:
         return None
     _INDEX_SERIES_CACHE[code] = df
@@ -298,8 +337,9 @@ def compute_market_profile(as_of=None) -> MarketProfile:
         breadth_score=0.5, activity_ratio=1.0, hs300_ret20=0.0,
     )
 
-    # 数据源优先级：新浪历史K线（海外可达，主源）→ baostock → akshare。
-    # 海外 CI 上 baostock 连不上国内券商、akshare 指数接口不稳，若只靠它们会静默回退默认 regime。
+    # 数据源优先级（由 _get_index_series 决定）：同花顺官方云 API（hithink，主源）→ 新浪历史K线
+    # → baostock → akshare。海外 CI 上 baostock 连不上国内券商、akshare 指数接口不稳，
+    # 若只靠它们会静默回退默认 regime。
     hs = _get_index_series(_HS300)
     zz500 = _get_index_series(_ZZ500)
     zz1000 = _get_index_series(_ZZ1000)

@@ -7,7 +7,8 @@ from __future__ import annotations
 
 import math
 
-import akshare as ak
+from smcore.utils.ak_compat import get_ak
+ak = get_ak()
 
 
 def safe_float(val, default=None):

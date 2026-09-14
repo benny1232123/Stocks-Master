@@ -210,6 +210,26 @@ def _fetch_hs300_baostock() -> Optional[pd.Series]:
         return None
 
 
+def _fetch_hs300_hithink() -> Optional[pd.Series]:
+    """同花顺官方指数历史K 拉沪深300 收盘价（全环境可达，海外 CI 亦可）。失败返回 None。"""
+    try:
+        from smcore.data import hithink as _hk
+
+        if not _hk.available():
+            return None
+        df = _hk.fetch_index_historical("000300.SH", date(2020, 1, 1), date.today())
+        if df is None or df.empty:
+            return None
+        close = pd.to_numeric(df["close"], errors="coerce")
+        dts = pd.to_datetime(df["date"], errors="coerce")
+        s = pd.Series(close.values.astype(float), index=dts)
+        s = s[~s.index.isna()].sort_index()
+        return s if len(s) >= 22 else None
+    except Exception as exc:
+        print(f"[regime_filter] WARN: hithink 拉沪深300 失败（{exc!r}）", file=sys.stderr)
+        return None
+
+
 def _fetch_hs300_akshare() -> Optional[pd.Series]:
     """akshare 拉沪深300 收盘价（云端无 baostock 时兜底）。失败返回 None。"""
     try:
@@ -230,22 +250,30 @@ def _fetch_hs300_akshare() -> Optional[pd.Series]:
 
 
 def _get_hs300_close(use_daily_cache: bool = True) -> Optional[pd.Series]:
-    """缓存沪深300 收盘价序列（baostock 主源 + akshare 兜底，东财-free）。
+    """缓存沪深300 收盘价序列（hithink 主源 → baostock → akshare 兜底，东财-free）。
 
-    此前仅走 akshare，沙箱/云端指数接口偶发失败会返回 None，
-    导致 RS 过滤「数据缺失一律放行」而形同虚设。改为 baostock 主源后
-    沙箱稳定可取，云端退 akshare，保证相对强度过滤真正生效。
+    历史沿革：最初仅走 akshare → 改为 baostock 主源 + akshare 兜底（解决"指数接口偶发失败
+    返回 None → RS 过滤『数据缺失一律放行』而形同虚设"）→ 2026-09-14 起主源改为 hithink
+    （baostock/akshare 在海外 CI 均不可达，详见下方取数源说明）。
 
     缓存按自然日失效（旧形参 ttl_days 名为天数实为布尔——传 3 和传 1 行为相同，
     2026-09-12 更名 use_daily_cache 如实表达）：长驻服务若永不失效，跨天后仍用
     启动当天拉的序列，相对强度基准会越来越旧。
     ``use_daily_cache=False`` 表示不缓存（每次重拉）。
+
+    ⚠️ 取数源说明（2026-09-14 更新）：主源改为**同花顺官方云 API（hithink）**，海外 CI 亦可
+    取到；其后依次 baostock（本地最稳）→ akshare（兜底）。此前 baostock/akshare 在海外 CI
+    均不可达，导致本函数返回旧缓存或 None、regime 静默退化为「震荡轮动」——hithink 作为
+    可达主源修复了该既存问题。指数收盘价是交易所确定值（非复权序列），跨源数值一致，
+    不改变 regime 判定口径；`tests/test_config_driven_thresholds.py` 锁定的缓存语义未变。
     """
     global _HS300_CLOSE_CACHE, _HS300_CACHE_DATE
     today = date.today().isoformat()
     if _HS300_CLOSE_CACHE is not None and _HS300_CACHE_DATE == today and use_daily_cache:
         return _HS300_CLOSE_CACHE
-    s = _fetch_hs300_baostock()
+    s = _fetch_hs300_hithink()
+    if s is None:
+        s = _fetch_hs300_baostock()
     if s is None:
         s = _fetch_hs300_akshare()
     if s is None or len(s) < 22:

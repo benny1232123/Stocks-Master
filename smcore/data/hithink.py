@@ -315,32 +315,96 @@ def anomaly_stock(thscodes) -> list:
 
 
 # ───────────────────────── 指数历史K + 快照（板块动量源） ─────────────────────────
+# ⚠️ 服务端硬限制（2026-09-14 实测）：指数历史 K 端点**只覆盖近期一段历史**（约自 2022-01 起 /
+# 近 ~1126 根），且**单次请求的起点若早于该可用窗口，整段直接静默返回空**（code=0 + item=[]，
+# 不报错、不截断）。实测：2023-05-31~今(799根) ✅ / 2020-01-01~2022-01-20(仅486根) ❌空 /
+# 单次 2020-01-01~今 ❌空 —— 可见瓶颈是**起点日期**而非根数，故不能靠"缩短区间"规避，
+# 必须分片：早于窗口的片返回空、窗口内的片正常，拼接后即得完整可用序列。
+# 注意：**个股**历史 K 端点（/api/a-share/prices/historical）无此限制（实测 2400 自然日/
+# 1598 根正常），故 fetch_historical_k 不做分片。
+_INDEX_HIST_CHUNK_DAYS = 750
+
+
+def _as_date(d) -> date:
+    """date / datetime / 'YYYY-MM-DD' → date。"""
+    if isinstance(d, datetime):
+        return d.date()
+    if isinstance(d, date):
+        return d
+    return datetime.strptime(str(d)[:10], "%Y-%m-%d").date()
+
+
 def fetch_index_historical(thscode, start: date, end: date, interval: str = "1d") -> pd.DataFrame:
-    """板块/行业/标准指数历史日 K。thscode 为指数 thscode（如 886042.TI / 000001.SH / 881101.TI）。"""
+    """板块/行业/标准指数历史日 K。thscode 为指数 thscode（如 886042.TI / 000001.SH / 881101.TI）。
+
+    内部按 _INDEX_HIST_CHUNK_DAYS 分片请求（绕开服务端单次根数上限）后拼接、按日去重。
+    """
     ts = str(thscode).strip().upper()
     if not ts:
         return pd.DataFrame()
-    data = _get(
-        "/api/a-share-index/prices/historical",
-        {"thscode": ts, "interval": interval, "start": _ms(start), "end": _ms(end)},
-    )
-    if not data:
+    try:
+        s_d, e_d = _as_date(start), _as_date(end)
+    except Exception:
         return pd.DataFrame()
-    items = data.get("item") or []
-    rows = [
-        {
-            "date": _ms_to_date(it.get("date_ms")),
-            "open": _num(it.get("open_price")),
-            "high": _num(it.get("high_price")),
-            "low": _num(it.get("low_price")),
-            "close": _num(it.get("close_price")),
-            "volume": _num(it.get("volume")),
-            "amount": _num(it.get("turnover")),
-        }
-        for it in items
-        if it.get("date_ms")
-    ]
-    return pd.DataFrame(rows, columns=["date", "open", "high", "low", "close", "volume", "amount"])
+    if s_d > e_d:
+        return pd.DataFrame()
+    rows: list = []
+    n_chunks = 0
+    failed_chunks = 0
+    cur = s_d
+    while cur <= e_d:
+        n_chunks += 1
+        chunk_end = min(cur + timedelta(days=_INDEX_HIST_CHUNK_DAYS), e_d)
+        data = _get(
+            "/api/a-share-index/prices/historical",
+            {"thscode": ts, "interval": interval, "start": _ms(cur), "end": _ms(chunk_end)},
+        )
+        items = (data or {}).get("item") or []
+        if not items:
+            # 首个分片为空＝请求起点早于服务端可用历史（实测指数历史约只覆盖近 ~1126 根），属常态；
+            # 其余分片为空＝接口抖动/限流（实测 000905 曾只取到前 3 片、末值停留在 6 个月前）。
+            if n_chunks > 1:
+                failed_chunks += 1
+                import sys as _sys
+                print(
+                    f"[hithink] WARN: 指数 {ts} {cur}~{chunk_end} 返回空 item（接口抖动/限流）",
+                    file=_sys.stderr,
+                )
+        rows.extend(
+            {
+                "date": _ms_to_date(it.get("date_ms")),
+                "open": _num(it.get("open_price")),
+                "high": _num(it.get("high_price")),
+                "low": _num(it.get("low_price")),
+                "close": _num(it.get("close_price")),
+                "volume": _num(it.get("volume")),
+                "amount": _num(it.get("turnover")),
+            }
+            for it in items
+            if it.get("date_ms")
+        )
+        cur = chunk_end + timedelta(days=1)
+    # 全有或全无：任一分片缺失即整体判失败，返回空让调用方降级到新浪/baostock。
+    # 截断的指数序列比"取不到"更危险——它会被当成最新数据静默用于 regime / 相对强度基准。
+    if failed_chunks:
+        import sys as _sys
+        print(
+            f"[hithink] WARN: 指数 {ts} {s_d}~{e_d} 有 {failed_chunks}/{n_chunks} 分片缺失，"
+            f"按整体失败处理（调用方应降级）",
+            file=_sys.stderr,
+        )
+        return pd.DataFrame(columns=["date", "open", "high", "low", "close", "volume", "amount"])
+    if not rows:
+        import sys as _sys
+        print(
+            f"[hithink] WARN: 指数 {ts} {s_d}~{e_d} 全部分片返回空（接口不可达或该区间无数据）",
+            file=_sys.stderr,
+        )
+    df = pd.DataFrame(rows, columns=["date", "open", "high", "low", "close", "volume", "amount"])
+    if df.empty:
+        return df
+    df = df[df["date"].astype(bool)]
+    return df.drop_duplicates(subset="date", keep="last").sort_values("date").reset_index(drop=True)
 
 
 def fetch_index_snapshot(thscodes) -> pd.DataFrame:

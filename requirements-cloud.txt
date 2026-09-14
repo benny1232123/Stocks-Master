@@ -1,0 +1,39 @@
+# ── 云端精简依赖（Render Free / 512MB）────────────────────────────────────
+# 由 render.yaml 的 buildCommand 使用。requirements.txt 保持不变，继续供应
+# 本地开发与 GitHub Actions CI（需要完整功能）。
+#
+# 差异说明 —— 移除的都是「云端精简模式下不可达，或已有等价替代」的重依赖。
+# RENDER_LITE=1 会把个股分析 / 回测触发 / 全市场扫描 / 策略融合端点整体 503：
+#
+#   akshare   新闻抓取 / 宏观指标 / 候选池快照 / 指数兜底。云端这三类用途均有替代
+#             （本地 stock_data/{date}_news.csv 缓存、dashboard.json 快照、
+#             CANDIDATE_SCAN_BG=0 已关闭）；代码侧经 smcore/utils/ak_compat.py
+#             的占位对象 fail-soft，缺失时调用一律返回 None 而不会 ImportError。
+#   backtrader 多策略回测引擎 —— 回测端点云端 503，且 backend/main.py 已改懒导入。
+#   matplotlib 仅 Frequently-Used-Program/boll-visualizer 画图用，后端不依赖。
+#   pillow     同上（原 requirements 注释即标注可移除）。
+#   supabase   SDK 依赖链极重（首次调用实测 +77MB 常驻）；持仓云端后端已改为
+#              httpx 直连 PostgREST（smcore/storage/trades_repo.py）。
+#   cos-python-sdk-v5  COS 上传属 CI / 本地任务，云端不触发。
+#
+# ⚠️ 改动本文件后必须重跑 `python .workbuddy/verify_cloud_requirements.py`：
+#    该脚本会屏蔽上述被移除的包，验证启动与全部云端可达端点不会 500。
+
+# Web 框架（锁次要版本）
+fastapi~=0.115.0
+uvicorn~=0.30.0
+pandas>=2.0
+python-dotenv~=1.0.0
+
+# HTTP 客户端：持仓云端后端（httpx）+ 新浪行情 / 腾讯估值 / 宏观（requests）
+httpx>=0.27
+requests
+
+# K 线缓存：分桶 parquet 读取（pyarrow 谓词下推）
+pyarrow>=15.0
+
+# 基本面质量/成长/换手 + regime 指数与 daily-summary 基准对比的兜底源
+baostock
+
+# CCTV 新闻中文分词（本地 NLP 产物解析；cctv.py 内已 try 保护）
+jieba

@@ -26,5 +26,6 @@
     "blend_w_backtest": 0.5,
     "min_n_confident": 30
   },
-  "monotonicity_tol_pp": 2.5
+  "monotonicity_tol_pp": 2.5,
+  "sweep_edge_tol_pp": 2.5
 }

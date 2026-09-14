@@ -296,10 +296,26 @@ class JsonTradeBackend(TradeBackend):
 
 
 class SupabaseTradeBackend(TradeBackend):
+    """Supabase 交易记录后端 —— httpx 直连 PostgREST，不依赖 supabase-py SDK。
+
+    2026-09-14 改造：原实现用 supabase-py 官方 SDK，其依赖链极重（首次调用实测
+    +77MB 常驻 RSS，是 512MB 免费实例上剩余最大的一笔内存开销）。本后端实际只用到
+    PostgREST 的四个 HTTP 动作（GET / POST / PATCH / DELETE），直连完全等价，
+    且省掉整条 SDK 依赖。对外接口与 fail-soft 语义保持不变。
+
+    认证：同时带 ``apikey`` 与 ``Authorization: Bearer``（RLS 生效时须用
+    service-role key；anon key 下 RLS 会拒绝，行为与原 SDK 一致）。
+    """
+
+    #: PostgREST 表名
+    _TABLE = "trades"
+
     def __init__(self) -> None:
         self._client = self._create_client()
         if self._client is None:
             raise RuntimeError("Supabase 未配置或客户端创建失败")
+        base = _normalize_supabase_url(os.getenv("SUPABASE_URL", "").strip())
+        self._rest = f"{base}/rest/v1/{self._TABLE}"
 
     @property
     def name(self) -> str:
@@ -307,56 +323,78 @@ class SupabaseTradeBackend(TradeBackend):
 
     @staticmethod
     def _create_client():
-        try:
-            from supabase import create_client
-        except ImportError:
-            logger.warning("未安装 supabase 包，无法使用云端存储")
-            return None
-
         url = os.getenv("SUPABASE_URL", "").strip()
         key = os.getenv("SUPABASE_KEY", "").strip()
         if not url or not key:
             return None
 
-        warn_if_anon_key(key, source="trades_repo")
         try:
-            return create_client(_normalize_supabase_url(url), key)
-        except Exception as exc:
-            logger.warning("Supabase 客户端创建失败: %s", exc)
+            import httpx
+        except ImportError:
+            logger.warning("未安装 httpx，无法使用云端存储")
             return None
 
+        warn_if_anon_key(key, source="trades_repo")
+        try:
+            timeout = float(os.getenv("SUPABASE_TIMEOUT", "15"))
+        except (TypeError, ValueError):
+            timeout = 15.0
+        try:
+            return httpx.Client(
+                headers={
+                    "apikey": key,
+                    "Authorization": f"Bearer {key}",
+                    "Content-Type": "application/json",
+                },
+                timeout=timeout,
+            )
+        except Exception as exc:
+            logger.warning("Supabase HTTP 客户端创建失败: %s", exc)
+            return None
+
+    @staticmethod
+    def _writes(extra: dict[str, str] | None = None) -> dict[str, str]:
+        """写操作统一带 return=representation —— 与原 SDK 一样回传受影响行，
+        调用方据此判断成败（原实现依赖 ``resp.data``）。"""
+        headers = {"Prefer": "return=representation"}
+        if extra:
+            headers.update(extra)
+        return headers
+
     def load_all(self) -> list[dict[str, Any]]:
-        resp = (
-            self._client.table("trades")
-            .select("*")
-            .order("trade_date")
-            .order("id")
-            .limit(10000)
-            .execute()
+        resp = self._client.get(
+            self._rest,
+            params={"select": "*", "order": "trade_date.asc,id.asc", "limit": "10000"},
         )
-        rows = resp.data or []
-        return [_to_app_trade(row) for row in rows]
+        resp.raise_for_status()
+        return [_to_app_trade(row) for row in (resp.json() or [])]
 
     def append(self, trade: dict[str, Any]) -> None:
         row = _to_db_trade(trade)
-        self._client.table("trades").insert(row).execute()
+        resp = self._client.post(self._rest, json=row, headers=self._writes())
+        resp.raise_for_status()
 
     def replace_all(self, trades: list[dict[str, Any]]) -> None:
         # PostgREST 无跨语句事务：先删后插在 insert 失败时云端已空（数据"蒸发"到
         # 重启迁移才可能救回）。delete 前先快照，insert 失败时尽力恢复旧数据。
         snapshot = self.load_all()
-        self._client.table("trades").delete().neq("id", -1).execute()
+        resp = self._client.delete(self._rest, params={"id": "neq.-1"})
+        resp.raise_for_status()
         if not trades:
             return
         rows = [_to_db_trade(item) for item in trades]
         try:
-            self._client.table("trades").insert(rows).execute()
+            resp = self._client.post(self._rest, json=rows, headers=self._writes())
+            resp.raise_for_status()
         except Exception:
             if snapshot:
                 try:
-                    self._client.table("trades").insert(
-                        [_to_db_trade(item) for item in snapshot]
-                    ).execute()
+                    resp = self._client.post(
+                        self._rest,
+                        json=[_to_db_trade(item) for item in snapshot],
+                        headers=self._writes(),
+                    )
+                    resp.raise_for_status()
                     logger.error("replace_all 写入失败，已恢复 %d 条旧记录（快照回灌）", len(snapshot))
                 except Exception as restore_exc:
                     logger.error(
@@ -371,16 +409,20 @@ class SupabaseTradeBackend(TradeBackend):
             tid = int(trade_id)
         except (TypeError, ValueError):
             return False
-        resp = self._client.table("trades").delete().eq("id", tid).execute()
-        return bool(resp.data)
+        resp = self._client.delete(
+            self._rest, params={"id": f"eq.{tid}"}, headers=self._writes()
+        )
+        resp.raise_for_status()
+        return bool(resp.json())
 
     def append_many(self, trades: list[dict[str, Any]]) -> int:
         """Supabase 后端：单次 insert 写多条。"""
         if not trades:
             return 0
         rows = [_to_db_trade(t) for t in trades]
-        resp = self._client.table("trades").insert(rows).execute()
-        return len(resp.data or [])
+        resp = self._client.post(self._rest, json=rows, headers=self._writes())
+        resp.raise_for_status()
+        return len(resp.json() or [])
 
     def update_by_id(self, trade_id: Any, updates: dict[str, Any]) -> bool:
         """按自增 id 局部更新字段。updates 用应用内部键名（date/price/qty/side...）。"""
@@ -392,8 +434,11 @@ class SupabaseTradeBackend(TradeBackend):
         row = _partial_to_db(updates)
         if not row:
             return False
-        resp = self._client.table("trades").update(row).eq("id", tid).execute()
-        return bool(resp.data)
+        resp = self._client.patch(
+            self._rest, params={"id": f"eq.{tid}"}, json=row, headers=self._writes()
+        )
+        resp.raise_for_status()
+        return bool(resp.json())
 
 
 class TradeRepository:

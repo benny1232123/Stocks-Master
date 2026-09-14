@@ -6,15 +6,26 @@ services:
     branch: master
     # vite 经 node 直接调用（不走 .bin 垫片）：Render 构建环境曾出现垫片
     # Permission denied（npm ci/chmod 均无效），node 直调绕开可执行位问题
-    buildCommand: cd frontend && npm ci && npm run build && cd .. && pip install -r requirements.txt
+    # 依赖用 requirements-cloud.txt（2026-09-14）：云端精简模式下 akshare /
+    # backtrader / matplotlib / supabase 等均不可达或已有替代，装它们纯属浪费
+    # 构建时间与镜像体积。本地/CI 仍用 requirements.txt。改动后须跑
+    # `.workbuddy/verify_cloud_requirements.py` 回归。
+    buildCommand: cd frontend && npm ci && npm run build && cd .. && pip install -r requirements-cloud.txt
     startCommand: uvicorn backend.main:app --host 0.0.0.0 --port $PORT
     healthCheckPath: /
     envVars:
       # Python 版本声明（原 runtime.txt 已删——CF Pages 会误检测去装 Python 导致构建失败）
       - key: PYTHON_VERSION
         value: 3.12.3
+      # K 线后端统一走同花顺官方云 API（hithink）：海外可达、毫秒级、不引入 akshare
+      # （akshare 首次 import 约 41MB，正是 512MB 实例内存吃紧的来源之一）。
+      # 未配置 Key 或接口异常时 kline 回退链自动降级，不会静默失败。
       - key: KLINE_BACKEND
-        value: akshare
+        value: hithink
+      # HITHINK_FINANCE_API_KEY：同花顺 Financial-API 密钥，sync:false → 不写入仓库，
+      # 需在 Render Dashboard → Environment 手动填值（与 GitHub Actions secret 同值）。
+      - key: HITHINK_FINANCE_API_KEY
+        sync: false
       - key: TDX_ENABLED
         value: "0"
       # 候选池全市场扫描在 512MB 实例上会 OOM（ak.stock_zh_a_spot 全市场快照），
@@ -39,3 +50,13 @@ services:
         sync: false
       - key: API_AUTH_TOKEN
         sync: false
+      # ── 内存优化：glibc malloc 调优（2026-09-14）──
+      # glibc 默认为每个线程开独立 arena（上限 8×CPU 核数）。uvicorn 单进程 + prewarm/
+      # 定时清扫/重任务线程属典型多线程场景 → arena 碎片持续膨胀且不归还 OS，是 512MB
+      # 免费实例 RSS 只涨不落的主因之一。限制 arena 数可显著压低常驻内存，对性能无实质影响。
+      - key: MALLOC_ARENA_MAX
+        value: "2"
+      # 降低 trim 阈值，让 free() 后的大块内存及时归还 OS（默认阈值过高 → RSS 只增不减）
+      - key: MALLOC_TRIM_THRESHOLD_
+        value: "131072"
+      # 注：MALLOC_* 仅 glibc(Linux) 生效，Render 为 Linux；本机 Windows 自动忽略。

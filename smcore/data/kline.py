@@ -292,6 +292,19 @@ def write_kline_cache(df: pd.DataFrame, code, adjust: str = DEFAULT_ADJUST, base
         return
     out.insert(0, "code", code6)
     out["date"] = out["date"].astype(str)
+    # 非正价硬防线（2026-09-14）：加法式前复权（如 hithink 对高分红长历史股的深历史段）
+    # 会产出 close<=0。一旦落盘会污染全库（负价、pct_change 失真、各类 min/max/Drawdown 统计错乱）。
+    # 这是**不变量**（A 股停牌记为无行而非 0 价），无容差、无魔数：宁拒不写，
+    # 让调用方走回退链（源阶梯）或显式处理，避免静默写入坏数据。
+    _close = pd.to_numeric(out["close"], errors="coerce")
+    _n_nonpos = int((_close <= 0).sum())
+    if _n_nonpos:
+        print(
+            f"[kline] WARN: 拒绝写入 {code6}：含 {_n_nonpos}/{len(out)} 行非正收盘价"
+            f"（疑似复权口径失真，如加法式前复权；请改用乘法式头寸或换源）",
+            file=sys.stderr,
+        )
+        return
     pf = _write_bucket_file(code6, adjust, base)
     existing = pd.read_parquet(pf) if pf.exists() else None
     if existing is not None and not existing.empty:

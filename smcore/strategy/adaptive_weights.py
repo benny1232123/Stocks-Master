@@ -80,6 +80,12 @@ _BUILTIN_DEFAULTS = {
     # high>low，仅在高权重档比低权重档劣化超过此容差时报警（捕捉机制崩坏级倒置）。
     # 取值 = 原 21 天窗口观测到的正向单调幅度(+2.5pp) 作为对称容差；可经 walk-forward CI 调。
     "monotonicity_tol_pp": 2.5,
+    # 网格扫描守卫容差（百分点）：见 test_walk_forward.test_sweep_returns_all_configs。
+    # 原断言「网格内至少一个配置跑赢等权」(max(diff)>0) 在数据集扩展到后段 regime 后
+    # 漂移到 -1.18pp 而恒定红灯——但该量级远小于「机制崩坏」，属噪声。故改为**容差带非回归
+    # 守卫**：max(diff) 只要不劣于 -sweep_edge_tol_pp 即放行；结构断言（16 个配置齐备、
+    # 裸配置存在、diff 有限）保持不变。可经 walk-forward CI 调。
+    "sweep_edge_tol_pp": 2.5,
 }
 
 

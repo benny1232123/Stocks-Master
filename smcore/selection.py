@@ -12,7 +12,10 @@ import pandas as pd
 from smcore.cache_daily import get_daily
 from smcore.data.kline import fetch_daily_k
 from smcore.indicators.boll import calc_bollinger, evaluate_boll_signal
-from smcore.strategies.boll import run_boll
+# 注：`from smcore.strategies.boll import run_boll` 已下沉到 scan_boll_batch 内（2026-09-14）。
+# boll 策略链会模块级导入 akshare + baostock + bs4 + lxml（实测约 41MB 常驻 RSS），
+# 而 run_boll 只被 auto-boll 全市场选股用到。挂在模块顶部会让「只读候选池缓存」的
+# /api/selection/candidates（精简模式下未被拦截的活跃端点）也白付这份内存。
 from smcore.strategy import fuse_signals
 from smcore.strategy.report import save_action_list, save_action_report
 from smcore.strategy.risk_rules import RISK_CONFIG
@@ -24,7 +27,8 @@ def fetch_candidate_codes(price_min: float, price_max: float) -> list[str]:
 
     Excludes 北交所 (920xxx), 三板/退市 (4xxx/8xxx) stocks that lack kline data.
     """
-    import akshare as ak
+    from smcore.utils.ak_compat import get_ak
+    ak = get_ak()
 
     try:
         spot = ak.stock_zh_a_spot()
@@ -121,6 +125,8 @@ def scan_boll_batch(
     """
     # 无候选 → 运行真实 auto-boll 多因子选股（daily-pick 同款逻辑）。
     if not codes:
+        from smcore.strategies.boll import run_boll  # 懒导入：重（akshare/baostock 链）
+
         if on_progress:
             on_progress(0, 1, "", "运行 auto-boll 多因子选股 ...")
         df = run_boll(k=k, near_ratio=near_ratio, days_back=days_back)

@@ -1,7 +1,10 @@
-"""实时行情报价 —— 新浪HTTP接口，无需akshare。
+"""实时行情报价 —— 同花顺官方快照为主源，纯 requests，无需 akshare。
 
-使用 quote_sina 模块（纯 requests + 新浪财经 API）按需查询，
-不依赖 akshare 的东财全市场快照接口。
+源优先级（逐级 fail-soft 降级）：
+  1. 同花顺官方快照 hithink（全环境统一；需 HITHINK_FINANCE_API_KEY + 联网）
+  2. 通达信直连（本地/国内，毫秒级）
+  3. 新浪财经 HTTP 按需查询（quote_sina，秒级）
+  4. 全市场快照缓存（新浪源，兜底）
 
 缓存策略：
 - 内存缓存：进程内，5 分钟过期
@@ -79,9 +82,10 @@ def _load_full_snapshot() -> pd.DataFrame:
 
 
 def fetch_realtime_quotes(codes: Iterable[str]) -> pd.DataFrame:
-    """获取指定股票的实时报价（新浪HTTP源）。
+    """获取指定股票的实时报价。
 
-    优先使用新浪HTTP按需查询（秒级），失败回退全市场快照缓存。
+    源优先级：同花顺官方快照（全环境统一）→ 通达信直连（本地毫秒级）→ 新浪 HTTP
+    按需查询（秒级）→ 全市场快照缓存。每一级均 fail-soft，失败自动降级。
 
     Args:
         codes: 股票代码列表（任意格式，内部标准化）
@@ -93,7 +97,40 @@ def fetch_realtime_quotes(codes: Iterable[str]) -> pd.DataFrame:
     if not codes_set:
         return pd.DataFrame(columns=["code", "name", "price", "pct"])
 
-    # 优先：通达信直连（毫秒级、最稳）
+    # 首选：同花顺官方快照（hithink）。注意 thscode 才是权威代码（指数端点的 ticker
+    # 是内部码如 1B0300，不可用）；快照端点不含名称，用离线名称索引补名（零联网）。
+    try:
+        from smcore.data import hithink as _hk
+        if _hk.available():
+            snap = _hk.fetch_snapshot(list(codes_set))
+            if snap is not None and not snap.empty:
+                rows = []
+                for _, it in snap.iterrows():
+                    c6 = format_stock_code(it.get("thscode") or "")
+                    if not c6:
+                        continue
+                    price = it.get("last_price")
+                    if price is None or pd.isna(price):
+                        continue
+                    pct = it.get("price_change_ratio_pct")
+                    rows.append({
+                        "code": c6,
+                        "name": "",
+                        "price": round(float(price), 2),
+                        "pct": round(float(pct), 2) if pct is not None and not pd.isna(pct) else 0.0,
+                    })
+                if rows:
+                    try:
+                        from smcore.stock_names import code_to_name as _c2n
+                        for r in rows:
+                            r["name"] = _c2n(r["code"])
+                    except Exception:
+                        pass
+                    return pd.DataFrame(rows)
+    except Exception:
+        pass
+
+    # 其次：通达信直连（毫秒级、最稳）
     try:
         from smcore.data.tdx_client import available as tdx_available, get_client
         if tdx_available():
@@ -117,7 +154,7 @@ def fetch_realtime_quotes(codes: Iterable[str]) -> pd.DataFrame:
     except Exception:
         pass
 
-    # 其次：新浪HTTP按需查询（快，不拉全量）
+    # 再次：新浪HTTP按需查询（快，不拉全量）
     try:
         sina_result = fetch_sina_quotes(codes_set)
         if sina_result:

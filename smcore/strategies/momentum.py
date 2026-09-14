@@ -31,7 +31,8 @@ import sqlite3
 import time
 from datetime import datetime, timedelta
 
-import akshare as ak
+from smcore.utils.ak_compat import get_ak
+ak = get_ak()
 import baostock as bs
 import pandas as pd
 

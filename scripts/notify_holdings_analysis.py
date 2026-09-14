@@ -780,12 +780,16 @@ def render_stock_html(analysis: dict, pos: dict | None = None) -> str:
             chips.append(("PB", fmt_num(fund["pb"])))
         if fund.get("mkt_cap") is not None:
             chips.append(("市值", f'{fmt_num(fund["mkt_cap"])}亿'))
+        # ⚠️ roe / 毛利率 / 营收增速 在本项目里一律是**小数**口径（同 analysis.py 的 value*100
+        # 展示与 RECOMMENDATION_CONFIG.fundamental 的 0.1/0.2/0.3 分段），故此处必须 ×100
+        # 才是百分数。原写法漏了 ×100 → 一律显示成 "0.0%"（与下方 _fund_panel_html 的
+        # `roe*100` 自相矛盾）。2026-09-14 随 hithink 激活 revenue_growth 一并修正。
         if fund.get("roe") is not None:
-            chips.append(("ROE", f'{fmt_num(fund["roe"], 1)}%'))
+            chips.append(("ROE", f'{fmt_num(fund["roe"] * 100, 1)}%'))
         if fund.get("gross_margin") is not None:
-            chips.append(("毛利", f'{fmt_num(fund["gross_margin"], 1)}%'))
+            chips.append(("毛利", f'{fmt_num(fund["gross_margin"] * 100, 1)}%'))
         if fund.get("revenue_growth") is not None:
-            chips.append(("营收增速", f'{fmt_num(fund["revenue_growth"], 1)}%'))
+            chips.append(("营收增速", f'{fmt_num(fund["revenue_growth"] * 100, 1)}%'))
         if fund.get("turnover") is not None:
             chips.append(("换手", f'{fmt_num(fund["turnover"], 2)}%'))
     chip_html = (

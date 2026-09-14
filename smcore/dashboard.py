@@ -33,10 +33,11 @@ INDEX_MAP = {
 def configure_runtime() -> None:
     """Apply the runtime defaults needed by the data layer.
 
-    K 线默认优先通达信（最快最稳）；CI/云端若无 pytdx 或不可达，kline 的
-    回退链会自动切到 akshare，无需手动配置。
+    K 线默认优先同花顺官方云 API（hithink）：全环境统一、毫秒级、不引入 akshare
+    （省内存）。未配置 HITHINK_FINANCE_API_KEY 或接口不可达时，kline 的回退链会
+    自动降级 tdx/akshare/baostock，无需手动干预。
     """
-    os.environ.setdefault("KLINE_BACKEND", "tdx")
+    os.environ.setdefault("KLINE_BACKEND", "hithink")
 
 
 # 看板数据拉取超时（秒）。超时即视为失败并跳过该数据源，避免单接口卡死拖垮预热。
@@ -355,7 +356,8 @@ def fetch_market_breadth() -> dict[str, Any] | None:
         return b
 
     # 4) 全量快照兜底（重，海外可能超时）
-    import akshare as ak
+    from smcore.utils.ak_compat import get_ak
+    ak = get_ak()
 
     for name, fn in (
         ("东方财富", lambda: ak.stock_zh_a_spot_em()),
@@ -458,7 +460,8 @@ def _live_fx_rates():
 
 
 def _live_lpr():
-    import akshare as ak
+    from smcore.utils.ak_compat import get_ak
+    ak = get_ak()
     df = ak.macro_china_lpr()
     if df is None or df.empty:
         return None
@@ -468,7 +471,8 @@ def _live_lpr():
 
 
 def _live_bond_10y():
-    import akshare as ak
+    from smcore.utils.ak_compat import get_ak
+    ak = get_ak()
     end = date.today()
     start = end - timedelta(days=330)  # 窗口必须 < 1 年
     df = ak.bond_china_yield(start_date=start.strftime("%Y%m%d"),
@@ -485,7 +489,8 @@ def _live_bond_10y():
 
 def _live_pmi():
     """制造业 PMI（月度发布）。多源 fallback 保证海外部署也能拉到。"""
-    import akshare as ak
+    from smcore.utils.ak_compat import get_ak
+    ak = get_ak()
 
     # 源1：akshare 月度（东财，列名「制造业-指数」）
     try:
@@ -545,7 +550,8 @@ def _live_pmi():
 
 def _live_cpi():
     """中国 CPI 同比（%）。多源 fallback。"""
-    import akshare as ak
+    from smcore.utils.ak_compat import get_ak
+    ak = get_ak()
 
     # 源1：akshare 月度（东财，列名「今值」）
     try:
@@ -598,7 +604,8 @@ def _live_cpi():
 
 def _live_ppi():
     """中国 PPI 同比（%）。多源 fallback。"""
-    import akshare as ak
+    from smcore.utils.ak_compat import get_ak
+    ak = get_ak()
 
     # 源1：akshare macro_china_ppi（东财，最新数据，列名「当月同比增长」）
     try:
@@ -811,7 +818,8 @@ def _fetch_shibor_multi() -> dict[str, float] | None:
       2) 各期限单独 rate_interbank（备源）
       3) 昨日缓存兜底（保证不返回空）
     """
-    import akshare as ak
+    from smcore.utils.ak_compat import get_ak
+    ak = get_ak()
     out: dict[str, float] = {}
 
     # --- 主源：macro_china_shibor_all ---
@@ -877,7 +885,8 @@ def _fetch_shibor_overnight() -> float | None:
     Returns:
         float | None: 隔夜利率（%），None 仅在完全无法获取时返回。
     """
-    import akshare as ak
+    from smcore.utils.ak_compat import get_ak
+    ak = get_ak()
 
     # --- 源 1: macro_china_shibor_all（主源，最快最稳）---
     try:

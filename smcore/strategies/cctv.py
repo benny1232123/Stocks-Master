@@ -10,7 +10,8 @@ import sqlite3
 from concurrent.futures import ThreadPoolExecutor, TimeoutError
 from pathlib import Path
 
-import akshare as ak
+from smcore.utils.ak_compat import get_ak
+ak = get_ak()
 import pandas as pd
 
 try:

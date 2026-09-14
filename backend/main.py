@@ -25,15 +25,22 @@ load_dotenv(ROOT / ".env")
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
-os.environ.setdefault("KLINE_BACKEND", "akshare")
+# K 线后端默认同花顺官方云 API（hithink）：全环境统一。.env / 平台环境变量若已显式
+# 设置则此默认不生效；缺失 Key 或接口异常时 kline 回退链自动降级，不会静默失败。
+os.environ.setdefault("KLINE_BACKEND", "hithink")
 
 from smcore.artifacts import ArtifactFile, find_latest_file, find_latest_file_any, preview_csv, read_csv_file, STOCK_DATA_DIR
-from smcore.analysis import build_stock_analysis
 from smcore.strategy.news_surface import build_news_surface
-from smcore.backtest import run_signal_backtest, run_multi_strategy_backtest
 from smcore.dashboard import build_dashboard_payload, prewarm_dashboard_cache
 from smcore.holdings import add_trade, clear_trades, portfolio_snapshot, trades_backend_name
-from smcore.selection import get_candidate_codes, run_strategy_fusion, scan_boll_batch
+
+# ── 启动内存优化：重模块改函数内懒导入（2026-09-14）──
+# 此前 analysis / backtest / selection 三个模块在启动时即被模块级导入。实测其副作用
+# 拖入 backtrader + talib（~24MB）、akshare + jieba + bs4 + lxml + baostock（~41MB），
+# 而 RENDER_LITE=1 下这些模块对应的端点（个股分析 / 回测触发 / 全市场扫描 / 策略融合）
+# 全部被 _lite_reject 提前 503 —— 等于为一批永不可达的功能常年付 60MB+ 常驻内存。
+# 改为在各自端点函数体内按需导入：精简模式下这些包永不加载（启动基线 163MB → ~100MB）；
+# 本地完整模式首次调用时多付一次性 import 延迟（~1s），此后走 sys.modules 缓存无差别。
 
 
 from backend.trade_sanitize import _is_corrupt_trade
@@ -79,7 +86,12 @@ def _lite_reject(feature: str):
 
 @asynccontextmanager
 async def lifespan(_app: FastAPI):
-    threading.Thread(target=prewarm_dashboard_cache, daemon=True).start()
+    # 看板预热只在「无静态快照」时才有意义：快照存在时 /api/dashboard 直接返回文件
+    # JSON（毫秒级、零上游依赖），此时再跑一次实时构建纯属浪费——构建期要读大量
+    # K 线/CSV，是 512MB 实例最主要的运行时内存峰值来源之一。2026-09-14 起按快照
+    # 存在性条件启动（快照由 CI/本机 scripts/export_web_data.py 预生成并随仓库分发）。
+    if _web_snapshot("dashboard.json") is None:
+        threading.Thread(target=prewarm_dashboard_cache, daemon=True).start()
     threading.Thread(target=_periodic_sweep, daemon=True).start()
     yield
 
@@ -701,6 +713,8 @@ def run_latest_backtest(payload: dict | None = None) -> dict:
     if latest is None:
         return {"summary": {"error": "未找到操作清单"}}
     signals = read_csv_file(latest.path)
+    from smcore.backtest import run_signal_backtest  # 懒导入：精简模式下本端点已被 503 拦截
+
     result = run_signal_backtest(
         signals,
         hold_days=int(payload.get("hold_days", 5)),
@@ -740,6 +754,8 @@ def run_backtest(payload: dict) -> dict:
 
         def _run_multi():
             try:
+                from smcore.backtest import run_multi_strategy_backtest  # 懒导入（重：backtrader）
+
                 _append_log(task_id, "正在拉取K线并运行多策略 Backtrader 引擎...")
                 result = run_multi_strategy_backtest(
                     codes,
@@ -770,6 +786,8 @@ def run_backtest(payload: dict) -> dict:
 
     def _run():
         try:
+            from smcore.backtest import run_signal_backtest  # 懒导入（重：backtrader）
+
             _append_log(task_id, "正在拉取K线并模拟交易...")
             result = run_signal_backtest(
                 signals,
@@ -807,11 +825,15 @@ def _parse_date(value, default: date) -> date:
 @app.get("/api/analysis/{code}")
 def analysis(code: str, window: int = 20, k: float = 1.645, days_back: int = 180) -> dict:
     _lite_reject("个股分析")
+    from smcore.analysis import build_stock_analysis  # 懒导入：轻量模式不会走到这里
+
     return build_stock_analysis(code, window=window, k=k, days_back=days_back)
 
 
 @app.get("/api/selection/candidates")
 def selection_candidates(price_min: float = 5.0, price_max: float = 30.0) -> dict:
+    from smcore.selection import get_candidate_codes  # 懒导入：候选池缓存读取
+
     codes, cache_date = get_candidate_codes(price_min, price_max)
     return {"codes": codes, "count": len(codes), "cache_date": cache_date}
 
@@ -834,6 +856,8 @@ def selection_boll_scan(payload: dict) -> dict:
     _append_log(task_id, f"开始布林扫描，共 {len(codes)} 只股票")
 
     def _run():
+        from smcore.selection import scan_boll_batch  # 懒导入（重：akshare/baostock 链）
+
         def on_progress(idx, total, code, msg):
             _append_log(task_id, f"[{idx}/{total}] {code} {msg}")
         try:
@@ -892,6 +916,8 @@ def selection_fusion(payload: dict) -> dict:
 
     def _run():
         try:
+            from smcore.selection import run_strategy_fusion  # 懒导入（重：akshare/baostock 链）
+
             _append_log(task_id, "加载四策略 CSV ...")
             result = run_strategy_fusion(
                 date_yyyymmdd=payload.get("date"),
