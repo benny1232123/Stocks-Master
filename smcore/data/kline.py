@@ -422,14 +422,23 @@ def write_kline_cache(df: pd.DataFrame, code, adjust: str = DEFAULT_ADJUST, base
     # 只告警、不拒写：该判据是统计性的（阈值见 KLINE_SCALE_* 段），宁多报不漏报，
     # 由调用方决定是否对该股全量重拉。样本不足/源无真实均价时内部自会 skip。
     if KLINE_SCALE_CHECK:
-        _sd = detect_scale_drift(out, code6)
-        if _sd["flagged"]:
+        # 守卫绝不能成为写入失败源：巡检自身异常只告警、不影响落盘。
+        # 但也不静默 —— 静默失败等于守卫失效（见下方 HITHINK_QFQ_CHECK 同样处理）。
+        try:
+            _sd = detect_scale_drift(out, code6)
+            if _sd["flagged"]:
+                print(
+                    f"[kline] WARN: {code6} 疑似「平滑累积缩放」失真："
+                    f"close/(amount/volume) 有 {_sd['share']:.0%} 的窗口在变、"
+                    f"总跨度 {_sd['fold']}x、rho={_sd['rho']}"
+                    f"（r: {_sd['r_first']} → {_sd['r_last']}）"
+                    f"→ close 与真实成交均价不成比例（现库实测多为 hithink qfq 深历史失真），"
+                    f"建议复核或对该股全量重拉",
+                    file=sys.stderr,
+                )
+        except Exception as exc:
             print(
-                f"[kline] WARN: {code6} 疑似「平滑累积缩放」失真："
-                f"close/(amount/volume) 有 {_sd['share']:.0%} 的窗口在变、"
-                f"总跨度 {_sd['fold']}x、rho={_sd['rho']}"
-                f"（r: {_sd['r_first']} → {_sd['r_last']}）"
-                f"→ 复权基准疑被逐段重锚，建议对该股全量重拉",
+                f"[kline] WARN: {code6} 平滑累积缩放巡检异常，守卫未生效（{exc!r}）",
                 file=sys.stderr,
             )
     pf = _write_bucket_file(code6, adjust, base)

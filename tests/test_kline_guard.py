@@ -221,3 +221,17 @@ def test_write_kline_cache_silent_on_clean(tmp_path, capsys):
     kl.write_kline_cache(df, "600900", "qfq", base_dir=tmp_path)
     assert "平滑累积缩放" not in capsys.readouterr().err
 
+
+def test_write_kline_cache_survives_scale_guard_crash(tmp_path, capsys, monkeypatch):
+    """守卫自身异常绝不成为写入失败源 —— 只告警，数据照常落盘。"""
+    def _boom(*_a, **_k):
+        raise RuntimeError("boom")
+
+    monkeypatch.setattr(kl, "detect_scale_drift", _boom)
+    df = _synth_frame(corrupt=False)
+    kl.write_kline_cache(df, "600900", "qfq", base_dir=tmp_path)
+    err = capsys.readouterr().err
+    assert "巡检异常" in err, err
+    assert len(kl.read_kline_cache("600900", "qfq", base_dir=tmp_path)) == len(df)
+
+
