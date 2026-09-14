@@ -24,7 +24,13 @@ concurrency:
 jobs:
   test:
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    # ⚠️ 不要下调到 30：实测全套 313 用例在 GitHub Runner 上约 25min 跑完
+    # （其中最后 ~9% 的重用例 —— test_run_strategy_for_date / test_signal_backtest* /
+    #  test_trade_sanitize / test_walk_forward —— 单独就要 ~24min），
+    # 30min 会稳定触顶被判 "exceeded the maximum execution time"（run 34859707081 即此因）。
+    # 需更快反馈时，应给重用例打 @pytest.mark.slow 并在 push 时 -m "not slow" 排除，
+    # 而不是压缩这里的上限。
+    timeout-minutes: 45
     steps:
       - name: 检出
         uses: actions/checkout@v4
