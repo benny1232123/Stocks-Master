@@ -35,7 +35,7 @@ from smcore.notify.email import send_email
 from smcore.stock_names import resolve as _resolve_name
 from smcore.data.kline import fetch_daily_k
 from smcore.strategy.news_surface import build_news_surface
-from smcore.strategy.fundamental import fund_cache_exists
+from smcore.strategy.fundamental import fund_cache_exists, annualize_roe
 import pandas as pd
 
 # 报告路径基本面读取策略：默认 **cache-only**（不联网），保证海外 runner 离线确定。
@@ -519,6 +519,18 @@ body{background:#eef0f3;font-family:-apple-system,BlinkMacSystemFont,"PingFang S
 
 
 # ───────────────────────── 基本面 / 资金面面板 ─────────────────────────
+
+def _roe_val(fund: dict):
+    """报告里 ROE 一律用**年化后**的年度可比口径（与 smcore/analysis.py、前端同构）。
+
+    ⚠️ 数据层 `roe` 是**年初至今累计**（THS/baostock 口径），而本脚本的判读阈值
+    （flags 0.12/0.08）与评分配置（0.10/0.15/0.20）都是按**年度** ROE 设的
+    → 不年化则同一只票的报告会随财报日历「忽优忽弱」（Q1 判「盈利弱」、年报判「盈利优」）。
+    旧 v1 扁平缓存无 `roe_period`（其 roe 本就是年度值）→ 原样返回，不猜。
+    """
+    return annualize_roe(fund.get("roe"), fund.get("roe_period"))
+
+
 def _fund_flags(fund: dict) -> list[tuple[str, str]]:
     """根据基本面数据生成 (文本, 等级) 标签列表，等级 good/bad/mid。"""
     flags: list[tuple[str, str]] = []
@@ -536,7 +548,7 @@ def _fund_flags(fund: dict) -> list[tuple[str, str]]:
             flags.append((f"高估值 PE {pe:.1f}", "bad"))
         elif pe < 15:
             flags.append((f"低估值 PE {pe:.1f}", "good"))
-    roe = fund.get("roe")
+    roe = _roe_val(fund)
     if roe is not None:
         if roe >= 0.12:
             flags.append((f"盈利优 ROE {roe*100:.1f}%", "good"))
@@ -576,7 +588,7 @@ def _fund_panel_html(fund: dict) -> str:
     ps = fund.get("ps")
     pcf = fund.get("pcf")
     mc = fund.get("mkt_cap")
-    roe = fund.get("roe")
+    roe = _roe_val(fund)
     gm = fund.get("gross_margin")
     to = fund.get("turnover")
     amt = fund.get("amount_20")
@@ -629,7 +641,9 @@ def _fund_panel_md(fund: dict) -> list[str]:
         ("毛利率", "gross_margin", lambda v: f"{fmt_num(v*100,1)}%"),
         ("换手率", "turnover", lambda v: f"{fmt_num(v,2)}%"),
     ]
-    parts = [f"{label}={fmt(fund[key])}" for label, key, fmt in specs if fund.get(key) is not None]
+    # ROE 先年化（specs 里 key="roe"）再取用；其余因子原值。
+    _vals = {**fund, "roe": _roe_val(fund)}
+    parts = [f"{label}={fmt(_vals[key])}" for label, key, fmt in specs if _vals.get(key) is not None]
     if not parts:
         return ["- **基本面/资金面**：暂无数据"]
     lines = ["- **基本面/资金面**：" + " ／ ".join(parts)]
@@ -658,7 +672,8 @@ def build_fundamentals_compare(today: str, holdings: list[dict]) -> tuple[str, s
         note = "、".join(t for t, _ in flags) if flags else "—"
         pe = fmt_num(fund.get("pe"))
         pb = fmt_num(fund.get("pb"))
-        roe = f"{fmt_num(fund['roe']*100,1)}%" if fund.get("roe") is not None else "—"
+        _roe = _roe_val(fund)
+        roe = f"{fmt_num(_roe*100,1)}%" if _roe is not None else "—"
         gm = f"{fmt_num(fund['gross_margin']*100,1)}%" if fund.get("gross_margin") is not None else "—"
         mc = fmt_num(fund.get("mkt_cap")) if fund.get("mkt_cap") is not None else "—"
         to = f"{fmt_num(fund['turnover'],2)}%" if fund.get("turnover") is not None else "—"
@@ -784,8 +799,10 @@ def render_stock_html(analysis: dict, pos: dict | None = None) -> str:
         # 展示与 RECOMMENDATION_CONFIG.fundamental 的 0.1/0.2/0.3 分段），故此处必须 ×100
         # 才是百分数。原写法漏了 ×100 → 一律显示成 "0.0%"（与下方 _fund_panel_html 的
         # `roe*100` 自相矛盾）。2026-09-14 随 hithink 激活 revenue_growth 一并修正。
-        if fund.get("roe") is not None:
-            chips.append(("ROE", f'{fmt_num(fund["roe"] * 100, 1)}%'))
+        # 2026-09-15：ROE 走 _roe_val()（累计口径先年化），与评分/面板保持同一口径。
+        _roe = _roe_val(fund)
+        if _roe is not None:
+            chips.append(("ROE", f'{fmt_num(_roe * 100, 1)}%'))
         if fund.get("gross_margin") is not None:
             chips.append(("毛利", f'{fmt_num(fund["gross_margin"] * 100, 1)}%'))
         if fund.get("revenue_growth") is not None:
