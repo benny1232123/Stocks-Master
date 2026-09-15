@@ -125,15 +125,27 @@ MAX_SINGLE_WEIGHT_PCT = _CEILS["MAX_SINGLE_WEIGHT_PCT"]
 #  - 与前端 ComprehensivePanel 完全同构（2026-09-01 对齐）：三面均为 0-100 分制，
 #    综合分 = 技术0.40 + 基本面0.35 + 资金0.25（有基本面时；无则仅技术面）。
 #  - 技术面：五组信号累加 techS（RSI/MACD/KDJ/均线/布林），techScore = clamp(50+techS*6, 0, 100)。
-#  - 基本面：PE/PB/ROE/毛利率/营收增长 5 因子分段打分后取平均（缺营收增长 → missing=50）。
+#  - 基本面：PE/PB/ROE/毛利率/营收增长 5 因子分段打分后取平均。
 #  - 资金面：20日成交额日均(亿) + 换手率(%) 2 因子分段打分后取平均。
 #  - 档位：tech 分档 good≥70/bad≤30；fund/cap good≥65/bad<45；rating 五档；action 由 rating 映射。
-#  - enable_* 可单独关闭某一面；缺失因子一律给 missing 分（不稀释面均值）。
+#  - enable_* 可单独关闭某一面。
+#  - **缺失因子口径（2026-09-15 修正）**：某因子取不到值 → **不计入该面均值**，而非塞一个
+#    missing(50) 进分母。旧实现把缺失当 50 平均，等于把「未知」当成「中等」，
+#    会把基本面分系统性拉向 50（实测把 002284 的 75.5 压到 70、600269 的 74.0 压到 69）。
+#    只有「该面一个因子都取不到」时，整面才回落到 missing（此时面分本就是未知，不动综合分权重）。
+#    ⚠️ 前端 App.jsx 必须同构，改后跑 scripts/sync_scoring_config.py。
+#  - **MACD 零轴口径（2026-09-15 修正）**：旧实现只判 dif>dea 且 hist>0 就给满分，
+#    不区分零轴上下 → 603187（dif/dea 双深负 −0.256、仅差 0.0005、hist≈0.001）拿到
+#    与强势股真金叉同权的 +2，足以让综合分跨档（techS±2 = techScore±12 = 综合分±4.8）。
+#    现按零轴拆档：dif>0 为「水上金叉」满分，dif≤0 为「水下金叉」减半（可靠性低）。
 RECOMMENDATION_CONFIG = {
     "enable_technical": True,
     "enable_fundamental": True,
     "enable_capital": True,
     "face_weights": {"technical": 0.40, "fundamental": 0.35, "capital": 0.25},
+    # 缺失因子口径：exclude=缺失因子不计入该面均值（默认，见上方口径说明）；
+    # neutral=旧行为（把 missing 分塞进分母，等于把「未知」当「中等」，会拉向 50）。
+    "missing_factor_policy": "exclude",
     "tech_base": 50,
     "tech_step": 6,
     "technical": {
@@ -145,7 +157,8 @@ RECOMMENDATION_CONFIG = {
             {"gt": 55, "score": 1, "label": "偏强"},
             {"lt": 45, "score": -1, "label": "偏弱"},
         ],
-        "macd_golden_red": 2,   # dif>dea 且 macd_hist>0（金叉红柱）
+        "macd_golden_red": 2,   # dif>dea 且 macd_hist>0，且 dif>0（零轴**上方**金叉红柱：趋势转强）
+        "macd_golden_red_below": 1,  # 同上前提但 dif<=0（零轴**下方**「水下金叉」：弱势反弹，可靠性低）
         "macd_dead_green": -2,  # dif<dea 且 macd_hist<0（死叉绿柱）
         "kdj_j_over": 100, "kdj_j_over_score": -2,   # J>100 极端超买
         "kdj_j_under": 0, "kdj_j_under_score": 2,    # J<0 极端超卖

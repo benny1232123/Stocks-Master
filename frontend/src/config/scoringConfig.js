@@ -16,6 +16,7 @@ export const DEFAULT_SCORING_CONFIG = {
     "fundamental": 0.35,
     "capital": 0.25
   },
+  "missing_factor_policy": "exclude",
   "tech_base": 50,
   "tech_step": 6,
   "technical": {
@@ -52,6 +53,7 @@ export const DEFAULT_SCORING_CONFIG = {
       }
     ],
     "macd_golden_red": 2,
+    "macd_golden_red_below": 1,
     "macd_dead_green": -2,
     "kdj_j_over": 100,
     "kdj_j_over_score": -2,

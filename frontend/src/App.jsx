@@ -405,9 +405,16 @@ function ComprehensivePanel({ analysis }) {
     else techDetail.push(['RSI', '中性', 'neutral'])
   }
   if (dif != null && dea != null) {
-    if (dif > dea && macdH > 0) { techS += 2; techDetail.push(['MACD', '金叉红柱', 'bull']) }
+    // MACD 按零轴分档：dif>0「水上金叉」满分；dif<=0「水下金叉」减半（弱势反弹可靠性低）。
+    // 阈值取自后端真源 CFG.technical，勿在此硬编码。与 smcore/analysis.py 同构。
+    const T = CFG.technical ?? {}
+    if (dif > dea && macdH > 0) {
+      const above = dif > 0
+      techS += above ? (T.macd_golden_red ?? 2) : (T.macd_golden_red_below ?? 1)
+      techDetail.push(['MACD', above ? '金叉红柱' : '水下金叉', 'bull'])
+    }
     else if (dif > dea && macdH <= 0) { techDetail.push(['MACD', '动能减弱', 'neutral']) }
-    else if (dif < dea && macdH < 0) { techS -= 2; techDetail.push(['MACD', '死叉绿柱', 'bear']) }
+    else if (dif < dea && macdH < 0) { techS += (T.macd_dead_green ?? -2); techDetail.push(['MACD', '死叉绿柱', 'bear']) }
     else if (dif < dea && macdH >= 0) { techDetail.push(['MACD', '柱收窄', 'neutral']) }
     else techDetail.push(['MACD', '缠绕', 'neutral'])
   }
@@ -448,7 +455,15 @@ function ComprehensivePanel({ analysis }) {
   const to = F?.turnover != null ? Number(F.turnover) : null
   const amt = F?.amount_20 != null ? Number(F.amount_20) : null
 
-  // 基本面 / 资金面分段打分：全部走后端配置表（缺失因子统一给 missing 分，非 0）
+  // 基本面 / 资金面分段打分：全部走后端配置表
+  // ⚠️ 缺失因子口径（2026-09-15 与后端同构修正）：默认 exclude = 缺失因子**不进分母**
+  //（旧行为把 missing 塞进分母，等于把「未知」当「中等」，会把面分系统性拉向 50）。
+  // 只有该面一个因子都取不到时，才回落到该面 missing 分。
+  const missingPolicy = CFG.missing_factor_policy ?? 'exclude'
+  const meanOf = (pairs, missing) => {
+    const vals = pairs.filter(([v]) => v != null).map(([, s]) => s)
+    return vals.length ? Math.round(vals.reduce((a, b) => a + b, 0) / vals.length) : missing
+  }
   const FUND = CFG.fundamental ?? {}
   const fundMissing = FUND.missing ?? 50
   const peScore = bandScore(FUND.pe, pe, fundMissing)
@@ -456,7 +471,9 @@ function ComprehensivePanel({ analysis }) {
   const roeScore = bandScore(FUND.roe, roe, fundMissing)
   const gmScore = bandScore(FUND.gm, gm, fundMissing)
   const rgScore = bandScore(FUND.rg, rg, fundMissing)
-  const fundScore = Math.round((peScore + pbScore + roeScore + gmScore + rgScore) / 5)
+  const fundScore = missingPolicy === 'neutral'
+    ? Math.round((peScore + pbScore + roeScore + gmScore + rgScore) / 5)
+    : meanOf([[pe, peScore], [pb, pbScore], [roe, roeScore], [gm, gmScore], [rg, rgScore]], fundMissing)
   const fcCfg = CFG.fund_cap_cls ?? { good: 65, bad: 45 }
   const fundCls = fundScore >= fcCfg.good ? 'good' : fundScore < fcCfg.bad ? 'bad' : 'neutral'
 
@@ -466,7 +483,9 @@ function ComprehensivePanel({ analysis }) {
   const dailyAmt = amt != null ? amt / 1e8 : null
   const liqScore = bandScore(CAP.liq_amt, dailyAmt, capMissing)
   const toScore = bandScore(CAP.turnover, to, capMissing)
-  const capScore = Math.round((liqScore + toScore) / 2)
+  const capScore = missingPolicy === 'neutral'
+    ? Math.round((liqScore + toScore) / 2)
+    : meanOf([[dailyAmt, liqScore], [to, toScore]], capMissing)
   const capCls = capScore >= fcCfg.good ? 'good' : capScore < fcCfg.bad ? 'bad' : 'neutral'
 
   // 综合总评分

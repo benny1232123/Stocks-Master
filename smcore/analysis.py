@@ -171,10 +171,13 @@ def recommendation_from_analysis(
     三面均为 0-100 分制，同一因子、同一分段阈值、同一综合权重、同一档位语义，
     保证「日报/后端算出的三维打分 = 网站展示的三维评分」。
 
-    技术面：RSI / MACD(金叉红柱·死叉绿柱) / KDJ(J 极值·K-D) / 均线(MA5-10-20 排列) /
-            布林(破下轨·近下轨·近上轨) 五组信号累加 techS → techScore = clamp(50+techS*6, 0, 100)。
-    基本面：PE / PB / ROE / 毛利率 / 营收增长 5 因子分段打分取平均（缺失因子给 missing 分）。
+    技术面：RSI / MACD(金叉红柱·死叉绿柱，**按零轴分水上/水下**) / KDJ(J 极值·K-D) /
+            均线(MA5-10-20 排列) / 布林(破下轨·近下轨·近上轨) 五组信号累加 techS
+            → techScore = clamp(50+techS*6, 0, 100)。
+    基本面：PE / PB / ROE / 毛利率 / 营收增长 5 因子分段打分取平均。
     资金面：20 日成交额日均(亿) + 换手率(%) 2 因子分段打分取平均。
+    ⚠️ 缺失因子**不计入**该面均值（`missing_factor_policy=exclude`，2026-09-15 起）；
+       整面一个因子都取不到时才回落到该面 missing 分。
     综合分：有基本面时 total = round(tech*0.40 + fund*0.35 + cap*0.25)，否则 = techScore。
     档位：rating 五档（推荐关注/偏积极/中性观望/偏谨慎/回避），action 由 rating 映射
           （加仓/持有偏多/持有观望/减仓偏空/减仓）。
@@ -211,11 +214,17 @@ def recommendation_from_analysis(
     w_c = cfg.get("capital", {}) or {}
     missing_f = float(w_f.get("missing", 50))
     missing_c = float(w_c.get("missing", 50))
+    # 缺失因子口径：exclude=不计入面均值（默认）；neutral=旧行为（塞 missing 进分母）。
+    missing_policy = str(cfg.get("missing_factor_policy", "exclude")).lower()
 
-    def _seg_score(segments: list, value: float | None) -> tuple[float, str | None]:
-        """按前端分段（gt/lt 逐条命中）返回 (score, label)；value=None → missing 分。"""
+    def _seg_score(segments: list, value: float | None, missing: float) -> tuple[float, str | None]:
+        """按前端分段（gt/lt 逐条命中）返回 (score, label)；value=None → missing 分。
+
+        ⚠️ `missing` 必须由调用方按「哪一面」传入：基本面传 missing_f、资金面传 missing_c。
+        历史上这里恒用 missing_f（资金面复用），当前两值恰好同为 50 才没暴露 —— 改配置即错。
+        """
         if value is None:
-            return missing_f, None
+            return missing, None
         for s in segments:
             if "gt" in s and value > float(s["gt"]):
                 return float(s["score"]), s.get("label")
@@ -245,8 +254,16 @@ def recommendation_from_analysis(
                 tech_detail.append((float(hit["score"]), f"RSI·{hit.get('label','')}", "bear" if hit["score"] < 0 else "bull"))
         if dif is not None and dea is not None and macdH is not None:
             if dif > dea and macdH > 0:
-                techS += float(w_t.get("macd_golden_red", 2))
-                tech_detail.append((float(w_t.get("macd_golden_red", 2)), "MACD·金叉红柱", "bull"))
+                # 零轴口径：dif>0 = 水上金叉（趋势转强，满分）；dif<=0 = 水下金叉（弱势反弹，
+                # 减半）。旧实现不区分零轴，会把「双深负、仅差 0.0005」的假金叉也判满分。
+                if dif > 0:
+                    _s = float(w_t.get("macd_golden_red", 2))
+                    _lbl = "MACD·金叉红柱"
+                else:
+                    _s = float(w_t.get("macd_golden_red_below", 1))
+                    _lbl = "MACD·水下金叉"
+                techS += _s
+                tech_detail.append((_s, _lbl, "bull"))
             elif dif < dea and macdH < 0:
                 techS += float(w_t.get("macd_dead_green", -2))
                 tech_detail.append((float(w_t.get("macd_dead_green", -2)), "MACD·死叉绿柱", "bear"))
@@ -282,7 +299,9 @@ def recommendation_from_analysis(
 
     tech_base = float(cfg.get("tech_base", 50))
     tech_step = float(cfg.get("tech_step", 6))
-    techScore = max(0.0, min(100.0, tech_base + techS * tech_step))
+    # 与前端同构：前端是 Math.round(...)，这里也必须先取整再进综合分加权，
+    # 否则一旦 macd_golden_red_below 等被配成小数，前后端会在 .5 边界差 1 分。
+    techScore = float(_js_round(max(0.0, min(100.0, tech_base + techS * tech_step))))
     t_cls_cfg = cfg.get("technical_cls", {}) or {}
     techCls = "good" if techScore >= float(t_cls_cfg.get("good", 70)) else "bad" if techScore <= float(t_cls_cfg.get("bad", 30)) else "neutral"
 
@@ -298,8 +317,10 @@ def recommendation_from_analysis(
             segments = w_f.get(key)
             if not segments:
                 continue
-            sc, label = _seg_score(segments, value)
-            fund_scores.append(sc)
+            sc, label = _seg_score(segments, value, missing_f)
+            # 缺失因子按 missing_factor_policy 处理：默认 exclude = 不进分母（不把「未知」当「中等」）。
+            if value is not None or missing_policy == "neutral":
+                fund_scores.append(sc)
             if value is not None and label:
                 fmt = f"{value:.1f}" if unit in ("PE", "PB") else f"{value*100:.0f}%"
                 fund_detail.append(f"{unit}{fmt}·{label}")
@@ -318,14 +339,16 @@ def recommendation_from_analysis(
         # ⚠️ 勿再 /20——那会把日均再缩 20 倍，交投活跃股资金面分被压到"成交清淡"档。
         daily_amt = (amt / 1e8) if amt is not None else None
         if liq_segs:
-            sc, label = _seg_score(liq_segs, daily_amt)
-            cap_scores.append(sc)
+            sc, label = _seg_score(liq_segs, daily_amt, missing_c)
+            if daily_amt is not None or missing_policy == "neutral":
+                cap_scores.append(sc)
             if daily_amt is not None and label:
                 cap_detail.append(f"日均成交{daily_amt:.2f}亿·{label}")
         to_segs = w_c.get("turnover")
         if to_segs:
-            sc, label = _seg_score(to_segs, to)
-            cap_scores.append(sc)
+            sc, label = _seg_score(to_segs, to, missing_c)
+            if to is not None or missing_policy == "neutral":
+                cap_scores.append(sc)
             if to is not None and label:
                 cap_detail.append(f"换手{to:.1f}%·{label}")
     capScore = _js_round(sum(cap_scores) / len(cap_scores)) if cap_scores else float(missing_c)

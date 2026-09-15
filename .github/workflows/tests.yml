@@ -46,5 +46,12 @@ jobs:
           # 统一走 requirements.txt，消除与 daily-pick 的清单漂移（含 jieba）
           pip install --retries 3 -r requirements.txt pytest
 
+      - name: 评分配置前后端一致性（秒级 preflight，漂移即红）
+        # 三维评分的真源在后端 smcore/config/defaults.py；前端 scoringConfig.js 是
+        # sync_scoring_config.py 生成的兜底快照。改了后端配置忘了同步 → 网站与日报口径
+        # 会静默不一致（此前只靠人工跑 --check，实际没挂 CI）。放在 pytest 之前，
+        # 让这类漂移秒级失败，不必等 25min 的重尾巴。
+        run: python scripts/sync_scoring_config.py --check
+
       - name: 运行测试
         run: pytest -q
