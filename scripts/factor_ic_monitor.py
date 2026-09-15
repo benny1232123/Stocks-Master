@@ -55,6 +55,7 @@ MIN_N_IC = 5            # 滚动窗口内合并横截面至少多少样本才判
 IC_WEAK = 0.05          # 合并 Rank-IC 低于此值（但≥0）→ 排序区分度偏弱
 POS_FRAC_FLOOR = 0.5    # 逐日 IC>0 占比低于此值且均值<0 → 排序系统性失灵（展示用）
 CONVICTION_IC_FLOOR = -0.1  # 策略信念 IC 低于此值（且样本足够）→ 信念反噬
+MIN_HALF_N = 4          # 「前半窗/后半窗」各自至少几点才用于判持续性（否则无法判）
 
 
 # ── 基础统计（不依赖 scipy）──────────────────────────────────────────
@@ -88,6 +89,20 @@ def _spearman(xs: list[float], ys: list[float]) -> float | None:
     if vx <= 0 or vy <= 0:
         return None  # 无变化，秩相关无定义
     return cov / math.sqrt(vx * vy)
+
+
+def _spearman_crit(n: int) -> float:
+    """Spearman |rho| 的双侧显著性临界值（alpha=0.05）。
+
+    用渐近式 z/sqrt(n-1)（z=1.96）近似精确表：n=10→0.653（表 0.648）、
+    n=20→0.450（表 0.447）、n=35→0.336、n=216→0.134，n≥6 时误差 <1%。
+
+    存在的意义：样本只有 10 个点时 |rho|≈0.2~0.4 完全可能是噪声。表格必须把
+    「未达显著」讲清楚，否则读者会把噪声当结论去调权重。
+    """
+    if n < 3:
+        return 1.0
+    return 1.96 / math.sqrt(n - 1)
 
 
 # ── ① 系统级横截面 Rank-IC ──────────────────────────────────────────
@@ -146,8 +161,10 @@ def system_ic(window: int = IC_WINDOW) -> dict:
     """系统级合并 Rank-IC：最近窗口 vs 较早窗口对照，看排序能力是否退化。"""
     days = _all_signal_days()
     if not days:
-        return {"window": window, "n": 0, "recent_ic": None, "baseline_ic": None,
-                "trend": None, "degraded": False, "weak": False,
+        return {"window": window, "n": 0, "n_recent": 0, "n_baseline": 0,
+                "recent_ic": None, "baseline_ic": None, "trend": None,
+                "span_recent": "", "span_baseline": "", "crit": 1.0,
+                "significant": False, "degraded": False, "weak": False,
                 "note": "无可用信号日"}
     recent = days[-window:]
     baseline = days[-2 * window:-window]
@@ -156,12 +173,17 @@ def system_ic(window: int = IC_WINDOW) -> dict:
     trend = (round(ric - bic, 3) if (ric is not None and bic is not None) else None)
     degraded = (ric is not None and ric < 0)          # 近期排序系统性反向
     weak = (ric is not None and 0 <= ric < IC_WEAK)   # 近期几乎无区分度
+    crit = _spearman_crit(rn)
     return {
         "window": window,
         "n_recent": rn,
         "n_baseline": bn,
+        "span_recent": f"{recent[0]}~{recent[-1]}" if recent else "",
+        "span_baseline": f"{baseline[0]}~{baseline[-1]}" if baseline else "",
         "recent_ic": round(ric, 3) if ric is not None else None,
         "baseline_ic": round(bic, 3) if bic is not None else None,
+        "crit": round(crit, 3),
+        "significant": bool(ric is not None and abs(ric) >= crit),
         "trend": trend,
         "degraded": degraded,
         "weak": weak,
@@ -201,33 +223,48 @@ def strategy_conviction_points() -> dict[str, list[tuple[str, float, float]]]:
 
 
 def strategy_conviction_ic(window: int = IC_WINDOW) -> dict[str, dict]:
-    """每个策略的滚动信念 IC/IR。"""
+    """每个策略的滚动信念 IC/IR。
+
+    ⚠️ 窗口按**统一信号日**切（`days[-window:]`），不是切各策略自己点数序列的尾部。
+    旧实现 `series[-window:]` 会让样本稀的策略「借」到很早期的点：各策略 n 与日期跨度
+    互不相同，而表头却宣称「最近 window 个信号日」→ 跨策略不可比，窗口甚至可能根本
+    覆盖不到当前（实测 relativity 的点止于 0804，却在 0911 的告警里被当作「近期」）。
+    """
     pts = strategy_conviction_points()
+    days = _all_signal_days()
+    window_days = set(days[-window:]) if days else set()
     out: dict[str, dict] = {}
     for s, series in pts.items():
-        recent = series[-window:]
+        recent = [p for p in series if p[0] in window_days]
         n = len(recent)
+        span = f"{recent[0][0]}~{recent[-1][0]}" if recent else ""
         if n < MIN_N_IC:
-            out[s] = {"n": n, "conviction_ic": None, "ir": None,
-                      "decayed": False, "note": f"样本不足（{n}<{MIN_N_IC}）"}
+            out[s] = {"n": n, "conviction_ic": None, "ir": None, "decayed": False,
+                      "span": span, "crit": 1.0, "significant": False,
+                      "note": f"窗口内样本不足（{n}<{MIN_N_IC}）"}
             continue
         ws = [x[1] for x in recent]
         rs = [x[2] for x in recent]
         ic = _spearman(ws, rs)
         if ic is None:
-            out[s] = {"n": n, "conviction_ic": None, "ir": None,
-                      "decayed": False, "note": "权重或收益无变化，IC 无定义"}
+            out[s] = {"n": n, "conviction_ic": None, "ir": None, "decayed": False,
+                      "span": span, "crit": 1.0, "significant": False,
+                      "note": "权重或收益无变化，IC 无定义"}
             continue
-        mean_ic = sum([ic]) / 1  # 单窗口整体 Spearman，已是一个相关系数
-        # IR：用窗口内逐点（w, r）的相关系数作为该窗口 IC；IR 用多窗口更合理，
-        # 但本脚本每策略每天仅 1 点，故 IR 退化为该窗口 IC 本身的一致性近似——
-        # 这里以"滚动窗口 IC 的符号稳定性"近似：见下方 recent 子窗对比。
+        # IR 用多窗口更合理，但本脚本每策略每天仅 1 点，故以「窗口内两个半窗的
+        # 符号一致性」近似其稳定性：见下方 recent 子窗对比。
+        # ⚠️ 半窗点数太少（<MIN_HALF_N）时 Spearman 会给出 |rho|=1 这种必然结果
+        # （2 个点的秩相关非 ±1 即 0），据此判「稳定反噬」纯属噪声，故直接不判。
         half = max(1, n // 2)
         ic_first = _spearman(ws[: n - half], rs[: n - half])
         ic_second = _spearman(ws[n - half:], rs[n - half:])
-        # 两个半窗都显著为负 → 信念稳定反噬
+        n_first, n_second = n - half, half
+        # 两个半窗都为负 → 信念稳定反噬（且半窗样本量足以支撑这个判断）
         stable_neg = (ic_first is not None and ic_second is not None
-                      and ic_first < 0 and ic_second < 0)
+                      and ic_first < 0 and ic_second < 0
+                      and n_first >= MIN_HALF_N and n_second >= MIN_HALF_N)
+        crit = _spearman_crit(n)
+        significant = abs(ic) >= crit
         decayed = (ic < CONVICTION_IC_FLOOR and stable_neg)
         out[s] = {
             "n": n,
@@ -235,7 +272,11 @@ def strategy_conviction_ic(window: int = IC_WINDOW) -> dict[str, dict]:
             "ic_first_half": round(ic_first, 3) if ic_first is not None else None,
             "ic_second_half": round(ic_second, 3) if ic_second is not None else None,
             "decayed": decayed,
-            "note": "",
+            "span": span,
+            "crit": round(crit, 3),
+            "significant": significant,
+            # 未达显著 ≠ 无问题，只是「这点样本还说明不了」；如实写出来供人工判断
+            "note": "" if significant else f"未达显著（|IC|={abs(ic):.3f} < {crit:.3f}）",
         }
     return out
 
@@ -249,16 +290,23 @@ def analyze(window: int = IC_WINDOW) -> dict:
     decayed_strats = sorted([s for s, v in strat.items() if v.get("decayed")])
     degraded_sys = sys_ic.get("degraded", False)
     weak_sys = sys_ic.get("weak", False)
+    # 衰减里「真正达显著」的那些：供人工优先看；不改变 alert 的灵敏度（保持灵敏，
+    # 但正文必须把「未达显著」标出来，避免把 n=10 的噪声当结论去调权重）
+    decayed_confirmed = [s for s in decayed_strats if strat[s].get("significant")]
+    n_signal_days = len(_all_signal_days())
 
     alert = degraded_sys or bool(decayed_strats)
     return {
-        "as_of": _all_signal_days()[-1] if _all_signal_days() else None,
+        "as_of": _all_signal_days()[-1] if n_signal_days else None,
         "generated_at": datetime.now(timezone.utc).isoformat(),
         "window": window,
+        "window_days": min(window, n_signal_days),
         "min_n_ic": MIN_N_IC,
+        "min_half_n": MIN_HALF_N,
         "system": sys_ic,
         "strategies": strat,
         "decayed_strategies": decayed_strats,
+        "decayed_confirmed": decayed_confirmed,
         "system_degraded": degraded_sys,
         "system_weak": weak_sys,
         "alert": alert,
@@ -272,7 +320,9 @@ def _format_issue_body(res: dict) -> str:
         "## 因子 IC/IR 监控告警（自动生成）",
         "",
         f"- 截至信号日：**{res['as_of']}**",
-        f"- 滚动窗口：最近 **{res['window']}** 个信号日（合并横截面至少 {res['min_n_ic']} 样本才判定）",
+        f"- 滚动窗口：最近 **{res['window']}** 个信号日"
+        f"（实际可用 {res.get('window_days', res['window'])} 天；"
+        f"合并横截面至少 {res['min_n_ic']} 样本才判定）",
         "",
         "### 系统级合并 Rank-IC",
         "",
@@ -281,36 +331,53 @@ def _format_issue_body(res: dict) -> str:
         lines.append(f"- 状态：近期窗口合并样本不足（{s.get('note', '')}）")
     else:
         flag = "🔴 排序系统性反向" if s["degraded"] else ("🟡 排序区分度偏弱" if s["weak"] else "🟢 正常")
-        lines.append(f"- 近期窗口合并 IC：**{s['recent_ic']:+.3f}**（样本 {s['n_recent']} 票）")
+        if not s.get("significant"):
+            flag += f"（未达显著：|IC| < {s.get('crit')}）"
+        lines.append(f"- 近期窗口合并 IC：**{s['recent_ic']:+.3f}**"
+                     f"（样本 {s['n_recent']} 票，区间 {s.get('span_recent') or 'n/a'}）")
         base = f"{s['baseline_ic']:+.3f}" if s.get("baseline_ic") is not None else "n/a"
-        lines.append(f"- 基线窗口合并 IC：{base}（样本 {s['n_baseline']} 票）")
-        lines.append(f"- 趋势(近期−基线)：{s['trend']:+.3f}")
+        lines.append(f"- 基线窗口合并 IC：{base}"
+                     f"（样本 {s['n_baseline']} 票，区间 {s.get('span_baseline') or 'n/a'}）")
+        # ⚠️ 基线窗口样本不足时 trend=None（而近期 IC 仍可有值）→ 须判空再格式化，
+        # 否则 TypeError 会中断 CI，违背本脚本「任何一步异常都 fail-soft」的契约。
+        trend_s = (f"{s['trend']:+.3f}" if s.get("trend") is not None
+                   else "n/a（基线窗口样本不足）")
+        lines.append(f"- 趋势(近期−基线)：{trend_s}")
         lines.append(f"- 判定：**{flag}**")
     lines += ["", "### 策略级「信念 IC」衰减", ""]
     if not res["decayed_strategies"]:
         lines.append("_（无）_")
     for sname in res["decayed_strategies"]:
         v = res["strategies"][sname]
+        sig = "达显著" if v.get("significant") else f"⚠️ 未达显著（|IC| < {v.get('crit')}）"
         lines.append(
             f"- **{sname}**：信念 IC={v['conviction_ic']:+.3f} "
-            f"（前半 {v['ic_first_half']}，后半 {v['ic_second_half']}），样本 {v['n']} —— "
+            f"（前半 {v['ic_first_half']}，后半 {v['ic_second_half']}），"
+            f"样本 {v['n']}（区间 {v.get('span') or 'n/a'}），{sig} —— "
             f"分配器越看好该策略，其选中票反而越差")
     lines += ["", "### 全部策略信念 IC 概况", ""]
-    lines.append("| 策略 | 样本 | 信念IC | 前半窗 | 后半窗 | 衰减 |")
-    lines.append("|---|---|---|---|---|---|")
+    lines.append("| 策略 | 样本 | 区间 | 信念IC | 前半窗 | 后半窗 | 显著性(α=0.05) | 衰减 |")
+    lines.append("|---|---|---|---|---|---|---|---|")
     for sname, v in sorted(res["strategies"].items()):
         ci = v.get("conviction_ic")
         ci_s = f"{ci:+.3f}" if ci is not None else "n/a"
         fh = f"{v.get('ic_first_half'):+.3f}" if v.get("ic_first_half") is not None else "n/a"
         sh = f"{v.get('ic_second_half'):+.3f}" if v.get("ic_second_half") is not None else "n/a"
-        lines.append(f"| {sname} | {v.get('n')} | {ci_s} | {fh} | {sh} | "
-                     f"{'⚠️' if v.get('decayed') else ''} |")
+        sig_s = "n/a" if ci is None else ("✅" if v.get("significant") else f"✗（需 {v.get('crit')}）")
+        lines.append(f"| {sname} | {v.get('n')} | {v.get('span') or '-'} | {ci_s} | {fh} | {sh} | "
+                     f"{sig_s} | {'⚠️' if v.get('decayed') else ''} |")
+    conf = res.get("decayed_confirmed") or []
     lines += [
+        "",
+        f"- 达显著的衰减策略：**{', '.join(conf) if conf else '无'}**"
+        f"（其余衰减标记样本量不足以判显著，仅供参考）",
         "",
         "> 说明：本告警由 `.github/workflows/monitor.yml` 每周运行 "
         "`scripts/factor_ic_monitor.py` 生成。IC=Spearman(排序信号, 前向收益)。"
         "系统级为「最近窗口跨日合并横截面」的 Rank-IC（对熊市低部署的单日稀疏更稳健）；"
-        "策略级为信念维度代理。",
+        "策略级为信念维度代理，窗口按**统一信号日**切，「样本」即该窗口内的有效点数。",
+        "> 显著性临界值用渐近式 `1.96/sqrt(n-1)`（n≥6 与精确表误差 <1%）。"
+        "**低部署期各策略样本常只有个位数，此时 IC 不可解读——请勿据此调权重。**",
         "> 触发仅代表「排序区分度退化」，请结合市场环境人工复核后再决定是否调权重。",
     ]
     return "\n".join(lines)
@@ -332,18 +399,23 @@ def main() -> int:
         print(f"系统级：近期窗口合并样本不足（{s.get('note','')}）")
     else:
         flag = "🔴反向" if s["degraded"] else ("🟡偏弱" if s["weak"] else "🟢正常")
+        trend_s = f"{s['trend']:+.3f}" if s.get("trend") is not None else "n/a"
         print(f"系统级：近期IC={s['recent_ic']:+.3f}  基线IC={s['baseline_ic']}  "
-              f"趋势={s['trend']:+.3f}  {flag}")
+              f"趋势={trend_s}  {flag}")
     print("-" * 64)
-    print("策略级信念 IC：")
+    print("策略级信念 IC（窗口按统一信号日切）：")
     for sname, v in sorted(res["strategies"].items()):
         ci = v.get("conviction_ic")
         ci_s = f"{ci:+.3f}" if ci is not None else "n/a"
         flag = " ⚠️衰减" if v.get("decayed") else ""
-        print(f"  {sname:>14}  n={v.get('n'):>3}  信念IC={ci_s:>7}{flag}")
+        sig = "" if ci is None else (" ✅显著" if v.get("significant")
+                                     else f" ✗未达显著(需{v.get('crit')})")
+        print(f"  {sname:>14}  n={v.get('n'):>3}  {v.get('span') or '-':<20}"
+              f"信念IC={ci_s:>7}{flag}{sig}")
     print("-" * 64)
     print(f"告警：{'是' if res['alert'] else '否'}  "
-          f"（系统失灵={res['system_degraded']}，策略={res['decayed_strategies'] or '无'}）")
+          f"（系统失灵={res['system_degraded']}，策略={res['decayed_strategies'] or '无'}，"
+          f"其中达显著={res.get('decayed_confirmed') or '无'}）")
     print(_format_issue_body(res))
 
     if args.emit_json:
