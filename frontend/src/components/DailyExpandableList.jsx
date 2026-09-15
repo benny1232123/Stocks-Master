@@ -1,5 +1,6 @@
 import { useState } from 'react'
 import { cn } from '../lib/utils'
+import { factorTypesOfSource, getFactorTypeColor } from '../lib/factorTypes'
 
 function DailyExpandableList({ rows, onCodeClick }) {
   const [expanded, setExpanded] = useState(new Set())
@@ -37,7 +38,8 @@ function DailyExpandableList({ rows, onCodeClick }) {
     const ma20 = num(row, 'MA20')
     const stratStr = String(row['来源策略'] ?? '')
     const hit = Number(row['命中策略数'] ?? stratStr.split('/').filter(Boolean).length) || 1
-    const hasRS = stratStr.includes('Relativity')
+    // 相对强弱维度改按因子类型判定（与后端 factor_types.py 对齐，避免依赖原始策略名拼写）
+    const hasRS = factorTypesOfSource(row['来源策略'] ?? '').includes('相对强度·资金流')
 
     // 1) 超卖深度：价格越贴近/跌破下轨，反弹赔率越好
     let oversold = 50
@@ -96,7 +98,9 @@ function DailyExpandableList({ rows, onCodeClick }) {
         const score = num(row, '综合评分')
         const strategies = row['来源策略'] ?? '--'
         const stratList = strategies.split('/').map(s => s.trim()).filter(Boolean)
-        const primaryStrat = stratList[0] || '--'
+        // 因子类型：从来源策略推导，作为主分类（保留策略名为次级标签）
+        const factorTypes = factorTypesOfSource(row['来源策略'])
+        const primaryFactorType = factorTypes[0] || '其他'
         const buyPrice = num(row, '建议买入价')
         const latestP = num(row, '最新价')
         const stopP = num(row, '止损价(下轨)')
@@ -107,7 +111,7 @@ function DailyExpandableList({ rows, onCodeClick }) {
         const hitCount = row['命中策略数'] ?? stratList.length
 
         const sg = scoreGrade(score)
-        const sc = getStratColor(primaryStrat)
+        const sc = getFactorTypeColor(primaryFactorType)
         const [sbRows, sbComposite] = scoreBreakdown(row)
         const sbCls = sbComposite >= 80 ? 'sb-excellent' : sbComposite >= 60 ? 'sb-good' : sbComposite >= 40 ? 'sb-mid' : 'sb-weak'
         const pnlPct = (hasNum(latestP) && hasNum(buyPrice) && buyPrice > 0) ? ((latestP / buyPrice - 1) * 100) : NaN
@@ -129,11 +133,15 @@ function DailyExpandableList({ rows, onCodeClick }) {
                 {rankBadge(i)}
                 <span className="daily-code" onClick={(e) => { e.stopPropagation(); onCodeClick(code) }}>{code}</span>
                 <span className="daily-name">{displayName}</span>
-                {/* 策略彩色标签 */}
+                {/* 因子类型为主分类（彩色标签），策略名作为次级标签保留下钻 */}
                 <div className="strat-badges">
+                  {factorTypes.map((t, ti) => {
+                    const c = getFactorTypeColor(t)
+                    return <span key={`ft-${ti}`} className="strat-badge" style={{ background: c.bg, color: c.text, borderColor: c.border }}>{t}</span>
+                  })}
                   {stratList.map((s, si) => {
                     const c = getStratColor(s)
-                    return <span key={si} className="strat-badge" style={{ background: c.bg, color: c.text, borderColor: c.border }}>{s}</span>
+                    return <span key={`st-${si}`} className="strat-badge" style={{ background: c.bg, color: c.text, borderColor: c.border, opacity: 0.7 }}>{s}</span>
                   })}
                 </div>
               </div>
@@ -172,6 +180,7 @@ function DailyExpandableList({ rows, onCodeClick }) {
             {isOpen ? (
               <div className="daily-details">
                 <div className="dd-cell"><span>命中策略数</span><strong>{hitCount}</strong></div>
+                <div className="dd-cell"><span>因子类型</span><strong>{factorTypes.join(' / ')}</strong></div>
                 <div className="dd-cell"><span>建议仓位%</span><strong>{hasNum(posPct) ? `${posPct.toFixed(0)}%` : '--'}</strong></div>
                 <div className="dd-cell"><span>建议金额</span><strong>{hasNum(amt) ? `¥${amt.toFixed(0)}` : '--'}</strong></div>
                 <div className="dd-cell"><span>最新价</span><strong className={!isNaN(latestP) && !isNaN(buyPrice) && buyPrice > 0 ? (latestP >= buyPrice ? 'text-up' : 'text-down') : ''}>{latestP != null && !isNaN(latestP) ? latestP.toFixed(2) : '--'}</strong></div>

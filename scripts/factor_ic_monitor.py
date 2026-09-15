@@ -47,6 +47,7 @@ from walk_forward_validator import (  # noqa: E402
     _load_day_picks,
     _weights_for_day,
 )
+from smcore.strategy.factor_types import factor_type_of  # noqa: E402
 
 # ── 可调阈值（脚本顶部集中）─────────────────────────────────────────
 MIN_STOCKS = 5          # 单日横截面至少多少只票才单独计算「逐日 IC」（仅展示用）
@@ -254,7 +255,8 @@ def strategy_conviction_ic(window: int = IC_WINDOW) -> dict[str, dict]:
         n = len(recent)
         span = f"{recent[0][0]}~{recent[-1][0]}" if recent else ""
         if n < MIN_N_IC:
-            out[s] = {"n": n, "conviction_ic": None, "ir": None, "decayed": False,
+            out[s] = {"n": n, "factor_type": factor_type_of(s), "conviction_ic": None,
+                      "ir": None, "decayed": False,
                       "span": span, "crit": 1.0, "significant": False,
                       "note": f"窗口内样本不足（{n}<{MIN_N_IC}）"}
             continue
@@ -262,7 +264,8 @@ def strategy_conviction_ic(window: int = IC_WINDOW) -> dict[str, dict]:
         rs = [x[2] for x in recent]
         ic = _spearman(ws, rs)
         if ic is None:
-            out[s] = {"n": n, "conviction_ic": None, "ir": None, "decayed": False,
+            out[s] = {"n": n, "factor_type": factor_type_of(s), "conviction_ic": None,
+                      "ir": None, "decayed": False,
                       "span": span, "crit": 1.0, "significant": False,
                       "note": "权重或收益无变化，IC 无定义"}
             continue
@@ -283,6 +286,7 @@ def strategy_conviction_ic(window: int = IC_WINDOW) -> dict[str, dict]:
         decayed = (ic < CONVICTION_IC_FLOOR and stable_neg)
         out[s] = {
             "n": n,
+            "factor_type": factor_type_of(s),
             "conviction_ic": round(ic, 3),
             "ic_first_half": round(ic_first, 3) if ic_first is not None else None,
             "ic_second_half": round(ic_second, 3) if ic_second is not None else None,
@@ -296,11 +300,49 @@ def strategy_conviction_ic(window: int = IC_WINDOW) -> dict[str, dict]:
     return out
 
 
+# ── ③ 因子类型级「信念 IC」归并（2026-09-15 按因子类型分类）─────────────
+def factor_type_conviction_ic(window: int = IC_WINDOW) -> dict[str, dict]:
+    """把各策略的信念 IC 按因子类型归并：同类型策略的 (权重, 前向收益) 点池化后
+    重算 Spearman IC。这样监控既能「按因子类型」看出哪类因子在失灵，又保留策略级明细。
+    池化点数 < MIN_N_IC 的类型跳过（避免噪声）。"""
+    pts = strategy_conviction_points()
+    days = _all_signal_days()
+    window_days = set(days[-window:]) if days else set()
+    pooled: dict[str, list[tuple[float, float, str]]] = {}
+    for s, series in pts.items():
+        bucket = pooled.setdefault(factor_type_of(s), [])
+        for day, w, ret in series:
+            if day in window_days:
+                bucket.append((w, ret, day))
+    out: dict[str, dict] = {}
+    for ft, bucket in pooled.items():
+        n = len(bucket)
+        if n < MIN_N_IC:
+            continue
+        ws = [x[0] for x in bucket]
+        rs = [x[1] for x in bucket]
+        dts = sorted(x[2] for x in bucket)
+        ic = _spearman(ws, rs)
+        if ic is None:
+            continue
+        crit = _spearman_crit(n)
+        out[ft] = {
+            "n": n,
+            "factor_type": ft,
+            "conviction_ic": round(ic, 3),
+            "crit": round(crit, 3),
+            "significant": abs(ic) >= crit,
+            "span": f"{dts[0]}~{dts[-1]}",
+        }
+    return out
+
+
 # ── 汇总 ────────────────────────────────────────────────────────────
 def analyze(window: int = IC_WINDOW) -> dict:
     ics = daily_rank_ics()
     sys_ic = system_ic(window=window)
     strat = strategy_conviction_ic(window=window)
+    ft_ic = factor_type_conviction_ic(window=window)
 
     decayed_strats = sorted([s for s, v in strat.items() if v.get("decayed")])
     degraded_sys = sys_ic.get("degraded", False)
@@ -336,6 +378,7 @@ def analyze(window: int = IC_WINDOW) -> dict:
         "min_half_n": MIN_HALF_N,
         "system": sys_ic,
         "strategies": strat,
+        "factor_types": ft_ic,
         "decayed_strategies": decayed_strats,
         "decayed_confirmed": decayed_confirmed,
         "system_degraded": degraded_sys,
@@ -406,6 +449,23 @@ def _format_issue_body(res: dict) -> str:
         sig_s = "n/a" if ci is None else ("✅" if v.get("significant") else f"✗（需 {v.get('crit')}）")
         lines.append(f"| {sname} | {v.get('n')} | {v.get('span') or '-'} | {ci_s} | {fh} | {sh} | "
                      f"{sig_s} | {'⚠️' if v.get('decayed') else ''} |")
+    # ── ③ 因子类型级归并（2026-09-15 按因子类型分类）─────────────────────
+    ft_ic = res.get("factor_types") or {}
+    lines += ["", "### 因子类型级「信念 IC」归并", ""]
+    if not ft_ic:
+        lines.append("_（各类型窗口内样本均不足，无法归并）_")
+    else:
+        lines.append("| 因子类型 | 样本 | 区间 | 信念IC | 显著性(α=0.05) |")
+        lines.append("|---|---|---|---|---|")
+        for ft, v in sorted(ft_ic.items()):
+            ci = v.get("conviction_ic")
+            ci_s = f"{ci:+.3f}" if ci is not None else "n/a"
+            sig_s = "n/a" if ci is None else ("✅" if v.get("significant") else f"✗（需 {v.get('crit')}）")
+            lines.append(f"| {ft} | {v.get('n')} | {v.get('span') or '-'} | {ci_s} | {sig_s} |")
+        lines.append("")
+        lines.append("> 因子类型映射：动量=Momentum；反转·均值回归=Boll；"
+                     "相对强度·资金流=Relativity；题材·事件=Theme/CCTV。"
+                     "归并后仍能直接看出「哪类因子在失灵」，而策略级明细保留可用于下钻。")
     conf = res.get("decayed_confirmed") or []
     lines += [
         "",
@@ -456,6 +516,18 @@ def main() -> int:
                                      else f" ✗未达显著(需{v.get('crit')})")
         print(f"  {sname:>14}  n={v.get('n'):>3}  {v.get('span') or '-':<20}"
               f"信念IC={ci_s:>7}{flag}{sig}")
+    print("-" * 64)
+    print("因子类型级信念 IC 归并：")
+    ft_ic = res.get("factor_types") or {}
+    if not ft_ic:
+        print("  （各类型窗口内样本均不足，无法归并）")
+    else:
+        for ft, v in sorted(ft_ic.items()):
+            ci = v.get("conviction_ic")
+            ci_s = f"{ci:+.3f}" if ci is not None else "n/a"
+            sig = "" if ci is None else (" ✅显著" if v.get("significant")
+                                         else f" ✗未达显著(需{v.get('crit')})")
+            print(f"  {ft:<16} n={v.get('n'):>3}  {v.get('span') or '-':<20}信念IC={ci_s:>7}{sig}")
     print("-" * 64)
     print(f"告警：{'是' if res['alert'] else '否'}  {res.get('alert_reason', '')}")
     print(f"  （系统反向={res['system_degraded']}，其中达显著="

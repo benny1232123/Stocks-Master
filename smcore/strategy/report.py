@@ -10,6 +10,11 @@ from typing import Optional
 import pandas as pd
 
 from smcore.config.defaults import STOCK_DATA_DIR
+from smcore.strategy.factor_types import (
+    FACTOR_TYPE_ORDER,
+    factor_types_of_source,
+    rollup_counts,
+)
 from smcore.utils.format import fmt_num
 
 # 操作清单 CSV 的标准列（与正常 Daily-Action-List 完全一致；空清单占位时也用此表头，
@@ -58,12 +63,18 @@ def _build_report_text(
         contrib_lines.append(f"- {name}: {status}")
     active_count = sum(1 for c in strat_raw.values() if c > 0)
 
+    # ── 因子类型贡献度（按因子类型归并；用户 2026-09-15 要求，策略名仍保留于上方明细）──
+    ft_counts = rollup_counts({k.lower(): v for k, v in strat_raw.items()})
+    ft_contrib_text = "\n### 因子类型贡献度\n" + "\n".join(
+        f"- {ft}: {ft_counts[ft]} 只" for ft in FACTOR_TYPE_ORDER if ft in ft_counts
+    )
+
     if df.empty:
         stale_notes = _format_source_date_notes(date_yyyymmdd, sd, max_stale_days=max_stale_days)
         header = "\n## 今日操作清单\n- 无候选"
         summary = "\n### 策略贡献度\n" + "\n".join(contrib_lines) + (
             f"\n> 📊 仅 {active_count}/5 个策略有输出，清单可能不完整。" if active_count < 3 else ""
-        )
+        ) + ft_contrib_text
         return header + ("\n" + stale_notes if stale_notes else "") + summary
 
     lines = [
@@ -75,19 +86,22 @@ def _build_report_text(
         "" if active_count >= 3 else f"> ⚠️ 仅 {active_count}/5 个策略有输出，回测/决策参考价值有限。",
         "",
     ]
+    lines.extend(ft_contrib_text.split("\n"))
+    lines.append("")
     stale_notes = _format_source_date_notes(date_yyyymmdd, source_dates or {}, max_stale_days=max_stale_days)
     if stale_notes:
         lines.append(stale_notes)
     lines.extend([
         "",
-        "| 代码 | 名称 | 命中 | 评分 | 仓位% | 止损 | 止盈 |",
-        "|------|------|------|------|-------|------|------|",
+        "| 代码 | 名称 | 命中 | 因子类型 | 评分 | 仓位% | 止损 | 止盈 |",
+        "|------|------|------|------|------|-------|------|------|",
     ])
     for _, r in df.iterrows():
         stop = fmt_num(r.get("止损价(下轨)"), digits=2, na="-")
         take = fmt_num(r.get("止盈价(上轨)"), digits=2, na="-")
+        fts = "/".join(factor_types_of_source(r.get("来源策略", "")))
         lines.append(
-            f"| {r['股票代码']} | {r['股票名称']} | {r['命中策略数']} | {r['综合评分']} | {r['建议仓位%']} | {stop} | {take} |"
+            f"| {r['股票代码']} | {r['股票名称']} | {r['命中策略数']} | {fts} | {r['综合评分']} | {r['建议仓位%']} | {stop} | {take} |"
         )
     lines.append("")
     lines.append(f"- 止损=Boll下轨，止盈=Boll上轨（前复权）；仓位为建议上限，单票不超过 {max_single_weight_pct:.0f}%。")

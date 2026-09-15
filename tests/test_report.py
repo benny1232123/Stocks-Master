@@ -70,3 +70,38 @@ def test_run_strategy_fusion_placeholder(data_dir, monkeypatch):
     assert out["report_path"] is not None
     assert (data_dir / "Daily-Action-List-20260805.csv").exists()
     assert (data_dir / "Daily-Action-List-20260805.md").exists()
+
+
+def test_build_report_text_factor_type_rollup_and_column():
+    """2026-09-15 因子类型分类：非空清单须同时含「因子类型贡献度」归并小节
+    与明细表「因子类型」列，且值由来源策略正确推导。"""
+    df = pd.DataFrame([
+        {"股票代码": "000001", "股票名称": "平安银行", "命中策略数": 2,
+         "综合评分": 70, "建议仓位%": 5, "止损价(下轨)": 10.0, "止盈价(上轨)": 12.0,
+         "来源策略": "Boll/Momentum"},
+        {"股票代码": "600000", "股票名称": "浦发银行", "命中策略数": 1,
+         "综合评分": 60, "建议仓位%": 4, "止损价(下轨)": 9.0, "止盈价(上轨)": 11.0,
+         "来源策略": "CCTV"},
+    ])
+    # n_boll=2, n_momentum=3, n_theme=1, n_cctv=1 → 归并：反转·均值回归2 / 动量3 / 题材·事件2
+    text = report._build_report_text(
+        df, "20260911",
+        n_boll=2, n_relativity=0, n_theme=1, n_cctv=1, n_momentum=3,
+    )
+    assert "### 因子类型贡献度" in text
+    assert "反转·均值回归: 2 只" in text
+    assert "动量: 3 只" in text
+    assert "题材·事件: 2 只" in text
+    # 明细表含因子类型列，且按来源策略推导
+    assert "| 代码 | 名称 | 命中 | 因子类型 |" in text
+    assert "| 000001 | 平安银行 | 2 | 反转·均值回归/动量 |" in text
+    assert "| 600000 | 浦发银行 | 1 | 题材·事件 |" in text
+
+
+def test_build_report_empty_still_has_factor_type_section():
+    """空清单路径（df.empty）也必须带「因子类型贡献度」小节，保持两段报告结构一致。"""
+    text = report._build_report_text(
+        pd.DataFrame(), "20260911",
+        n_boll=0, n_relativity=0, n_theme=0, n_cctv=0, n_momentum=0,
+    )
+    assert "### 因子类型贡献度" in text

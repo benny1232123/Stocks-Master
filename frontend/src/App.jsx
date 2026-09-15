@@ -23,6 +23,7 @@ import { Button } from './components/ui/button'
 import { StatCard, Field, SectionCard, MacroCard } from './components/cards'
 import DailyExpandableList from './components/DailyExpandableList'
 import { cn } from './lib/utils'
+import { factorTypesOfSource, getFactorTypeColor } from './lib/factorTypes'
 import { useScoringConfig, bandScore, bandLabel, annualizeRoe } from './config/useScoringConfig'
 
 // 构建版本（vite define 注入；本地 dev 下未定义时回退 dev）
@@ -2159,10 +2160,12 @@ function App() {
               const total = rows.length
               const totalAmt = rows.reduce((s, r) => s + (num(r, '建议金额') || 0), 0)
               const avgScore = total ? rows.reduce((s, r) => s + (num(r, '综合评分') || 0), 0) / total : 0
-              // 策略分布
-              const stratMap = {}
-              rows.forEach((r) => { const k = (r['来源策略'] ?? '未知').split('/').map(s=>s.trim()).filter(Boolean).join('/'); stratMap[k] = (stratMap[k] || 0) + 1 })
-              const stratList = Object.entries(stratMap).sort((a, b) => b[1] - a[1])
+              // 因子类型分布（按因子类型归并；与后端 smcore/strategy/factor_types.py 对齐）
+              const factorMap = {}
+              rows.forEach((r) => {
+                factorTypesOfSource(r['来源策略']).forEach((t) => { factorMap[t] = (factorMap[t] || 0) + 1 })
+              })
+              const factorList = Object.entries(factorMap).sort((a, b) => b[1] - a[1])
               // 重点推荐 Top5（按综合评分）
               const top = [...rows].sort((a, b) => (num(b, '综合评分') || 0) - (num(a, '综合评分') || 0)).slice(0, 5)
               const fileDate = (fullDaily.latest?.name ?? '').replace('Daily-Action-List-', '').replace('.csv', '')
@@ -2234,22 +2237,25 @@ function App() {
                       <span className="rs-val">{avgScore.toFixed(1)}</span>
                     </div>
                     <div className="rs-card">
-                      <span className="rs-label">涉及策略</span>
-                      <span className="rs-val">{stratList.length} 类</span>
+                      <span className="rs-label">涉及因子类型</span>
+                      <span className="rs-val">{factorList.length} 类</span>
                     </div>
                   </div>
 
                   {/* 策略分布 + 重点推荐 */}
                   <div className="report-grid">
-                    <SectionCard title="策略命中分布">
+                    <SectionCard title="因子类型命中分布">
                       <div className="strat-list">
-                        {stratList.map(([name, cnt]) => (
-                          <div key={name} className="strat-row">
-                            <span className="strat-name">{name}</span>
-                            <span className="strat-bar"><span className="strat-bar-fill" style={{ width: `${(cnt / total) * 100}%` }} /></span>
-                            <span className="strat-cnt">{cnt}</span>
-                          </div>
-                        ))}
+                        {factorList.map(([name, cnt]) => {
+                          const c = getFactorTypeColor(name)
+                          return (
+                            <div key={name} className="strat-row">
+                              <span className="strat-name">{name}</span>
+                              <span className="strat-bar"><span className="strat-bar-fill" style={{ width: `${(cnt / total) * 100}%`, background: c.border }} /></span>
+                              <span className="strat-cnt">{cnt}</span>
+                            </div>
+                          )
+                        })}
                       </div>
                     </SectionCard>
 
@@ -2287,6 +2293,18 @@ function App() {
                                         ))}
                                       </div>
                                     )}
+                                    {/* 因子类型标签（主分类，配色与清单/分布一致） */}
+                                    {(() => {
+                                      const fts = factorTypesOfSource(r['来源策略'])
+                                      return (
+                                        <div className="top-tags">
+                                          {fts.map((t) => {
+                                            const c = getFactorTypeColor(t)
+                                            return <span key={`ft-${t}`} className="top-tag" style={{ background: c.bg, color: c.text, border: `1px solid ${c.border}` }}>{t}</span>
+                                          })}
+                                        </div>
+                                      )
+                                    })()}
                                   </div>
                                   <div className="top-sub">
                                     {buy != null && <span className="top-detail">买入 ¥{buy.toFixed(2)}</span>}
