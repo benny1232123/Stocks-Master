@@ -102,8 +102,8 @@ def _period_available_date(period_end: str, pub_date: Optional[str]) -> Optional
     return pe + timedelta(days=lag)
 
 
-def _select_pit_period(periods: dict, as_of: date) -> Optional[dict]:
-    """在 periods{报告期: 记录(含 _pub)} 中选 as_of 前已披露的最新一期。"""
+def _select_pit_period_keyed(periods: dict, as_of: date) -> tuple[Optional[str], Optional[dict]]:
+    """同 `_select_pit_period`，但连报告期一起返回 (period, rec)。"""
     best_end = None
     best = None
     for pe, rec in periods.items():
@@ -115,7 +115,12 @@ def _select_pit_period(periods: dict, as_of: date) -> Optional[dict]:
         if best_end is None or pe > best_end:
             best_end = pe
             best = rec
-    return best
+    return best_end, best
+
+
+def _select_pit_period(periods: dict, as_of: date) -> Optional[dict]:
+    """在 periods{报告期: 记录(含 _pub)} 中选 as_of 前已披露的最新一期。"""
+    return _select_pit_period_keyed(periods, as_of)[1]
 
 
 # 腾讯行情字段索引（~ 分隔）：1=名称 3=现价 34=PE(TTM) 39=PB 45=总市值(万元)
@@ -546,8 +551,45 @@ def _build_fundamental_online(code6: str, as_of=None) -> Optional[dict]:
     }
 
 
+# ── ROE 年化（累计口径 → 年度可比）──
+# THS `index_weighted_avg_roe` 与 baostock 的 ROE 都是**年初至今累计**口径，实测：
+#   002284 2025 年 Q1 3.39% → Q2 6.68% → Q3 10.73% → 年报 15.66%（单调递增，Q4 = 全年）。
+# 而 RECOMMENDATION_CONFIG.fundamental.roe 的阈值 0.10/0.15/0.20 是按**年度** ROE 设的
+# → 不年化则同一只票 Q1 落「偏低」(50 分)、年报才落「良好」(82 分)，面分随报告日历漂移
+# （单因子摆动 32 分），与基本面无关。
+#
+# ⚠️ **本函数只在「按绝对阈值打分」的消费方（持仓日报 / 前端）调用，不在数据层自动套用**：
+# `factor_scoring` 的 quality 因子用的是**截面 z-score**，同一报告期统一缩放不改排序；
+# 但它毕竟会改动 use_fundamentals=true 下的打分输入，属行为变更，按项目 OOS 纪律
+# 不在此顺手改。故 `_extract_for_asof` 输出的 `roe` 保持**源口径原值**，
+# 只额外给出 `roe_period` 供消费方自行年化。
+_ROE_ANNUALIZE_MULT = {"03-31": 4.0, "06-30": 2.0, "09-30": 4.0 / 3.0, "12-31": 1.0}
+
+
+def annualize_roe(roe, period: Optional[str]):
+    """把累计 ROE 年化到年度可比口径（Q1×4 / Q2×2 / Q3×4/3 / Q4×1）。
+
+    无法判定报告期（period 为空/非法，如旧 v1 扁平缓存）时**原样返回** ——
+    老缓存放的是年度值，年化反而会错；宁可不动，也不猜。
+    """
+    if roe is None or not period:
+        return roe
+    mult = _ROE_ANNUALIZE_MULT.get(str(period)[-5:])
+    if mult is None:
+        return roe
+    try:
+        return float(roe) * mult
+    except (TypeError, ValueError):
+        return roe
+
+
 def _extract_for_asof(data: Optional[dict], as_of=None) -> Optional[dict]:
-    """从 v2 缓存结构按 as_of 提取扁平基本面 dict；旧扁平缓存(无 periods)保守降级。"""
+    """从 v2 缓存结构按 as_of 提取扁平基本面 dict；旧扁平缓存(无 periods)保守降级。
+
+    ⚠️ 输出的 `roe` 是**源报告期口径的累计值**（不年化），同时给出 `roe_period`
+    （报告期末日，如 "2026-06-30"）；需要按年度阈值比较的消费方请自行调用
+    `annualize_roe(roe, roe_period)`。旧扁平缓存无报告期 → 不带 `roe_period`。
+    """
     if not data or not isinstance(data, dict):
         return None
     if "periods" not in data:
@@ -557,19 +599,21 @@ def _extract_for_asof(data: Optional[dict], as_of=None) -> Optional[dict]:
     out: dict = {}
     # 质量/成长：PIT 选期
     periods = data.get("periods") or {}
+    period: Optional[str] = None
+    rec: dict = {}
     if as_of_d is None:
         if periods:
-            latest = max(periods.keys())
-            rec = periods[latest] or {}
-            for k in ("roe", "gross_margin", "revenue_growth"):
-                if rec.get(k) is not None:
-                    out[k] = rec[k]
+            period = max(periods.keys())
+            rec = periods[period] or {}
     else:
-        pit = _select_pit_period(periods, as_of_d)
-        if pit:
-            for k in ("roe", "gross_margin", "revenue_growth"):
-                if pit.get(k) is not None:
-                    out[k] = pit[k]
+        period, rec = _select_pit_period_keyed(periods, as_of_d)
+        rec = rec or {}
+    if isinstance(rec, dict):
+        for k in ("roe", "gross_margin", "revenue_growth"):
+            if rec.get(k) is not None:
+                out[k] = rec[k]
+        if period:
+            out["roe_period"] = period
     # 估值：最新快照仅在 as_of ≥ 快照刷新日时可用（保守，避免用未来估值）
     spot = data.get("spot") or {}
     spot_as_of = _parse_date_str(data.get("_spot_as_of"))

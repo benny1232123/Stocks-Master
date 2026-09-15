@@ -23,7 +23,7 @@ import { Button } from './components/ui/button'
 import { StatCard, Field, SectionCard, MacroCard } from './components/cards'
 import DailyExpandableList from './components/DailyExpandableList'
 import { cn } from './lib/utils'
-import { useScoringConfig, bandScore, bandLabel } from './config/useScoringConfig'
+import { useScoringConfig, bandScore, bandLabel, annualizeRoe } from './config/useScoringConfig'
 
 // 构建版本（vite define 注入；本地 dev 下未定义时回退 dev）
 const BUILD_SHA = typeof __BUILD_SHA__ === 'string' ? __BUILD_SHA__ : 'dev'
@@ -449,7 +449,11 @@ function ComprehensivePanel({ analysis }) {
   const pe = F?.pe != null ? Number(F.pe) : null
   const pb = F?.pb != null ? Number(F.pb) : null
   const mcap = F?.mkt_cap != null ? Number(F.mkt_cap) : null
-  const roe = F?.roe != null ? Number(F.roe) : null
+  // ROE 口径：财报给的是**年初至今累计**，而 FUND.roe 阈值按**年度**设 → 先年化再比阈值/展示。
+  // 无 roe_period（旧扁平缓存，值本就是年度）→ 原样返回。与 smcore/analysis.py 同构。
+  const roeRaw = F?.roe != null ? Number(F.roe) : null
+  const roe = annualizeRoe(roeRaw, F?.roe_period)
+  const roeAnnualized = roeRaw != null && roe != null && roe !== roeRaw
   const gm = F?.gross_margin != null ? Number(F.gross_margin) : null
   const rg = F?.revenue_growth != null ? Number(F.revenue_growth) : null
   const to = F?.turnover != null ? Number(F.turnover) : null
@@ -578,7 +582,7 @@ function ComprehensivePanel({ analysis }) {
               <span className='comp-hint'>{mcap == null ? '数据暂缺' : mcap > 2000 ? '大盘股' : mcap > 500 ? '中盘股' : mcap > 100 ? '中小盘' : '小盘股'}</span>
             </div>
             <div className='comp-cell'>
-              <span className='comp-label'>ROE</span>
+              <span className='comp-label'>ROE{roeAnnualized ? '(年化)' : ''}</span>
               <span className='comp-val'>{roe != null ? `${(roe * 100).toFixed(1)}%` : '--'}</span>
               <span className='comp-hint'>{roe == null ? '数据暂缺' : roe > 0.15 ? '优秀' : roe > 0.10 ? '良好' : roe > 0.05 ? '一般' : '偏低'}</span>
             </div>

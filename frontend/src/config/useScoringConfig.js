@@ -70,4 +70,18 @@ export function bandLabel(table, value, fallback = '中性') {
   return fallback
 }
 
+// ── ROE 年化（累计口径 → 年度可比）──
+// 后端 fundamental.roe 的分段阈值（0.10/0.15/0.20）是按**年度** ROE 设的，而 THS/baostock
+// 财报披露的是**年初至今累计**（Q1/Q2/Q3 累计，单调递增）→ 直接比阈值会让面分随报告日历漂移
+// （同一只票 Q1 落「偏低」、年报落「良好」）。
+// 与 smcore/strategy/fundamental.annualize_roe 严格同构：Q1×4 / Q2×2 / Q3×4/3 / Q4×1。
+// period 缺失（旧 v1 扁平缓存，其值本就是年度）→ 原样返回，不猜。
+const ROE_ANNUALIZE_MULT = { '03-31': 4, '06-30': 2, '09-30': 4 / 3, '12-31': 1 }
+
+export function annualizeRoe(roe, period) {
+  if (roe == null || !period) return roe
+  const mult = ROE_ANNUALIZE_MULT[String(period).slice(-5)]
+  return mult == null ? roe : Number(roe) * mult
+}
+
 export default useScoringConfig

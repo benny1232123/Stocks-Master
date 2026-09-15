@@ -236,3 +236,89 @@ def test_real_holdings_scores_are_stable_and_improved(code):
     expect = next(lbl for gte, lbl in gtes if gte is not None and total >= gte) \
         if any(g is not None and total >= g for g, _ in gtes) else gtes[-1][1]
     assert new["rating"] == expect
+
+
+# ───────────────────── 缺陷 4：ROE 累计口径年化 ─────────────────────
+# background：THS / baostock 的 `index_weighted_avg_roe` 是**年初至今累计**口径
+# （002284 2025：Q1 3.39% → Q2 6.68% → Q3 10.73% → 年报 15.66%，单调递增），
+# 而 RECOMMENDATION_CONFIG.fundamental.roe 的阈值 0.10/0.15/0.20 是按**年度** ROE 设的。
+# 不做年化 → 同一只票 Q1 落「偏低」(50 分)、年报才落「良好」(82 分)，面分随报告日历漂移
+# （单因子摆动 32）。修法：`fundamental.annualize_roe(roe, roe_period)` 只在**消费方**
+# （analysis.py 日报 / 前端 App.jsx）套用；数据层 `_extract_for_asof` 输出 `roe` 保持源口径，
+# 仅额外给出 `roe_period`。旧 v1 扁平缓存无 roe_period（其值本就是年度）→ 原样返回。
+
+
+def test_annualize_roe_multipliers():
+    """Q1×4 / Q2×2 / Q3×4/3 / Q4×1（用 002284 2025 真实累计路径校验）。"""
+    from smcore.strategy.fundamental import annualize_roe
+    assert annualize_roe(0.0339, "2025-03-31") == pytest.approx(0.0339 * 4)
+    assert annualize_roe(0.0668, "2025-06-30") == pytest.approx(0.0668 * 2)
+    assert annualize_roe(0.1073, "2025-09-30") == pytest.approx(0.1073 * 4 / 3)
+    assert annualize_roe(0.1566, "2025-12-31") == pytest.approx(0.1566)
+
+
+def test_annualize_roe_passthrough_without_period():
+    """无报告期（旧 v1 扁平缓存，值本就年度）或非法期号 → 原样返回，不猜。"""
+    from smcore.strategy.fundamental import annualize_roe
+    assert annualize_roe(0.1566, None) == 0.1566
+    assert annualize_roe(0.1566, "") == 0.1566
+    assert annualize_roe(0.1566, "2025-13-31") == 0.1566
+    assert annualize_roe(None, "2025-06-30") is None
+
+
+def _fund_mean(roe):
+    """给定 roe，按 exclude 口径算基本面期望面分（5 因子齐全）。"""
+    w_f = RECOMMENDATION_CONFIG["fundamental"]
+    pe, pb, gm, rg = 13.0, 2.0, 0.20, 0.10
+    return _js_round(sum([
+        _band(w_f["pe"], pe, w_f["missing"]),
+        _band(w_f["pb"], pb, w_f["missing"]),
+        _band(w_f["roe"], roe, w_f["missing"]),
+        _band(w_f["gm"], gm, w_f["missing"]),
+        _band(w_f["rg"], rg, w_f["missing"]),
+    ]) / 5)
+
+
+def test_recommendation_annualizes_roe_before_threshold():
+    """同一「年度水平」ROE 无论落在 Q1 还是年报，面分应一致（不被报告日历带偏）。"""
+    base = {"pe": 13.0, "pb": 2.0, "gross_margin": 0.20, "revenue_growth": 0.10}
+    q1 = recommendation_from_analysis(
+        _analysis(fund={**base, "roe": 0.03, "roe_period": "2025-03-31"}))  # 年化 0.12
+    fy = recommendation_from_analysis(
+        _analysis(fund={**base, "roe": 0.12, "roe_period": "2025-12-31"}))  # 0.12
+    assert q1["faces"]["fundamental"] == fy["faces"]["fundamental"] == _fund_mean(0.12)
+
+
+def test_recommendation_without_roe_period_uses_raw_roe():
+    """旧 v1 扁平缓存无 roe_period（其 roe 本就是年度值）→ 不得年化。
+
+    若误按 Q1 年化（×4），0.03 → 0.12 会跨档抬高面分，本测试守住这个回归。
+    """
+    base = {"pe": 13.0, "pb": 2.0, "gross_margin": 0.20, "revenue_growth": 0.10}
+    rec = recommendation_from_analysis(_analysis(fund={**base, "roe": 0.03}))
+    assert rec["faces"]["fundamental"] == _fund_mean(0.03)
+    # 必须严格低于「误年化」的结果，证明没被年化
+    assert rec["faces"]["fundamental"] < _fund_mean(0.12)
+
+
+# ───────── 前后端一致性：年化系数不得漂移 ─────────
+
+def test_frontend_annualize_multipliers_match_backend():
+    """前端 useScoringConfig.js 的 ROE 年化系数必须与后端 annualize_roe 一致。"""
+    import re
+    from pathlib import Path
+    from smcore.strategy.fundamental import _ROE_ANNUALIZE_MULT
+
+    root = Path(__file__).resolve().parents[1]
+    js = (root / "frontend" / "src" / "config" / "useScoringConfig.js").read_text(encoding="utf-8")
+    block = re.search(r"ROE_ANNUALIZE_MULT\s*=\s*\{(.*?)\}", js, re.S)
+    assert block, "前端缺少 ROE_ANNUALIZE_MULT 定义"
+    pairs = dict(re.findall(r"['\"](\d{2}-\d{2})['\"]\s*:\s*([0-9./ ]+)", block.group(1)))
+    assert set(pairs) == set(_ROE_ANNUALIZE_MULT), "前后端报告期集合不一致"
+    for mmdd, mult in _ROE_ANNUALIZE_MULT.items():
+        assert abs(eval(pairs[mmdd]) - mult) < 1e-9, f"{mmdd} 系数前后端不一致"
+
+    # 且 App.jsx 必须真的调用它（否则 helper 形同虚设）
+    app = (root / "frontend" / "src" / "App.jsx").read_text(encoding="utf-8")
+    assert re.search(r"annualizeRoe\(\s*\w+\s*,\s*F\?\.roe_period\s*\)", app), \
+        "App.jsx 未把 roe_period 传给 annualizeRoe"

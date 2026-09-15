@@ -12,6 +12,7 @@ import pandas as pd
 from smcore.config.defaults import RECOMMENDATION_CONFIG
 from smcore.data.kline import fetch_daily_k
 from smcore.indicators.boll import calc_bollinger, evaluate_boll_signal
+from smcore.strategy.fundamental import annualize_roe
 from smcore.strategy.news_surface import build_news_surface
 
 
@@ -307,7 +308,11 @@ def recommendation_from_analysis(
 
     # ── 基本面（与前端 ComprehensivePanel 同构）──
     pe, pb = _num(fund.get("pe")), _num(fund.get("pb"))
-    roe, gm = _num(fund.get("roe")), _num(fund.get("gross_margin"))
+    # ROE 口径：THS/baostock 给的是**年初至今累计**，而 w_f["roe"] 阈值(0.10/0.15/0.20)按**年度**设
+    # → 先年化到年度可比口径再比阈值，否则同一只票 Q1 落「偏低」、年报落「良好」，面分随报告日历漂移。
+    # `roe_period` 缺失（旧 v1 扁平缓存，其值本就是年度）→ annualize_roe 原样返回，不猜。
+    roe = annualize_roe(_num(fund.get("roe")), fund.get("roe_period"))
+    gm = _num(fund.get("gross_margin"))
     rg = _num(fund.get("revenue_growth"))
     fund_detail: list[str] = []
     fund_scores: list[float] = []
