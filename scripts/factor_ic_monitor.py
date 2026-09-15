@@ -105,6 +105,21 @@ def _spearman_crit(n: int) -> float:
     return 1.96 / math.sqrt(n - 1)
 
 
+def _n_required(ic_abs: float | None) -> int | None:
+    """反解「要识别 |IC| 这个幅度，至少需要多少样本」：n = ⌈(1.96/|IC|)²⌉ + 1。
+
+    存在的意义：只写「未达显著」读者没有量感。写上「识别 0.067 需 n≈857、当前 35」
+    才能让人一眼看出这不是「接近显著」，而是差了 20 多倍 —— 从而不去据此调权重。
+
+    取整方向必须是**向上**：由 crit(n) = 1.96/√(n−1) 推得 n−1 ≥ (1.96/|IC|)²，
+    故 n−1 取 ⌈·⌉（`-1e-9` 抵消浮点误差，避免 y 恰为整数时多要一个样本）。
+    """
+    if ic_abs is None or ic_abs <= 0:
+        return None
+    need = (1.96 / ic_abs) ** 2
+    return int(math.ceil(need - 1e-9)) + 1
+
+
 # ── ① 系统级横截面 Rank-IC ──────────────────────────────────────────
 def _day_rank_ic(sd: str) -> tuple[float | None, int]:
     """单日横截面 Rank-IC：Spearman(融合权重, 前向收益)。返回 (ic, n_stocks)。
@@ -290,12 +305,28 @@ def analyze(window: int = IC_WINDOW) -> dict:
     decayed_strats = sorted([s for s, v in strat.items() if v.get("decayed")])
     degraded_sys = sys_ic.get("degraded", False)
     weak_sys = sys_ic.get("weak", False)
-    # 衰减里「真正达显著」的那些：供人工优先看；不改变 alert 的灵敏度（保持灵敏，
-    # 但正文必须把「未达显著」标出来，避免把 n=10 的噪声当结论去调权重）
+    # 衰减里「真正达显著」的那些 —— 这才是触发告警的条件（见下方 alert）
     decayed_confirmed = [s for s in decayed_strats if strat[s].get("significant")]
+    # 系统级反向同样要求达显著：低部署期池化样本只有几十票，|IC|≈0.07 完全在噪声带内，
+    # 拿它开「排序系统性反向」的 issue 等于每周一次的伪警报 → 必须过 crit 门槛。
+    degraded_confirmed = bool(degraded_sys and sys_ic.get("significant"))
     n_signal_days = len(_all_signal_days())
 
-    alert = degraded_sys or bool(decayed_strats)
+    # ⚠️ 2026-09-15 收紧：alert 由「有负向读数」改为「有**达显著**的负向证据」。
+    # 旧行为 `alert = degraded_sys or bool(decayed_strats)` 在 n=35、|IC|=0.067 时
+    # 也会开 issue，而正文只能写「未达显著」——既然每期都得写这句话，就说明触发
+    # 条件本身错了。灵敏度不再靠「多开 issue」保证，而是靠正文把读数和门槛都列出。
+    alert = degraded_confirmed or bool(decayed_confirmed)
+    if degraded_confirmed:
+        alert_reason = "系统级排序反向（达显著）"
+    elif decayed_confirmed:
+        alert_reason = "策略信念衰减（达显著）：" + ", ".join(decayed_confirmed)
+    elif degraded_sys or decayed_strats:
+        alert_reason = "有负向读数但均未达显著（证据不足，不告警）"
+    else:
+        alert_reason = "无负向读数"
+
+    recent_ic = sys_ic.get("recent_ic")
     return {
         "as_of": _all_signal_days()[-1] if n_signal_days else None,
         "generated_at": datetime.now(timezone.utc).isoformat(),
@@ -308,8 +339,11 @@ def analyze(window: int = IC_WINDOW) -> dict:
         "decayed_strategies": decayed_strats,
         "decayed_confirmed": decayed_confirmed,
         "system_degraded": degraded_sys,
+        "system_degraded_significant": degraded_confirmed,
         "system_weak": weak_sys,
         "alert": alert,
+        "alert_reason": alert_reason,
+        "n_required_system": _n_required(abs(recent_ic) if recent_ic is not None else None),
         "daily_ics": ics,
     }
 
@@ -319,10 +353,12 @@ def _format_issue_body(res: dict) -> str:
     lines = [
         "## 因子 IC/IR 监控告警（自动生成）",
         "",
-        f"- 截至信号日：**{res['as_of']}**",
+        f"- 截至信号日：**{res['as_of']}**（生成于 {res.get('generated_at', 'n/a')}）",
         f"- 滚动窗口：最近 **{res['window']}** 个信号日"
         f"（实际可用 {res.get('window_days', res['window'])} 天；"
         f"合并横截面至少 {res['min_n_ic']} 样本才判定）",
+        f"- **告警门槛：只有达显著才触发**（α=0.05）→ 当前 "
+        f"{'🔔 触发' if res.get('alert') else '🔇 未触发'}：{res.get('alert_reason', '')}",
         "",
         "### 系统级合并 Rank-IC",
         "",
@@ -343,6 +379,10 @@ def _format_issue_body(res: dict) -> str:
         trend_s = (f"{s['trend']:+.3f}" if s.get("trend") is not None
                    else "n/a（基线窗口样本不足）")
         lines.append(f"- 趋势(近期−基线)：{trend_s}")
+        need = res.get("n_required_system")
+        if need:
+            lines.append(f"- 识别该幅度所需样本：n ≥ **{need}** 票"
+                         f"（当前 {s['n_recent']}）")
         lines.append(f"- 判定：**{flag}**")
     lines += ["", "### 策略级「信念 IC」衰减", ""]
     if not res["decayed_strategies"]:
@@ -379,6 +419,10 @@ def _format_issue_body(res: dict) -> str:
         "> 显著性临界值用渐近式 `1.96/sqrt(n-1)`（n≥6 与精确表误差 <1%）。"
         "**低部署期各策略样本常只有个位数，此时 IC 不可解读——请勿据此调权重。**",
         "> 触发仅代表「排序区分度退化」，请结合市场环境人工复核后再决定是否调权重。",
+        "> ⚠️ 2026-09-15 起改为**门槛门控**：仅当 `|IC| ≥ crit`（α=0.05）才开 issue。"
+        "低部署期池化样本常只有几十票，|IC|≈0.07 远在噪声带内（识别它需 n≈857），"
+        "旧行为每周都会开一次无法解读的 issue → 告警疲劳。**未触发不代表无问题，只代表"
+        "这点样本还说明不了**；全部读数仍如实列在上表。",
     ]
     return "\n".join(lines)
 
@@ -413,9 +457,11 @@ def main() -> int:
         print(f"  {sname:>14}  n={v.get('n'):>3}  {v.get('span') or '-':<20}"
               f"信念IC={ci_s:>7}{flag}{sig}")
     print("-" * 64)
-    print(f"告警：{'是' if res['alert'] else '否'}  "
-          f"（系统失灵={res['system_degraded']}，策略={res['decayed_strategies'] or '无'}，"
-          f"其中达显著={res.get('decayed_confirmed') or '无'}）")
+    print(f"告警：{'是' if res['alert'] else '否'}  {res.get('alert_reason', '')}")
+    print(f"  （系统反向={res['system_degraded']}，其中达显著="
+          f"{res.get('system_degraded_significant')}；衰减策略={res['decayed_strategies'] or '无'}，"
+          f"其中达显著={res.get('decayed_confirmed') or '无'}；"
+          f"识别系统级该幅度需 n≥{res.get('n_required_system') or 'n/a'}）")
     print(_format_issue_body(res))
 
     if args.emit_json:

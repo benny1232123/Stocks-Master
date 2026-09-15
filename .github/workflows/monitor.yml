@@ -102,25 +102,47 @@ jobs:
           python - <<'PY'
           import json, subprocess, sys
           res = json.load(open("stock_data/factor_ic.json"))
-          if not res.get("alert"):
-              print("无因子 IC 告警，跳过开 issue。")
-              sys.exit(0)
-          title = "⚠️ 因子 IC/IR 监控告警（自动）"
-          try:
-              out = subprocess.run(
-                  ["gh", "issue", "list", "--state", "open", "--search",
-                   title, "--json", "number,title"],
-                  capture_output=True, text=True, check=True).stdout
-              existing = [x for x in json.loads(out) if x["title"] == title]
-          except Exception as e:
-              print("查询已有 issue 失败，仍尝试创建：", e)
-              existing = []
-          if existing:
-              print(f"已存在未关闭的因子 IC issue #{existing[0]['number']}，跳过。")
-              sys.exit(0)
           sys.path.insert(0, "scripts")
           import factor_ic_monitor
           body = factor_ic_monitor._format_issue_body(res)
+          title = "⚠️ 因子 IC/IR 监控告警（自动）"
+
+          def open_issues():
+              try:
+                  out = subprocess.run(
+                      ["gh", "issue", "list", "--state", "open", "--search",
+                       title, "--json", "number,title"],
+                      capture_output=True, text=True, check=True).stdout
+                  return [x for x in json.loads(out) if x["title"] == title]
+              except Exception as e:
+                  print("查询已有 issue 失败，按「无既有」处理：", e)
+                  return []
+
+          existing = open_issues()
+
+          # 未达显著（门槛门控）→ 不开新 issue；若旧 issue 还开着则留证并关闭，
+          # 避免一条早已解除的告警一直挂在那里。
+          if not res.get("alert"):
+              print("未触发告警：%s" % res.get("alert_reason"))
+              for it in existing:
+                  num = it["number"]
+                  subprocess.run(["gh", "issue", "comment", str(num), "--body",
+                                  "本轮复检：未达显著，告警条件不成立，自动关闭。\n\n" + body],
+                                 check=False, capture_output=True, text=True)
+                  subprocess.run(["gh", "issue", "close", str(num)],
+                                 check=False, capture_output=True, text=True)
+                  print(f"已自动关闭 #{num}（告警解除）。")
+              sys.exit(0)
+
+          # 已开着同标题 issue → **刷新正文**。旧实现直接 skip，导致正文永远停在
+          # 首次告警那天的数据，与实际早已脱节（只能靠手工关掉才逼它重开）。
+          if existing:
+              num = existing[0]["number"]
+              subprocess.run(["gh", "issue", "edit", str(num), "--body", body],
+                             check=False, capture_output=True, text=True)
+              print(f"已刷新既有因子 IC issue #{num} 的正文。")
+              sys.exit(0)
+
           try:
               subprocess.run(
                   ["gh", "issue", "create", "--title", title, "--body", body,

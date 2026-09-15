@@ -14,6 +14,11 @@
 
 ③ 显著性：所有 IC 必须给出 `crit`（α=0.05，渐近式 1.96/√(n-1)）与 `significant`，
    告警正文要把「未达显著」写出来 —— 防止把个位数样本的噪声当结论去调权重。
+
+④ **告警门槛门控**：只有**达显著**的负向证据才 `alert=True`。旧行为「有负读数就告警」
+   在 n=35、|IC|=0.067 时也开 issue，而正文只能写「未达显著」→ 每周一次的伪警报。
+   同时 `_n_required()` 把 |IC| 反解成「需要多少样本才能识别」，让「证据不足」可量化
+   （识别 0.067 需 n≈857，当前 35 —— 差 24 倍，不是「接近显著」）。
 """
 from __future__ import annotations
 
@@ -72,6 +77,22 @@ def test_spearman_crit_matches_asymptotic_table():
     assert mod._spearman_crit(216) == pytest.approx(0.134, abs=5e-3)
     # 单调递减：样本越多，判显著的门槛越低
     assert mod._spearman_crit(10) > mod._spearman_crit(20) > mod._spearman_crit(50)
+
+
+def test_n_required_inverts_crit():
+    """n_required 是 _spearman_crit 的反函数：识别 |IC| 需要多少样本。"""
+    # n=10 的门槛 0.653 反解回来应当正好是 10（临界点自洽）
+    assert mod._n_required(mod._spearman_crit(10)) == 10
+    # 0.067 这种低部署期的典型读数：要 857 票才可能识别（现实里远远不够）
+    assert mod._n_required(0.067) == 857
+    assert mod._n_required(0.134) == 215
+    # 反解方向必须「够」：用 n_required 拿到的样本量，其门槛必须已 ≤ 该 |IC|
+    for ic in (0.653, 0.3, 0.134, 0.067, 0.02):
+        assert mod._spearman_crit(mod._n_required(ic)) <= ic
+    # 无定义输入 → None（不得抛错）
+    assert mod._n_required(None) is None
+    assert mod._n_required(0.0) is None
+    assert mod._n_required(-0.5) is None
 
 
 # ── ② 窗口按统一信号日切（旧实现系列的回归点）─────────────────────────
@@ -214,11 +235,88 @@ def test_analyze_decayed_confirmed_is_subset(monkeypatch):
     assert res["strategies"]["momentum"]["n"] == 4
     assert res["strategies"]["momentum"]["decayed"] is False
     assert "样本不足" in res["strategies"]["momentum"]["note"]
-
     # 汇总字段齐备
     assert res["min_half_n"] == mod.MIN_HALF_N
     assert res["window_days"] == min(15, len(days))
     assert res["alert"] is True
+    assert res["alert_reason"]                       # 告警必须说明理由
+
+
+def test_alert_gated_on_significance(monkeypatch):
+    """负向读数但**未达显著** → 不得告警。
+
+    这正是每周伪警报的根源：旧 `alert = degraded_sys or bool(decayed_strats)` 在这个
+    数据集上会开 issue，而正文只能写「未达显著」——既然每期都得写这句，触发条件就错了。
+    """
+    days = _days(20)
+    win = 10
+    # 收益「前 5 天全高、后 5 天全低」而权重单调升 → 秩相关恰为 −0.515
+    # （收益秩是置换 [6..10,1..5]，rho = 1 − 250/165）：方向为负，但够不到 n=10 的 0.653
+    rets = [10.0, 20.0, 30.0, 40.0, 50.0, 1.0, 2.0, 3.0, 4.0, 5.0]
+    picks, weights = {}, {}
+    for i, d in enumerate(days[-win:]):
+        picks[d] = [_pick(float(i + 1), rets[i], "boll")]
+        weights[d] = {"boll": float(i + 1)}
+
+    _install(monkeypatch, days, picks, weights)
+    res = mod.analyze(window=win)
+
+    assert res["system"]["recent_ic"] == pytest.approx(-0.515, abs=0.002)
+    assert res["system"]["recent_ic"] < 0              # 方向确实为负
+    assert res["system"]["degraded"] is True
+    assert res["system"]["significant"] is False       # 但未达显著
+    assert res["system_degraded"] is True              # 原始读数照常保留
+    assert res["system_degraded_significant"] is False
+    assert res["decayed_strategies"] == []             # 策略层也没有达显著项
+    assert res["decayed_confirmed"] == []
+    assert res["alert"] is False                       # ← 关键：不告警
+    assert "证据不足" in res["alert_reason"]
+    # 反解出的所需样本数远大于当前样本量（这正是「说不了话」的量化表达）
+    assert res["n_required_system"] > res["system"]["n_recent"]
+
+
+def test_alert_fires_on_confirmed_strategy_decay(monkeypatch):
+    """系统层无读数、但策略层达显著衰减 → alert=True 且 reason 指名策略。"""
+    days = _days(24)
+    late = days[-12:]
+    picks, weights = {}, {}
+    for i, d in enumerate(late):
+        # prod_weight 恒定 → 系统级 IC 无定义（不干扰本用例），只留策略信念维度
+        picks[d] = [_pick(1.0, -float(i + 1), "boll")]
+        weights[d] = {"boll": float(i + 1)}    # 分配器越来越看好 boll，boll 却越来越差
+
+    _install(monkeypatch, days, picks, weights)
+    res = mod.analyze(window=15)
+
+    assert res["system"]["recent_ic"] is None
+    assert res["system_degraded_significant"] is False
+    assert res["decayed_confirmed"] == ["boll"]
+    assert res["alert"] is True
+    assert res["alert_reason"].startswith("策略信念衰减")
+    assert "boll" in res["alert_reason"]
+
+
+def test_issue_body_states_alert_gate_and_required_n(monkeypatch):
+    """正文必须写明「门槛门控」与「识别该幅度需多少样本」，否则读者没有量感。"""
+    days = _days(20)
+    win = 10
+    rets = [10.0, 20.0, 30.0, 40.0, 50.0, 1.0, 2.0, 3.0, 4.0, 5.0]
+    picks, weights = {}, {}
+    for i, d in enumerate(days[-win:]):
+        picks[d] = [_pick(float(i + 1), rets[i], "boll")]
+        weights[d] = {"boll": float(i + 1)}
+
+    _install(monkeypatch, days, picks, weights)
+    res = mod.analyze(window=win)
+    body = mod._format_issue_body(res)
+
+    assert res["alert"] is False
+    assert "告警门槛" in body
+    assert "未触发" in body
+    assert "识别该幅度所需样本" in body
+    assert "门槛门控" in body
+    assert "生成于" in body
+    assert res["alert_reason"] in body
 
 
 def test_issue_body_marks_insignificance(monkeypatch):
