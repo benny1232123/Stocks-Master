@@ -8,6 +8,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from smcore.strategy.adaptive_weights import (
     ALL_STRATEGIES,
     CONFIG,
+    _aggregate_excess,
     adaptive_weights,
     cash_from_regime,
     cash_from_volatility,
@@ -87,3 +88,80 @@ def test_cash_from_regime_uptrend():
 def test_cash_from_regime_neutral_passthrough():
     assert cash_from_regime("震荡轮动", 25) == 25
     assert cash_from_regime(None, 25) == 25
+
+
+def test_aggregate_excess_unweighted_equals_mean():
+    """position_weighted=False 退化成等权平均（与历史行为一致）。"""
+    pairs = [(10.0, 0.0), (0.0, 0.0), (-5.0, 0.0)]  # pos 全 0 → 等权；仅 10>0 一票为胜
+    edge, win, n, sd = _aggregate_excess(pairs, False)
+    assert n == 3
+    assert edge == (10.0 + 0.0 - 5.0) / 3
+    assert win == round(1 / 3 * 100, 1)
+
+
+def test_aggregate_excess_position_weighted():
+    """position_weighted=True 按仓位% 加权聚合。"""
+    # A 仓位 90、收益 10；B 仓位 10、收益 -10 → 应被 A 主导 ≈ (10*90 + -10*10)/100 = 8.0
+    pairs = [(10.0, 90.0), (-10.0, 10.0)]
+    edge, win, n, sd = _aggregate_excess(pairs, True)
+    assert n == 2
+    assert abs(edge - 8.0) < 1e-9
+    # 仓位加权胜率：A 胜(90)、B 负(10) → 90/100 = 90%
+    assert abs(win - 90.0) < 1e-9
+
+
+def test_aggregate_excess_position_weighted_degrade_when_no_pos():
+    """仓位权重全缺失(全 0) 时退化为等权，不报错。"""
+    pairs = [(10.0, 0.0), (2.0, 0.0)]
+    edge, win, n, sd = _aggregate_excess(pairs, True)
+    assert n == 2
+    assert edge == 6.0  # (10+2)/2
+
+
+def test_compute_universe_edge_position_weighted_meta_flag():
+    """position_weighted 参数透传到 __meta__；DAL 缺「建议仓位%」时自动退化为等权。"""
+    from smcore.strategy.adaptive_weights import compute_universe_edge
+    edge_off = compute_universe_edge(position_weighted=False)
+    assert edge_off["__meta__"]["position_weighted"] is False
+    edge_on = compute_universe_edge(position_weighted=True)
+    assert edge_on["__meta__"]["position_weighted"] is True
+    # 字段结构在两种模式下一致
+    assert set(edge_off.keys()) == set(edge_on.keys())
+
+
+def test_factor_timing_config_registered():
+    """2026-09-16 踩坑回归：factor_timing 必须注册在 _BUILTIN_DEFAULTS。
+
+    否则 _load_config 会忽略文件里的该键（开关静默失效），且 save_config 写回时会
+    把整个 factor_timing 块丢弃（实测把 enabled/window/min_n 从配置文件里抹掉）。
+    """
+    from smcore.strategy import adaptive_weights as aw
+
+    assert "factor_timing" in aw._BUILTIN_DEFAULTS, "factor_timing 未注册到 _BUILTIN_DEFAULTS"
+    ft = aw._BUILTIN_DEFAULTS["factor_timing"]
+    assert {"enabled", "window", "min_n"} <= set(ft)
+    # 缺省必须为关（不得改变现状默认行为）
+    assert ft["enabled"] is False
+    # _load_config 合并后 CONFIG 必须含该键（含文件覆盖）
+    assert "factor_timing" in aw.CONFIG
+    assert set(aw.CONFIG["factor_timing"]) >= {"enabled", "window", "min_n"}
+
+
+def test_save_config_preserves_factor_timing(tmp_path, monkeypatch):
+    """save_config 往返必须保留 factor_timing（回归：曾把它整块丢弃）。"""
+    import json as _json
+
+    from smcore.strategy import adaptive_weights as aw
+
+    # monkeypatch CONFIG/_CONFIG_PATH 使其在测试后自动还原（save_config 会重绑 CONFIG）
+    monkeypatch.setattr(aw, "CONFIG", {k: (dict(v) if isinstance(v, dict) else v)
+                                       for k, v in aw.CONFIG.items()})
+    target = tmp_path / "cfg.json"
+    monkeypatch.setattr(aw, "_CONFIG_PATH", target)
+    cfg = {k: (dict(v) if isinstance(v, dict) else v) for k, v in aw.CONFIG.items()}
+    cfg.setdefault("factor_timing", {})["enabled"] = True
+    aw.save_config(cfg)
+    written = _json.loads(target.read_text(encoding="utf-8"))
+    assert written["factor_timing"]["enabled"] is True
+    assert written["factor_timing"]["window"] == 10
+    assert written["factor_timing"]["min_n"] == 5

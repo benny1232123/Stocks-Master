@@ -70,10 +70,26 @@ _BUILTIN_DEFAULTS = {
         "hold_days": 10,
         "benchmark": "hs300",
         "blend_w_backtest": 0.5,
-        # 样本置信度折扣：n < min_n_confident 的策略 edge 乘以 sqrt(n/min_n_confident)，
-        # 抑制「小样本高胜率」把权重顶到 50%+（实测 boll n=6/胜率100% → 58%）。
-        "min_n_confident": 30,
+    # 样本置信度折扣：n < min_n_confident 的策略 edge 乘以 sqrt(n/min_n_confident)，
+    # 抑制「小样本高胜率」把权重顶到 50%+（实测 boll n=6/胜率100% → 58%）。
+    "min_n_confident": 30,
+    # 仓位加权 edge 聚合（2026-09-16 立项）：开启后把候选票前向超额收益按 DAL「建议仓位%」
+    # 加权再聚合到各策略 edge（替代等权平均），对齐「每元资本的边际贡献」而非「每笔候选均值」。
+    # 与 OOS 归因一致（CCTV 在 pw 口径跑赢融合、dw 口径跑输），但必须经 walk-forward 稳健门
+    # 控（scripts/walk_forward_pw_edge.py）判定开启，绝不手动改权重。默认关闭。
+    "position_weighted": False,
     },
+    # ── 因子生效开关（factor timing overlay，2026-09-16 立项）──
+    # 开启后 _weights_for_day 在基权重之上套用「因子生效开关」：近期信念 IC（分配器权重 vs
+    # 该策略选中票前向收益的滚动 Spearman）非显著为正的策略权重清零、其余按比例重分配。
+    # 即「每日给各因子打分、只保留有效的方法」，零硬编码、纯数据驱动。经 walk-forward 稳健门
+    # 控（scripts/walk_forward_factor_timing.py）判定开启；月度自动化 tripwire 可自动回滚。
+    # ⚠️ 必须注册于此 _BUILTIN_DEFAULTS：否则 _load_config 忽略它、save_config 丢弃它
+    #    （前者致开关静默失效，后者致写回时整个 factor_timing 块被抹掉——2026-09-16 踩坑）。
+    # ⚠️ 目前消费方仅有 scripts/walk_forward_validator.py（回测/验证口径）；生产选股
+    #    （smcore.adaptive_weights.compute_adaptive_allocation / fusion）尚未接入本开关，
+    #    故开启它暂不改变线上选股权重——需先完成生产接线（见 memory 2026-09-16）。
+    "factor_timing": {"enabled": False, "window": 10, "min_n": 5},
     # 样本外单调性守卫容差（百分点）：见 test_walk_forward.test_out_of_sample_monotonicity。
     # 项目 OOS 结论（WALK_FORWARD_VALIDATION.md）已判定单调性「非跨 regime 稳健」
     # （3 regime 仅 1 跑赢等权，robust=False，edge 处噪声级 ±0.8pp）。故该守卫不再硬断言
@@ -290,6 +306,7 @@ def compute_universe_edge(
     window: Optional[int] = None,
     hold_days: Optional[int] = None,
     use_benchmark: bool = True,
+    position_weighted: Optional[bool] = None,
 ) -> dict:
     """在「候选全集」上算各策略 edge（相对基准的超额收益，百分数）。
 
@@ -313,6 +330,8 @@ def compute_universe_edge(
         window = int(cfg.get("window", 30))
     if hold_days is None:
         hold_days = int(cfg.get("hold_days", 10))
+    if position_weighted is None:
+        position_weighted = bool(cfg.get("position_weighted", False))
 
     try:
         from smcore.data.kline import read_kline_cache
@@ -322,8 +341,9 @@ def compute_universe_edge(
     sig_days = _recent_signal_days(window, hold_days)
     bench_cache: dict[str, Optional[float]] = {}
     kline_cache: dict[str, Optional[pd.DataFrame]] = {}
-    strat_rets: dict[str, list[float]] = {s: [] for s in ALL_STRATEGIES}
+    strat_pairs: dict[str, list[tuple[float, float]]] = {s: [] for s in ALL_STRATEGIES}
     skipped_short = 0
+    pos_col_missing_days = 0
 
     for sd in sig_days:
         dal = STOCK_DATA_DIR / f"Daily-Action-List-{sd}.csv"
@@ -339,6 +359,18 @@ def compute_universe_edge(
             if sd not in bench_cache:
                 bench_cache[sd] = _benchmark_forward_ret(sd, hold_days)
             b = bench_cache[sd]
+
+        # 仓位加权所需：当日清单的「建议仓位%」映射到 code
+        pos_map: dict[str, float] = {}
+        if position_weighted:
+            if "建议仓位%" in d.columns:
+                for _, r in d.iterrows():
+                    try:
+                        pos_map[_norm_code(r.get("股票代码"))] = float(r.get("建议仓位%") or 0)
+                    except (TypeError, ValueError):
+                        pass
+            else:
+                pos_col_missing_days += 1
 
         for _, r in d.iterrows():
             code = _norm_code(r["股票代码"])
@@ -370,18 +402,17 @@ def compute_universe_edge(
             except Exception:
                 continue
             excess = ret - b if b is not None else ret
+            pos = pos_map.get(code, 0.0)
             for s in strats:
-                strat_rets[s].append(excess)
+                strat_pairs[s].append((excess, pos))
 
     edge: dict[str, dict] = {}
-    for s, rs in strat_rets.items():
-        if not rs:
+    for s, prs in strat_pairs.items():
+        if not prs:
             edge[s] = {"n": 0, "avg_return": None, "win_rate": None, "edge": 0.0, "std": 0.0}
             continue
-        n = len(rs)
-        avg = sum(rs) / n
-        win = sum(1 for x in rs if x > 0) / n
-        edge[s] = {"n": n, "avg_return": round(avg, 3), "win_rate": round(win * 100, 1), "edge": avg, "std": _sd(rs)}
+        e_val, win, n, sd_val = _aggregate_excess(prs, position_weighted)
+        edge[s] = {"n": n, "avg_return": round(e_val, 3), "win_rate": win, "edge": e_val, "std": sd_val}
 
     edge["__meta__"] = {  # type: ignore[assignment]  # 诊断用，不参与权重计算
         "source": "universe",
@@ -390,6 +421,8 @@ def compute_universe_edge(
         "signal_days": len(sig_days),
         "benchmark": "hs300" if use_benchmark else "none",
         "skipped_future_insufficient": skipped_short,
+        "position_weighted": position_weighted,
+        "pos_col_missing_days": pos_col_missing_days,
     }
     return edge
 
@@ -404,13 +437,14 @@ def compute_edge(window: Optional[int] = None, **kw) -> dict:
     cfg = CONFIG.get("edge", {})
     source = str(cfg.get("source", "universe")).lower()
     w = window if window is not None else int(cfg.get("window", 30))
+    pw = bool(cfg.get("position_weighted", False))
 
     if source == "backtest":
         return compute_strategy_edge(w)
     if source == "blend":
         wb = float(cfg.get("blend_w_backtest", 0.5))
         bt = compute_strategy_edge(w)
-        uv = compute_universe_edge(window=w)
+        uv = compute_universe_edge(window=w, position_weighted=pw)
         out: dict = {}
         for s in ALL_STRATEGIES:
             a, b = bt.get(s, {}), uv.get(s, {})
@@ -429,7 +463,7 @@ def compute_edge(window: Optional[int] = None, **kw) -> dict:
                 out[s] = (b if nb else a) or {"n": 0, "avg_return": None, "win_rate": None, "edge": 0.0, "std": 0.0}
         out["__meta__"] = {"source": "blend", "w_backtest": wb}
         return out
-    return compute_universe_edge(window=w)
+    return compute_universe_edge(window=w, position_weighted=pw)
 
 
 def _sd(vals: list) -> float:
@@ -439,6 +473,30 @@ def _sd(vals: list) -> float:
         return 0.0
     m = sum(vals) / n
     return math.sqrt(sum((x - m) ** 2 for x in vals) / n)
+
+
+def _aggregate_excess(pairs: list, position_weighted: bool):
+    """把 [(超额收益, 仓位%)] 列表聚合成 (edge, win_rate%, n, std)。
+
+    - position_weighted=False：等权平均（与历史行为一致）。
+    - position_weighted=True：按仓位% 加权（仅仓位>0 的票参与加权；若全为 0 或列缺失
+      则自动退化为等权），与 factor_attribution 的「贡献%」口径同源。
+
+    纯函数、无文件 I/O，便于单测；edge/win_rate/std 口径与 compute_universe_edge 一致。
+    """
+    n = len(pairs)
+    if n == 0:
+        return 0.0, None, 0, 0.0
+    if position_weighted:
+        wpos = [(e, p) for e, p in pairs if p is not None and p > 0]
+        if wpos and sum(p for _, p in wpos) > 0:
+            sp = sum(p for _, p in wpos)
+            edge = sum(e * p for e, p in wpos) / sp
+            win = sum(p for e, p in wpos if e > 0) / sp * 100
+            return edge, round(win, 1), n, _sd([e for e, _ in pairs])
+    avg = sum(e for e, _ in pairs) / n
+    win = sum(1 for e, _ in pairs if e > 0) / n * 100
+    return avg, round(win, 1), n, _sd([e for e, _ in pairs])
 
 
 def compute_dynamic_shrinkage(
@@ -678,6 +736,27 @@ def cash_from_drawdown(
     return int(round(cap * t))
 
 
+def _apply_factor_timing(weights: dict, signal_date: Optional[str] = None) -> dict:
+    """因子生效开关（默认关）：清零近期信念 IC 非显著为正的因子权重并按比例重分配。
+
+    惰性 import smcore.strategy.factor_timing（仅开启时加载，不增启动内存）；
+    任何异常一律 fail-soft 返回原权重（绝不让 overlay 故障拖垮主链路）。
+    """
+    try:
+        from smcore.strategy.factor_timing import apply_mask
+
+        masked = apply_mask(weights, signal_date=signal_date)
+        pct = {s: round(float(masked.get(s, 0.0))) for s in ALL_STRATEGIES}
+        d = 100 - sum(pct.values())
+        if d != 0:
+            anchor = max(pct, key=pct.get)
+            pct[anchor] = max(0, pct[anchor] + d)
+        return pct
+    except Exception as exc:  # pragma: no cover - 防御性
+        print(f"[adaptive_weights] WARN: factor_timing 应用失败，跳过（{exc!r}）", file=sys.stderr)
+        return weights
+
+
 def compute_adaptive_allocation(
     edge_window: int = 20,
     min_n: int = 8,
@@ -685,6 +764,7 @@ def compute_adaptive_allocation(
     floor: Optional[float] = None,
     zero_negative_edge: bool = True,
     min_evidence_n: int = 0,  # 0 = 自适应
+    signal_date: Optional[str] = None,
 ) -> tuple[dict, dict, int, bool]:
     """主入口：算 edge → 自适应权重 → 现金比例；返回 (edge, weights_pct, cash_pct, cold_start)。
 
@@ -716,6 +796,9 @@ def compute_adaptive_allocation(
         edge, shrinkage=shrinkage, floor=eff_floor,
         zero_negative_edge=zero_negative_edge, min_evidence_n=min_evidence_n,
     )
+    # 因子生效开关（默认关）：仅 CONFIG.enabled 时惰性套用（清零近期信念 IC 非显著为正的因子）
+    if bool((CONFIG.get("factor_timing") or {}).get("enabled", False)):
+        weights = _apply_factor_timing(weights, signal_date)
     return edge, weights, 0, False
 
 

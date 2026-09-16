@@ -148,3 +148,139 @@ def test_resolve_floor_rules():
     # 开启且无显式 floor → 回退全局 CONFIG["FLOOR"]（与 _eff 默认一致）
     default_floor = wf._eff(None, None, True)[1]
     assert wf._resolve_floor(None, True) == default_floor
+
+
+def test_causal_edge_position_weighted_flag():
+    """position_weighted 参数不破坏因果结构，且能正常返回有限 edge。"""
+    days = wf._all_signal_days()
+    if len(days) < 3:
+        pytest.skip("信号日不足")
+    mid = days[len(days) // 2]
+    # 默认（等权）路径不变
+    edge_uw = wf.causal_edge(mid)
+    assert sum(e["n"] for e in edge_uw.values()) >= 0
+    # 开启仓位加权路径：结构有效、有限值、不崩溃
+    edge_pw = wf.causal_edge(mid, position_weighted=True)
+    assert sum(e["n"] for e in edge_pw.values()) >= 0
+    for s in wf.ALL_STRATEGIES:
+        assert s in edge_pw
+    # 两种模式返回字段结构一致
+    for s in wf.ALL_STRATEGIES:
+        assert set(edge_uw[s].keys()) == set(edge_pw[s].keys())
+
+
+def test_spearman_ic_pure():
+    """手写 Spearman 纯函数：完美正/负相关边界 + 无变化/样本不足返回 None。"""
+    assert wf._spearman_ic([1, 2, 3, 4, 5], [2, 4, 6, 8, 10]) > 0.99
+    assert wf._spearman_ic([1, 2, 3, 4, 5], [10, 8, 6, 4, 2]) < -0.99
+    assert wf._spearman_ic([1, 1, 1, 1, 1], [1, 2, 3, 4, 5]) is None  # 一方无变化
+    assert wf._spearman_ic([1, 2], [1, 2]) is None  # n<3
+
+
+def test_factor_timing_mask_switches_off_decayed():
+    """因子生效开关：信念 IC 显著为正的因子生效、显著为负的关闭；不触发全量 conviction 计算。"""
+    synth = {
+        # 权重与收益严格同单调 → 信念 IC≈+1（显著为正）→ 生效
+        "boll": [("2024010%d" % i, 0.4 + i * 0.1, 0.04 + i * 0.01) for i in range(1, 7)],
+        # 权重升、收益降 → 信念 IC≈-1（显著为负）→ 关闭
+        "momentum": [("2024010%d" % i, 0.4 + i * 0.1, -0.04 - i * 0.01) for i in range(1, 7)],
+    }
+    for s in wf.ALL_STRATEGIES:
+        synth.setdefault(s, [])
+    days = ["20240101", "20240102", "20240103", "20240104", "20240105", "20240106", "20240107"]
+    orig_ensure = wf._ensure_factor_timing_points
+    orig_days = wf._all_signal_days
+    wf._FACTOR_TIMING_POINTS = synth
+    wf._ensure_factor_timing_points = lambda: synth
+    wf._all_signal_days = lambda: days
+    try:
+        mask = wf._factor_timing_mask("20240107")  # past = 前 6 天（< sd）
+        assert set(mask) == set(wf.ALL_STRATEGIES)
+        assert mask["boll"] is True
+        assert mask["momentum"] is False
+    finally:
+        wf._FACTOR_TIMING_POINTS = {}
+        wf._ensure_factor_timing_points = orig_ensure
+        wf._all_signal_days = orig_days
+
+
+def test_run_accepts_factor_timing_flag():
+    """run() 接受 factor_timing 参数（轻量：仅校验签名；完整 OOS 由 dry-run 脚本覆盖）。"""
+    import inspect
+    assert "factor_timing" in inspect.signature(wf.run).parameters
+
+
+def _make_gate_res(diffs, adaptive_total=10.0, equal_total=0.0, high_low_gap=10.0):
+    """构造供 factor_timing 门控 _gate 使用的合成 res：rows 的 adaptive_ret=diff、equal_ret=0。"""
+    rows = [{"day": f"d{i:02d}", "skipped": False,
+             "adaptive_ret": float(d), "equal_ret": 0.0} for i, d in enumerate(diffs)]
+    tert = [
+        {"label": "低权重档", "n": 1, "mean_ret": -high_low_gap / 2.0, "win_rate": 40.0},
+        {"label": "中权重档", "n": 1, "mean_ret": 0.0, "win_rate": 50.0},
+        {"label": "高权重档", "n": 1, "mean_ret": high_low_gap / 2.0, "win_rate": 60.0},
+    ]
+    return {
+        "rows": rows,
+        "adaptive_total_pct": adaptive_total,
+        "equal_total_pct": equal_total,
+        "tercile": tert,
+        "regime_table": {},
+        "adaptive_win_rate": 55.0,
+        "n_valid_days": len(rows),
+    }
+
+
+def test_gate_significant_when_daily_improvement_clear():
+    """重校显著性（选项 a）：逐日改进明显且为正 → 单侧 t 显著 → robust=True（其余门已满足）。"""
+    from walk_forward_factor_timing import _gate
+    diffs = [3.0] * 20 + [2.5] * 9  # 均值≈+2.84、方差极小 → t 远大于 1.96
+    g = _gate(_make_gate_res(diffs))
+    assert g["checks"]["mean_daily_diff_pp"] > 0
+    assert g["checks"]["sig_t_stat"] >= 1.96
+    assert g["significant"] is True
+    assert g["robust"] is True
+
+
+def test_gate_not_significant_when_daily_improvement_noise():
+    """重校显著性（选项 a）：逐日改进近似零（正均值但高噪声）→ t<1.96 → significant=False → robust=False。"""
+    from walk_forward_factor_timing import _gate
+    diffs = [0.5] * 15 + [-0.5] * 14  # 正均值但 t 远低于 1.96
+    g = _gate(_make_gate_res(diffs))
+    assert g["significant"] is False
+    assert g["robust"] is False
+
+
+def test_turnover_stable_mask():
+    """换手率守卫：生效因子集合不变 → 平均翻转比例 0、ok=True。"""
+    from walk_forward_factor_timing import _turnover
+    days = [f"2024010{i}" for i in range(1, 8)]
+    mask = {d: {"boll": True, "theme": True, "cctv": False, "relativity": True, "momentum": False}
+            for d in days}
+    t = _turnover(mask)
+    assert t["avg_flip_fraction"] == 0.0
+    assert t["ok"] is True
+
+
+def test_turnover_churning_mask():
+    """换手率守卫：生效因子集合每日全翻转 → 平均翻转比例高、ok=False。"""
+    from walk_forward_factor_timing import _turnover
+    days = [f"2024010{i}" for i in range(1, 8)]
+    mask_a = {"boll": True, "theme": True, "cctv": False, "relativity": True, "momentum": False}
+    mask_b = {"boll": False, "theme": False, "cctv": True, "relativity": False, "momentum": True}
+    mask = {d: (mask_a if i % 2 == 0 else mask_b) for i, d in enumerate(days)}
+    t = _turnover(mask)
+    assert t["avg_flip_fraction"] == 1.0  # 每天 5/5 翻转
+    assert t["ok"] is False
+
+
+def test_gate_turnover_gate_blocks_robust():
+    """选项 a 新增守卫：即便显著性等通过，若换手率超标则 robust=False。"""
+    from walk_forward_factor_timing import _gate
+    diffs = [3.0] * 20 + [2.5] * 9
+    days = [f"2024010{i}" for i in range(1, 8)]
+    mask_a = {"boll": True, "theme": True, "cctv": False, "relativity": True, "momentum": False}
+    mask_b = {"boll": False, "theme": False, "cctv": True, "relativity": False, "momentum": True}
+    mask_series = {d: (mask_a if i % 2 == 0 else mask_b) for i, d in enumerate(days)}
+    g = _gate(_make_gate_res(diffs), mask_series=mask_series)
+    assert g["turnover"]["ok"] is False
+    assert g["robust"] is False

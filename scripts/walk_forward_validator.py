@@ -47,10 +47,13 @@ if str(ROOT) not in sys.path:
 from smcore.strategy.adaptive_weights import (  # noqa: E402
     ALL_STRATEGIES,
     adaptive_weights,
+    _aggregate_excess,
     _norm_code,
     _norm_strategies,
+    CONFIG,
 )
 from smcore.utils.code import format_stock_code  # noqa: E402
+from smcore.strategy.factor_timing import factor_timing_mask_from_points  # noqa: E402
 
 try:  # STOCK_DATA_DIR 直接导出则用之，否则回退到 config 默认
     from smcore.strategy.adaptive_weights import STOCK_DATA_DIR  # noqa: E402
@@ -96,6 +99,109 @@ _exit_cfg = (RISK_CONFIG or {}).get("exit_sweep", {}) or {}
 _STOP_LOSS_GRID = _exit_cfg.get("stop_loss_pct", _STOP_LOSS_GRID_DEFAULT)
 _TRAILING_GRID = _exit_cfg.get("trailing_stop_pct", _TRAILING_GRID_DEFAULT)
 _HOLD_GRID = _exit_cfg.get("hold_days", _HOLD_GRID_DEFAULT)
+
+# ── 因子生效开关（factor timing overlay）────────────────────────────
+# 与「按 pw 贡献降权非 CCTV」同一思路：把"每日给各因子打分、只保留有效的方法"做成
+# 纯数据驱动的开关，经 walk-forward 稳健门控决定是否启用。打分用「信念 IC」——
+# 分配器当日给策略 s 的权重(已知) 与 s 选中票当日平均前向收益 的滚动 Spearman，
+# 与 factor_ic_monitor 同源口径（但此处独立实现，避免循环 import）。
+# window/min_n 读 CONFIG["factor_timing"]，零硬编码、可配置。
+import math  # noqa: E402  (Spearman 临界值/方差用)
+
+FACTOR_TIMING_WINDOW = 10      # 滚动窗口：最近 N 个严格早于 sd 的信号日
+FACTOR_TIMING_MIN_N = 5        # 窗口内合并点数下限（不足则不判，因子保留）
+FACTOR_TIMING_Z = 1.96         # Spearman 显著性临界 z（α=0.05）
+_FACTOR_TIMING_POINTS: dict = {}   # 进程内缓存：{strategy: [(day, w, ret)]}
+
+
+def _rank(xs: list[float]) -> list[float]:
+    """平均秩（处理并列），返回与 xs 等长秩列表。"""
+    order = sorted(range(len(xs)), key=lambda i: xs[i])
+    ranks = [0.0] * len(xs)
+    i = 0
+    while i < len(xs):
+        j = i
+        while j + 1 < len(xs) and xs[order[j + 1]] == xs[order[i]]:
+            j += 1
+        avg = (i + j) / 2.0 + 1.0
+        for k in range(i, j + 1):
+            ranks[order[k]] = avg
+        i = j + 1
+    return ranks
+
+
+def _spearman_ic(xs: list[float], ys: list[float]) -> float | None:
+    """手写 Spearman 秩相关（不依赖 scipy）；样本<3 或任一方无变化返回 None。"""
+    n = len(xs)
+    if n != len(ys) or n < 3:
+        return None
+    rx, ry = _rank(xs), _rank(ys)
+    mx, my = sum(rx) / n, sum(ry) / n
+    cov = sum((rx[i] - mx) * (ry[i] - my) for i in range(n))
+    vx = sum((rx[i] - mx) ** 2 for i in range(n))
+    vy = sum((ry[i] - my) ** 2 for i in range(n))
+    if vx <= 0 or vy <= 0:
+        return None
+    return cov / math.sqrt(vx * vy)
+
+
+def _compute_conviction_points() -> dict[str, list[tuple[str, float, float]]]:
+    """{strategy: [(day, w_s, day_avg_ret_s)]}：分配器权重 vs 该策略当日选中票平均前向收益。
+
+    与 factor_ic_monitor.strategy_conviction_points 同源，但此处 factor_timing 恒为关、
+    不 import factor_ic_monitor（避免循环依赖）。仅用于生成因子开关的因果打分，不参与权重计算。
+    """
+    pts: dict[str, list[tuple[str, float, float]]] = {s: [] for s in ALL_STRATEGIES}
+    for sd in _all_signal_days():
+        weights, _ = _weights_for_day(sd)  # factor_timing 默认关，避免回归
+        picks = _load_day_picks(sd)
+        if not picks:
+            continue
+        by_strat: dict[str, list[float]] = {s: [] for s in ALL_STRATEGIES}
+        for p in picks:
+            rp = p.get("return_pct")
+            if rp is None:
+                continue
+            for s in p.get("sources", set()):
+                if s in by_strat:
+                    by_strat[s].append(float(rp))
+        for s in ALL_STRATEGIES:
+            bucket = by_strat[s]
+            if bucket:
+                pts[s].append((sd, float(weights.get(s, 0.0)), sum(bucket) / len(bucket)))
+    return pts
+
+
+def _ensure_factor_timing_points() -> dict:
+    global _FACTOR_TIMING_POINTS
+    if not _FACTOR_TIMING_POINTS:
+        _FACTOR_TIMING_POINTS = _compute_conviction_points()
+    return _FACTOR_TIMING_POINTS
+
+
+def _factor_timing_mask(sd: str) -> dict[str, bool]:
+    """返回 {strategy: 是否生效}。委托 smcore.strategy.factor_timing.factor_timing_mask_from_points
+    （算法单源，避免与生产路径分叉）。窗口内点数不足 → 保留（无证据不判失效）；
+    否则仅当信念 IC 显著为正才生效，负/不显著 → 关闭。window/min_n 取 CONFIG。
+    """
+    ft_cfg = CONFIG.get("factor_timing") or {}
+    window = int(ft_cfg.get("window", FACTOR_TIMING_WINDOW))
+    min_n = int(ft_cfg.get("min_n", FACTOR_TIMING_MIN_N))
+    pts = _ensure_factor_timing_points()
+    past = [d for d in _all_signal_days() if d < sd][-window:]
+    return factor_timing_mask_from_points(pts, past, min_n=min_n, z=FACTOR_TIMING_Z)
+
+
+def factor_timing_mask_series(days: list[str] | None = None) -> dict[str, dict[str, bool]]:
+    """返回 {sd: {strategy: 是否生效}}，供因子生效开关门控脚本计算"换手率"。
+
+    复用 _factor_timing_mask（信念 IC 点已缓存，首次昂贵计算后命中缓存，逐日 Spearman 廉价）。
+    与 wf.run(factor_timing=True) 内部每日起作用的开关完全一致（同一份窗口 IC 点与临界 z），
+    故可据其直接衡量"生效因子集合"在相邻信号日间的翻转频率，作为稳定性/换手守卫。
+    """
+    if days is None:
+        days = _all_signal_days()
+    return {sd: _factor_timing_mask(sd) for sd in days}
 
 
 def _all_daily_action_lists() -> list[Path]:
@@ -191,6 +297,34 @@ def _read_dal_sources(dal_path: Path) -> dict[str, set[str]]:
     return code2strat
 
 
+def _dal_position_map(sd: str) -> dict:
+    """读 DAL 的「建议仓位%」→ {code: pos%}。结果缓存；列缺失返回空 dict。
+
+    供 position_weighted 模式在 causal_edge 里按仓位加权聚合策略 edge 使用。
+    """
+    cached = _DAL_POS_CACHE.get(sd)
+    if cached is not None:
+        return cached
+    out: dict = {}
+    dal = STOCK_DATA_DIR / f"Daily-Action-List-{sd}.csv"
+    if dal.exists():
+        try:
+            d = pd.read_csv(dal, encoding="utf-8-sig")
+            if "股票代码" in d.columns and "建议仓位%" in d.columns:
+                for _, r in d.iterrows():
+                    c = _norm_code(r.get("股票代码"))
+                    if not c:
+                        continue
+                    try:
+                        out[c] = float(r.get("建议仓位%") or 0)
+                    except (TypeError, ValueError):
+                        out[c] = 0.0
+        except Exception:
+            pass
+    _DAL_POS_CACHE[sd] = out
+    return out
+
+
 def _multi_backtest_records(sd: str) -> list[dict]:
     """读取生产 Multi-Backtest trades；返回 [] 表示缺失或空。"""
     tr = STOCK_DATA_DIR / f"Multi-Backtest-{sd}-trades.csv"
@@ -264,6 +398,8 @@ _DAY_RECORDS_CACHE: dict = {}
 # 否则 sweep_exits 对回补日全部拿到同一份 naive 记录，"最优出场参数"是空转假象。
 _EXIT_INDEPENDENT_DAYS: set[str] = set()
 _BACKFILL_DAYS: set[str] = set()
+# DAL「建议仓位%」映射缓存（position_weighted 模式读取，进程内复用）
+_DAL_POS_CACHE: dict = {}
 
 
 def _day_records_key(exit_kwargs) -> str | None:
@@ -338,28 +474,31 @@ def _all_signal_days() -> list[str]:
     return sorted(days)
 
 
-def causal_edge(cutoff: str, window: int = EDGE_WINDOW) -> dict:
+def causal_edge(cutoff: str, window: int = EDGE_WINDOW, position_weighted: bool = False) -> dict:
     """只用严格早于 cutoff 的信号日（取最近 window 个）算策略 edge。
 
     每策略含 {n, avg_return, win_rate, edge, std}（std=总体标准差，供动态收缩使用）。
+    position_weighted：开启时按 DAL「建议仓位%」加权聚合（与 adaptive_weights 同源口径），
+    用于检验「按 pw 贡献降权非 CCTV」是否稳健优于等权聚合。
     """
-    from smcore.strategy.adaptive_weights import _sd
     past = [d for d in _all_signal_days() if d < cutoff]
     past = past[-window:]
-    strat_rets: dict[str, list[float]] = {s: [] for s in ALL_STRATEGIES}
+    strat_pairs: dict[str, list[tuple[float, float]]] = {s: [] for s in ALL_STRATEGIES}
     for sd in past:
+        pos_sd = _dal_position_map(sd) if position_weighted else None
         for rec in _day_records(sd):
             for s in rec["sources"]:
-                if s in strat_rets:
-                    strat_rets[s].append(rec["return_pct"])
+                if s not in strat_pairs:
+                    continue
+                e = rec["return_pct"]
+                p = pos_sd.get(rec["code"], 0.0) if position_weighted else None
+                strat_pairs[s].append((e, p))
     edge: dict[str, dict] = {}
-    for s, rs in strat_rets.items():
-        n = len(rs)
-        avg = sum(rs) / n if n else 0.0
-        win = (sum(1 for x in rs if x > 0) / n) if n else 0.0
-        edge[s] = {"n": n, "avg_return": round(avg, 3),
-                   "win_rate": round(win * 100, 1), "edge": avg,
-                   "std": round(_sd(rs), 3)}
+    for s, prs in strat_pairs.items():
+        e_val, win, n, sd_val = _aggregate_excess(prs, position_weighted)
+        edge[s] = {"n": n, "avg_return": round(e_val, 3),
+                   "win_rate": win, "edge": e_val,
+                   "std": round(sd_val, 3)}
     return edge
 
 
@@ -398,15 +537,30 @@ def _load_day_picks(sd: str, exit_kwargs=None) -> list[dict]:
     return picks
 
 
-def _weights_for_day(sd: str, shrinkage=None, floor=None, zero_negative_edge=True) -> tuple[dict, bool]:
-    """返回 (策略->权重%, cold_start)。"""
-    edge = causal_edge(sd)
+def _weights_for_day(sd: str, shrinkage=None, floor=None, zero_negative_edge=True,
+                     position_weighted=False, factor_timing=False) -> tuple[dict, bool]:
+    """返回 (策略->权重%, cold_start)。
+
+    factor_timing=True：在基权重之上套用「因子生效开关」——把近期信念 IC 非显著为正的
+    策略权重清零（其余按比例重分配）。仅当所有因子都被关时才回退等权，避免空分配。
+    """
+    edge = causal_edge(sd, position_weighted=position_weighted)
     total_n = sum(e["n"] for e in edge.values())
     if total_n < MIN_N:
         eq = round(100 / len(ALL_STRATEGIES))
         return {s: eq for s in ALL_STRATEGIES}, True
-    return adaptive_weights(edge, shrinkage=shrinkage, floor=floor,
-                            zero_negative_edge=zero_negative_edge), False
+    weights = adaptive_weights(edge, shrinkage=shrinkage, floor=floor,
+                               zero_negative_edge=zero_negative_edge)
+    if factor_timing:
+        mask = _factor_timing_mask(sd)
+        for s in list(weights):
+            if not mask.get(s, True):
+                weights[s] = 0.0
+        # 全关则回退等权（避免空分配）
+        if sum(weights.values()) <= 0:
+            eq = round(100 / len(ALL_STRATEGIES))
+            return {s: eq for s in ALL_STRATEGIES}, True
+    return weights, False
 
 
 def _day_returns(shrinkage, floor, zero_negative_edge, sd, exit_kwargs=None) -> tuple[float, float] | None:
@@ -506,34 +660,49 @@ def _regime_robust_gate(regime_table: dict, enabled: bool = True,
     return {"robust": robust, "diverse": diverse, "qualified": qualified, "beat": beat}
 
 
-def run(shrinkage=None, floor=None, zero_negative_edge=True, dynamic=False) -> dict:
+def run(shrinkage=None, floor=None, zero_negative_edge=True, dynamic=False,
+        position_weighted=False, factor_timing: bool | None = None) -> dict:
     """样本外验证主入口。
 
     - dynamic=True：启用「证据强度动态收缩」。shrinkage 保持 None 穿透给
       adaptive_weights（其内部按 CONFIG.shrinkage_dynamic=True 计算逐策略 dict），
       进程内临时置位、结束即恢复。floor 走 _resolve_floor（可显式传参）。
+    - position_weighted=True：因果 edge 按 DAL「建议仓位%」加权聚合（见 adaptive_weights）。
+    - factor_timing=True/False：显式套用 / 不套用「因子生效开关」（见 _factor_timing_mask）。
+      默认 None → 关：**不读 CONFIG**，避免"启用生产开关"扰动通用 OOS 口径 / 回归测试 /
+      月度权重重验；生产行为由 compute_adaptive_allocation 读 CONFIG 决定（2026-09-16 解耦）。
     - 其余情况保持原语义（_eff 解析缺省为 CONFIG 常数）。
     """
     from smcore.strategy.adaptive_weights import CONFIG as _AW_CONFIG
+    # 解耦：默认关，不读 CONFIG（门控脚本显式传 True/False 检验提案模式）
+    if factor_timing is None:
+        factor_timing = False
     if dynamic:
         _orig = _AW_CONFIG.get("shrinkage_dynamic", False)
         _AW_CONFIG["shrinkage_dynamic"] = True
         eff_floor = _resolve_floor(floor, zero_negative_edge)
         try:
-            return _run_impl(shrinkage, eff_floor, zero_negative_edge)
+            return _run_impl(shrinkage, eff_floor, zero_negative_edge,
+                            position_weighted=position_weighted,
+                            factor_timing=factor_timing)
         finally:
             _AW_CONFIG["shrinkage_dynamic"] = _orig
     shrinkage, eff_floor = _eff(shrinkage, floor, zero_negative_edge)
-    return _run_impl(shrinkage, eff_floor, zero_negative_edge)
+    return _run_impl(shrinkage, eff_floor, zero_negative_edge,
+                    position_weighted=position_weighted,
+                    factor_timing=factor_timing)
 
 
-def _run_impl(shrinkage: float, eff_floor: float, zero_negative_edge: bool) -> dict:
+def _run_impl(shrinkage: float, eff_floor: float, zero_negative_edge: bool,
+             position_weighted: bool = False, factor_timing: bool = False) -> dict:
     days = _all_signal_days()
     rows = []
     all_pairs = []  # (causal_weight, return_pct) 样本外单调性
     backfilled_days = 0
     for sd in days:
-        weights, cold = _weights_for_day(sd, shrinkage, eff_floor, zero_negative_edge)
+        weights, cold = _weights_for_day(sd, shrinkage, eff_floor, zero_negative_edge,
+                                        position_weighted=position_weighted,
+                                        factor_timing=factor_timing)
         picks = _load_day_picks(sd)
         if not picks:
             rows.append({"day": sd, "skipped": True, "n": 0,

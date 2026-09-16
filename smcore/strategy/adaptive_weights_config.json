@@ -24,7 +24,13 @@
     "hold_days": 10,
     "benchmark": "hs300",
     "blend_w_backtest": 0.5,
-    "min_n_confident": 30
+    "min_n_confident": 30,
+    "position_weighted": false
+  },
+  "factor_timing": {
+    "enabled": true,
+    "window": 10,
+    "min_n": 5
   },
   "monotonicity_tol_pp": 2.5,
   "sweep_edge_tol_pp": 2.5
