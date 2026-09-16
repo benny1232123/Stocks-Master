@@ -1,0 +1,679 @@
+{
+  "generated_at": "2026-09-16 23:48:40",
+  "gate": {
+    "min_improve_pp": 2.0,
+    "t_crit": 1.31,
+    "min_regimes": 2,
+    "min_days_per_regime": 3,
+    "turn_tol": 0.1,
+    "gated_strategy": "momentum"
+  },
+  "allocator": {
+    "shrinkage": 0.4,
+    "floor": 3.0,
+    "cfg_floor": 0.0
+  },
+  "summary": {
+    "base_cum": -87.82,
+    "base_turnover": 2.178,
+    "n_days": 88,
+    "zero::boll": {
+      "n_days": 88,
+      "cum_prop": -88.23,
+      "cum_base": -87.82,
+      "improve_pp": -0.41,
+      "mean_daily_diff": -0.0375,
+      "t_stat": -0.6796,
+      "significant": false,
+      "first_half_ok": true,
+      "second_half_ok": false,
+      "regime_table": {
+        "下行防御": {
+          "n_days": 40,
+          "prop_pct": -50.01,
+          "base_pct": -48.7,
+          "diff_pp": -1.31
+        },
+        "趋势上行": {
+          "n_days": 33,
+          "prop_pct": -74.2,
+          "base_pct": -74.41,
+          "diff_pp": 0.21
+        },
+        "震荡轮动": {
+          "n_days": 15,
+          "prop_pct": -8.76,
+          "base_pct": -7.2,
+          "diff_pp": -1.56
+        }
+      },
+      "regime_diverse": true,
+      "regime_beat": 1,
+      "regime_ok": false,
+      "turnover_prop": 2.1035,
+      "turnover_base": 2.178,
+      "turnover_ok": true,
+      "struct_churn_vs_base": 0.0769,
+      "robust": false,
+      "arith_cum_pp": -3.3,
+      "win_rate": 0.148
+    },
+    "zero::theme": {
+      "n_days": 88,
+      "cum_prop": -76.68,
+      "cum_base": -87.82,
+      "improve_pp": 11.14,
+      "mean_daily_diff": 0.7172,
+      "t_stat": 3.397,
+      "significant": true,
+      "first_half_ok": true,
+      "second_half_ok": true,
+      "regime_table": {
+        "下行防御": {
+          "n_days": 40,
+          "prop_pct": -46.6,
+          "base_pct": -48.7,
+          "diff_pp": 2.1
+        },
+        "趋势上行": {
+          "n_days": 33,
+          "prop_pct": -57.3,
+          "base_pct": -74.41,
+          "diff_pp": 17.11
+        },
+        "震荡轮动": {
+          "n_days": 15,
+          "prop_pct": 2.31,
+          "base_pct": -7.2,
+          "diff_pp": 9.51
+        }
+      },
+      "regime_diverse": true,
+      "regime_beat": 3,
+      "regime_ok": true,
+      "turnover_prop": 2.0989,
+      "turnover_base": 2.178,
+      "turnover_ok": true,
+      "struct_churn_vs_base": 0.3765,
+      "robust": true,
+      "arith_cum_pp": 63.11,
+      "win_rate": 0.295
+    },
+    "zero::relativity": {
+      "n_days": 88,
+      "cum_prop": -87.32,
+      "cum_base": -87.82,
+      "improve_pp": 0.49,
+      "mean_daily_diff": 0.0456,
+      "t_stat": 0.8072,
+      "significant": false,
+      "first_half_ok": true,
+      "second_half_ok": true,
+      "regime_table": {
+        "下行防御": {
+          "n_days": 40,
+          "prop_pct": -48.37,
+          "base_pct": -48.7,
+          "diff_pp": 0.33
+        },
+        "趋势上行": {
+          "n_days": 33,
+          "prop_pct": -74.31,
+          "base_pct": -74.41,
+          "diff_pp": 0.1
+        },
+        "震荡轮动": {
+          "n_days": 15,
+          "prop_pct": -4.41,
+          "base_pct": -7.2,
+          "diff_pp": 2.79
+        }
+      },
+      "regime_diverse": true,
+      "regime_beat": 3,
+      "regime_ok": true,
+      "turnover_prop": 2.1801,
+      "turnover_base": 2.178,
+      "turnover_ok": true,
+      "struct_churn_vs_base": 0.0322,
+      "robust": false,
+      "arith_cum_pp": 4.01,
+      "win_rate": 0.057
+    },
+    "zero::momentum": {
+      "n_days": 88,
+      "cum_prop": -86.66,
+      "cum_base": -87.82,
+      "improve_pp": 1.16,
+      "mean_daily_diff": 0.1026,
+      "t_stat": 1.0795,
+      "significant": false,
+      "first_half_ok": false,
+      "second_half_ok": true,
+      "regime_table": {
+        "下行防御": {
+          "n_days": 40,
+          "prop_pct": -43.82,
+          "base_pct": -48.7,
+          "diff_pp": 4.88
+        },
+        "趋势上行": {
+          "n_days": 33,
+          "prop_pct": -74.41,
+          "base_pct": -74.41,
+          "diff_pp": 0.0
+        },
+        "震荡轮动": {
+          "n_days": 15,
+          "prop_pct": -7.2,
+          "base_pct": -7.2,
+          "diff_pp": 0.0
+        }
+      },
+      "regime_diverse": true,
+      "regime_beat": 1,
+      "regime_ok": false,
+      "turnover_prop": 2.1653,
+      "turnover_base": 2.178,
+      "turnover_ok": true,
+      "struct_churn_vs_base": 0.0392,
+      "robust": false,
+      "arith_cum_pp": 9.03,
+      "win_rate": 0.057
+    },
+    "zero::cctv": {
+      "n_days": 88,
+      "cum_prop": -75.04,
+      "cum_base": -87.82,
+      "improve_pp": 12.78,
+      "mean_daily_diff": 0.7179,
+      "t_stat": 1.0213,
+      "significant": false,
+      "first_half_ok": true,
+      "second_half_ok": false,
+      "regime_table": {
+        "下行防御": {
+          "n_days": 40,
+          "prop_pct": -36.1,
+          "base_pct": -48.7,
+          "diff_pp": 12.6
+        },
+        "趋势上行": {
+          "n_days": 33,
+          "prop_pct": -61.96,
+          "base_pct": -74.41,
+          "diff_pp": 12.45
+        },
+        "震荡轮动": {
+          "n_days": 15,
+          "prop_pct": 2.67,
+          "base_pct": -7.2,
+          "diff_pp": 9.87
+        }
+      },
+      "regime_diverse": true,
+      "regime_beat": 3,
+      "regime_ok": true,
+      "turnover_prop": 1.833,
+      "turnover_base": 2.178,
+      "turnover_ok": true,
+      "struct_churn_vs_base": 1.667,
+      "robust": false,
+      "arith_cum_pp": 63.18,
+      "win_rate": 0.386
+    },
+    "floor::boll": {
+      "n_days": 88,
+      "cum_prop": -88.27,
+      "cum_base": -87.82,
+      "improve_pp": -0.45,
+      "mean_daily_diff": -0.0419,
+      "t_stat": -0.9101,
+      "significant": false,
+      "first_half_ok": true,
+      "second_half_ok": false,
+      "regime_table": {
+        "下行防御": {
+          "n_days": 40,
+          "prop_pct": -49.89,
+          "base_pct": -48.7,
+          "diff_pp": -1.19
+        },
+        "趋势上行": {
+          "n_days": 33,
+          "prop_pct": -74.44,
+          "base_pct": -74.41,
+          "diff_pp": -0.03
+        },
+        "震荡轮动": {
+          "n_days": 15,
+          "prop_pct": -8.42,
+          "base_pct": -7.2,
+          "diff_pp": -1.22
+        }
+      },
+      "regime_diverse": true,
+      "regime_beat": 0,
+      "regime_ok": false,
+      "turnover_prop": 2.178,
+      "turnover_base": 2.178,
+      "turnover_ok": true,
+      "struct_churn_vs_base": 0.0,
+      "robust": false,
+      "arith_cum_pp": -3.69,
+      "win_rate": 0.136
+    },
+    "floor::theme": {
+      "n_days": 88,
+      "cum_prop": -86.28,
+      "cum_base": -87.82,
+      "improve_pp": 1.54,
+      "mean_daily_diff": 0.1438,
+      "t_stat": 1.4365,
+      "significant": true,
+      "first_half_ok": true,
+      "second_half_ok": true,
+      "regime_table": {
+        "下行防御": {
+          "n_days": 40,
+          "prop_pct": -51.15,
+          "base_pct": -48.7,
+          "diff_pp": -2.45
+        },
+        "趋势上行": {
+          "n_days": 33,
+          "prop_pct": -71.47,
+          "base_pct": -74.41,
+          "diff_pp": 2.94
+        },
+        "震荡轮动": {
+          "n_days": 15,
+          "prop_pct": -1.54,
+          "base_pct": -7.2,
+          "diff_pp": 5.66
+        }
+      },
+      "regime_diverse": true,
+      "regime_beat": 2,
+      "regime_ok": true,
+      "turnover_prop": 2.178,
+      "turnover_base": 2.178,
+      "turnover_ok": true,
+      "struct_churn_vs_base": 0.0,
+      "robust": false,
+      "arith_cum_pp": 12.65,
+      "win_rate": 0.239
+    },
+    "floor::relativity": {
+      "n_days": 88,
+      "cum_prop": -87.94,
+      "cum_base": -87.82,
+      "improve_pp": -0.12,
+      "mean_daily_diff": -0.0094,
+      "t_stat": -0.2688,
+      "significant": false,
+      "first_half_ok": false,
+      "second_half_ok": true,
+      "regime_table": {
+        "下行防御": {
+          "n_days": 40,
+          "prop_pct": -48.37,
+          "base_pct": -48.7,
+          "diff_pp": 0.33
+        },
+        "趋势上行": {
+          "n_days": 33,
+          "prop_pct": -74.33,
+          "base_pct": -74.41,
+          "diff_pp": 0.08
+        },
+        "震荡轮动": {
+          "n_days": 15,
+          "prop_pct": -8.97,
+          "base_pct": -7.2,
+          "diff_pp": -1.77
+        }
+      },
+      "regime_diverse": true,
+      "regime_beat": 2,
+      "regime_ok": true,
+      "turnover_prop": 2.178,
+      "turnover_base": 2.178,
+      "turnover_ok": true,
+      "struct_churn_vs_base": 0.0,
+      "robust": false,
+      "arith_cum_pp": -0.83,
+      "win_rate": 0.045
+    },
+    "floor::momentum": {
+      "n_days": 88,
+      "cum_prop": -86.78,
+      "cum_base": -87.82,
+      "improve_pp": 1.04,
+      "mean_daily_diff": 0.0919,
+      "t_stat": 1.1703,
+      "significant": false,
+      "first_half_ok": false,
+      "second_half_ok": true,
+      "regime_table": {
+        "下行防御": {
+          "n_days": 40,
+          "prop_pct": -44.32,
+          "base_pct": -48.7,
+          "diff_pp": 4.38
+        },
+        "趋势上行": {
+          "n_days": 33,
+          "prop_pct": -74.41,
+          "base_pct": -74.41,
+          "diff_pp": 0.0
+        },
+        "震荡轮动": {
+          "n_days": 15,
+          "prop_pct": -7.2,
+          "base_pct": -7.2,
+          "diff_pp": 0.0
+        }
+      },
+      "regime_diverse": true,
+      "regime_beat": 1,
+      "regime_ok": false,
+      "turnover_prop": 2.178,
+      "turnover_base": 2.178,
+      "turnover_ok": true,
+      "struct_churn_vs_base": 0.0,
+      "robust": false,
+      "arith_cum_pp": 8.09,
+      "win_rate": 0.057
+    },
+    "floor::cctv": {
+      "n_days": 88,
+      "cum_prop": -88.27,
+      "cum_base": -87.82,
+      "improve_pp": -0.45,
+      "mean_daily_diff": -0.0405,
+      "t_stat": -0.1392,
+      "significant": false,
+      "first_half_ok": true,
+      "second_half_ok": false,
+      "regime_table": {
+        "下行防御": {
+          "n_days": 40,
+          "prop_pct": -47.33,
+          "base_pct": -48.7,
+          "diff_pp": 1.37
+        },
+        "趋势上行": {
+          "n_days": 33,
+          "prop_pct": -78.52,
+          "base_pct": -74.41,
+          "diff_pp": -4.11
+        },
+        "震荡轮动": {
+          "n_days": 15,
+          "prop_pct": 3.64,
+          "base_pct": -7.2,
+          "diff_pp": 10.84
+        }
+      },
+      "regime_diverse": true,
+      "regime_beat": 2,
+      "regime_ok": true,
+      "turnover_prop": 2.178,
+      "turnover_base": 2.178,
+      "turnover_ok": true,
+      "struct_churn_vs_base": 0.0,
+      "robust": false,
+      "arith_cum_pp": -3.56,
+      "win_rate": 0.273
+    },
+    "zero::boll__exempty": {
+      "n_days": 87,
+      "cum_prop": -88.23,
+      "cum_base": -87.78,
+      "improve_pp": -0.45,
+      "mean_daily_diff": -0.0411,
+      "t_stat": -0.74,
+      "significant": false,
+      "first_half_ok": true,
+      "second_half_ok": false,
+      "regime_table": {
+        "下行防御": {
+          "n_days": 40,
+          "prop_pct": -50.01,
+          "base_pct": -48.7,
+          "diff_pp": -1.31
+        },
+        "趋势上行": {
+          "n_days": 33,
+          "prop_pct": -74.2,
+          "base_pct": -74.41,
+          "diff_pp": 0.21
+        },
+        "震荡轮动": {
+          "n_days": 14,
+          "prop_pct": -8.76,
+          "base_pct": -6.95,
+          "diff_pp": -1.81
+        }
+      },
+      "regime_diverse": true,
+      "regime_beat": 1,
+      "regime_ok": false,
+      "turnover_prop": 2.1277,
+      "turnover_base": 2.0881,
+      "turnover_ok": true,
+      "struct_churn_vs_base": 0.0663,
+      "robust": false,
+      "arith_cum_pp": -3.58,
+      "win_rate": 0.138
+    },
+    "zero::theme__exempty": {
+      "n_days": 82,
+      "cum_prop": -76.68,
+      "cum_base": -80.35,
+      "improve_pp": 3.67,
+      "mean_daily_diff": 0.231,
+      "t_stat": 1.2819,
+      "significant": false,
+      "first_half_ok": true,
+      "second_half_ok": true,
+      "regime_table": {
+        "下行防御": {
+          "n_days": 36,
+          "prop_pct": -46.6,
+          "base_pct": -41.51,
+          "diff_pp": -5.09
+        },
+        "趋势上行": {
+          "n_days": 31,
+          "prop_pct": -57.3,
+          "base_pct": -63.79,
+          "diff_pp": 6.49
+        },
+        "震荡轮动": {
+          "n_days": 15,
+          "prop_pct": 2.31,
+          "base_pct": -7.2,
+          "diff_pp": 9.51
+        }
+      },
+      "regime_diverse": true,
+      "regime_beat": 2,
+      "regime_ok": true,
+      "turnover_prop": 2.1975,
+      "turnover_base": 2.13,
+      "turnover_ok": true,
+      "struct_churn_vs_base": 0.2943,
+      "robust": false,
+      "arith_cum_pp": 18.94,
+      "win_rate": 0.256
+    },
+    "zero::relativity__exempty": {
+      "n_days": 87,
+      "cum_prop": -87.32,
+      "cum_base": -87.16,
+      "improve_pp": -0.17,
+      "mean_daily_diff": -0.0131,
+      "t_stat": -0.3573,
+      "significant": false,
+      "first_half_ok": false,
+      "second_half_ok": true,
+      "regime_table": {
+        "下行防御": {
+          "n_days": 40,
+          "prop_pct": -48.37,
+          "base_pct": -48.7,
+          "diff_pp": 0.33
+        },
+        "趋势上行": {
+          "n_days": 33,
+          "prop_pct": -74.31,
+          "base_pct": -74.41,
+          "diff_pp": 0.1
+        },
+        "震荡轮动": {
+          "n_days": 14,
+          "prop_pct": -4.41,
+          "base_pct": -2.16,
+          "diff_pp": -2.25
+        }
+      },
+      "regime_diverse": true,
+      "regime_beat": 2,
+      "regime_ok": true,
+      "turnover_prop": 2.1707,
+      "turnover_base": 2.1743,
+      "turnover_ok": true,
+      "struct_churn_vs_base": 0.0096,
+      "robust": false,
+      "arith_cum_pp": -1.14,
+      "win_rate": 0.046
+    },
+    "zero::momentum__exempty": {
+      "n_days": 88,
+      "cum_prop": -86.66,
+      "cum_base": -87.82,
+      "improve_pp": 1.16,
+      "mean_daily_diff": 0.1026,
+      "t_stat": 1.0795,
+      "significant": false,
+      "first_half_ok": false,
+      "second_half_ok": true,
+      "regime_table": {
+        "下行防御": {
+          "n_days": 40,
+          "prop_pct": -43.82,
+          "base_pct": -48.7,
+          "diff_pp": 4.88
+        },
+        "趋势上行": {
+          "n_days": 33,
+          "prop_pct": -74.41,
+          "base_pct": -74.41,
+          "diff_pp": 0.0
+        },
+        "震荡轮动": {
+          "n_days": 15,
+          "prop_pct": -7.2,
+          "base_pct": -7.2,
+          "diff_pp": 0.0
+        }
+      },
+      "regime_diverse": true,
+      "regime_beat": 1,
+      "regime_ok": false,
+      "turnover_prop": 2.1653,
+      "turnover_base": 2.178,
+      "turnover_ok": true,
+      "struct_churn_vs_base": 0.0392,
+      "robust": false,
+      "arith_cum_pp": 9.03,
+      "win_rate": 0.057
+    },
+    "zero::cctv__exempty": {
+      "n_days": 70,
+      "cum_prop": -75.04,
+      "cum_base": -73.8,
+      "improve_pp": -1.24,
+      "mean_daily_diff": 0.009,
+      "t_stat": 0.0141,
+      "significant": false,
+      "first_half_ok": true,
+      "second_half_ok": false,
+      "regime_table": {
+        "下行防御": {
+          "n_days": 31,
+          "prop_pct": -36.1,
+          "base_pct": -39.36,
+          "diff_pp": 3.26
+        },
+        "趋势上行": {
+          "n_days": 26,
+          "prop_pct": -61.96,
+          "base_pct": -52.86,
+          "diff_pp": -9.1
+        },
+        "震荡轮动": {
+          "n_days": 13,
+          "prop_pct": 2.67,
+          "base_pct": -8.36,
+          "diff_pp": 11.03
+        }
+      },
+      "regime_diverse": true,
+      "regime_beat": 2,
+      "regime_ok": true,
+      "turnover_prop": 2.0961,
+      "turnover_base": 2.0459,
+      "turnover_ok": true,
+      "struct_churn_vs_base": 1.4957,
+      "robust": false,
+      "arith_cum_pp": 0.63,
+      "win_rate": 0.343
+    }
+  },
+  "allocator_diag": {
+    "boll": {
+      "mean_weight": 20.057,
+      "zero_weight_days_frac": 0.0,
+      "mean_sole_picks_per_day": 0.28,
+      "total_sole_picks": 25,
+      "empty_days_after_zero": 1
+    },
+    "theme": {
+      "mean_weight": 15.636,
+      "zero_weight_days_frac": 0.0,
+      "mean_sole_picks_per_day": 0.85,
+      "total_sole_picks": 75,
+      "empty_days_after_zero": 6
+    },
+    "relativity": {
+      "mean_weight": 16.148,
+      "zero_weight_days_frac": 0.0,
+      "mean_sole_picks_per_day": 0.07,
+      "total_sole_picks": 6,
+      "empty_days_after_zero": 1
+    },
+    "momentum": {
+      "mean_weight": 20.716,
+      "zero_weight_days_frac": 0.0,
+      "mean_sole_picks_per_day": 0.24,
+      "total_sole_picks": 21,
+      "empty_days_after_zero": 0
+    },
+    "cctv": {
+      "mean_weight": 27.443,
+      "zero_weight_days_frac": 0.0,
+      "mean_sole_picks_per_day": 2.45,
+      "total_sole_picks": 216,
+      "empty_days_after_zero": 18
+    }
+  },
+  "interpretation": "momentum 并非长期零权重（均值 20.716、零权重日占比 0%），但融合层置零仍只带来 1.16pp ⇒ 其选票与其它策略**高度重叠**（日均仅 0.24 只票是它的独家贡献），策略层的 −14.1pp 劣势在融合层被稀释。",
+  "verdict": "【momentum】融合层未支持置零 → 维持现状（叠加策略层结论：只在策略层压权重，不动融合配置）",
+  "flagged_not_actionable": [
+    "theme"
+  ],
+  "note": "leave-one-out at fusion layer, production allocation口径, 未改配置"
+}
