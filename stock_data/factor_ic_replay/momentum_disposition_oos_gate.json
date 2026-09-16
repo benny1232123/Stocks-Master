@@ -1,0 +1,185 @@
+{
+  "generated_at": "2026-09-16 23:24:49",
+  "window_start": "2018-01-01",
+  "fwd": 10,
+  "rebal_every": 10,
+  "top_n": 30,
+  "cost_rt": 0.003,
+  "gate": {
+    "min_improve_pp": 2.0,
+    "t_crit": 1.31,
+    "max_avg_flip": 0.5,
+    "min_regimes": 2,
+    "regime_win": 20,
+    "bench_main": "full"
+  },
+  "n_windows": 172,
+  "stats": {
+    "momentum_vs_full": {
+      "prop": "momentum",
+      "bench": "full",
+      "cum_prop": -99.3,
+      "cum_bench": -30.2,
+      "improve_pp": -69.11,
+      "mean_daily_diff": -0.0247,
+      "t_stat": -5.3341,
+      "significant": false,
+      "first_half_ok": false,
+      "second_half_ok": false,
+      "regime_table": {
+        "下行防御": {
+          "n_windows": 75,
+          "prop_pct": -90.22,
+          "bench_pct": -30.02,
+          "diff_pp": -2.43
+        },
+        "趋势上行": {
+          "n_windows": 97,
+          "prop_pct": -92.89,
+          "bench_pct": -0.25,
+          "diff_pp": -2.51
+        }
+      },
+      "regime_diverse": true,
+      "regime_beat": 0,
+      "regime_ok": false,
+      "avg_flip": 1.3318,
+      "turnover_ok": false,
+      "robust": false,
+      "win_rate": 0.285
+    },
+    "reversal_vs_full": {
+      "prop": "reversal",
+      "bench": "full",
+      "cum_prop": -83.27,
+      "cum_bench": -30.2,
+      "improve_pp": -53.08,
+      "mean_daily_diff": -0.0084,
+      "t_stat": -3.8532,
+      "significant": false,
+      "first_half_ok": false,
+      "second_half_ok": false,
+      "regime_table": {
+        "下行防御": {
+          "n_windows": 75,
+          "prop_pct": -67.87,
+          "bench_pct": -30.02,
+          "diff_pp": -1.05
+        },
+        "趋势上行": {
+          "n_windows": 97,
+          "prop_pct": -47.94,
+          "bench_pct": -0.25,
+          "diff_pp": -0.67
+        }
+      },
+      "regime_diverse": true,
+      "regime_beat": 0,
+      "regime_ok": false,
+      "avg_flip": 1.6395,
+      "turnover_ok": false,
+      "robust": false,
+      "win_rate": 0.349
+    },
+    "momentum_vs_cond": {
+      "prop": "momentum",
+      "bench": "cond",
+      "cum_prop": -99.3,
+      "cum_bench": -85.2,
+      "improve_pp": -14.1,
+      "mean_daily_diff": -0.016,
+      "t_stat": -5.2784,
+      "significant": false,
+      "first_half_ok": false,
+      "second_half_ok": false,
+      "regime_table": {
+        "下行防御": {
+          "n_windows": 75,
+          "prop_pct": -90.22,
+          "bench_pct": -73.17,
+          "diff_pp": -1.18
+        },
+        "趋势上行": {
+          "n_windows": 97,
+          "prop_pct": -92.89,
+          "bench_pct": -44.85,
+          "diff_pp": -1.93
+        }
+      },
+      "regime_diverse": true,
+      "regime_beat": 0,
+      "regime_ok": false,
+      "avg_flip": 1.3318,
+      "turnover_ok": false,
+      "robust": false,
+      "win_rate": 0.291
+    },
+    "reversal_vs_cond": {
+      "prop": "reversal",
+      "bench": "cond",
+      "cum_prop": -83.27,
+      "cum_bench": -85.2,
+      "improve_pp": 1.93,
+      "mean_daily_diff": 0.0003,
+      "t_stat": 0.1845,
+      "significant": false,
+      "first_half_ok": false,
+      "second_half_ok": true,
+      "regime_table": {
+        "下行防御": {
+          "n_windows": 75,
+          "prop_pct": -67.87,
+          "bench_pct": -73.17,
+          "diff_pp": 0.2
+        },
+        "趋势上行": {
+          "n_windows": 97,
+          "prop_pct": -47.94,
+          "bench_pct": -44.85,
+          "diff_pp": -0.09
+        }
+      },
+      "regime_diverse": true,
+      "regime_beat": 1,
+      "regime_ok": false,
+      "avg_flip": 1.6395,
+      "turnover_ok": false,
+      "robust": false,
+      "win_rate": 0.512
+    },
+    "zero_gain_vs_momentum": {
+      "prop": "zero(不持仓)",
+      "bench": "momentum",
+      "improve_pp": 69.11,
+      "mean_daily_diff": 0.0247,
+      "t_stat": 5.3341
+    }
+  },
+  "excess_by_year": {
+    "momentum": {
+      "2018": -11.31,
+      "2019": -6.57,
+      "2020": -20.11,
+      "2021": -47.61,
+      "2022": -34.06,
+      "2023": -62.93,
+      "2024": -40.11,
+      "2025": -78.96,
+      "2026": -26.38
+    },
+    "reversal": {
+      "2018": -1.8,
+      "2019": -10.1,
+      "2020": -14.84,
+      "2021": -11.7,
+      "2022": -13.59,
+      "2023": -28.44,
+      "2024": 7.67,
+      "2025": -43.65,
+      "2026": -21.4
+    }
+  },
+  "verdict": "维持置零 / 把 momentum 权重压到最低档",
+  "action": "反用未过门 ⇒ 不做反用；置零/压权重有统计依据",
+  "momentum_negative_significant": true
+}

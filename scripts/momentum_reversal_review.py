@@ -54,6 +54,38 @@ COND_MIN_N = 100      # 条件域每日样本较少，放宽（默认 300 会把
 UNCOND_MIN_N = fe.MIN_N_DAY
 
 
+def build_conditional_universe(close: pd.DataFrame, high: pd.DataFrame,
+                               amount: pd.DataFrame, base_valid: pd.DataFrame,
+                               lb20: pd.DataFrame) -> tuple[pd.DataFrame, pd.DataFrame]:
+    """生产 `momentum` 策略的选股条件域掩码 + 打分矩阵（**单一真源**）。
+
+    条件与 `smcore/strategies/momentum.py` 对齐（见本模块 docstring）：
+    ret20>0、ret60≥0、MA20 上行、距20日高点 ≥ NEAR_HIGH、价 PRICE_LO~PRICE_HI、
+    成交额 ≥ MIN_AMOUNT、排除 30x/688x（**未剔 ST**：无历史名单）。
+
+    ⚠️ `scripts/momentum_disposition_oos_gate.py` 也调用本函数 —— 两份「动量宇宙」
+    必须同源，否则门控结论与复核结论不可比。
+
+    返回 (条件域掩码 strat, 打分矩阵 score)。
+    """
+    ret20 = close / close.shift(20) - 1
+    ret60 = close / close.shift(60) - 1
+    ma20 = close.rolling(20, min_periods=fe.ROLL_MIN).mean()
+    slope = ma20 / ma20.shift(20).replace(0.0, np.nan) - 1
+    high20 = high.rolling(20, min_periods=fe.ROLL_MIN).max()
+    dist = close / high20.replace(0.0, np.nan) - 1
+    clean = base_valid & (lb20 == 0)
+    board_ok = pd.DataFrame(True, index=close.index, columns=close.columns)
+    drop = [c for c in close.columns if str(c).startswith(("30", "688"))]
+    if drop:
+        board_ok[drop] = False
+    strat = (clean & board_ok & (ret20 > 0) & (ret60 >= 0) & (slope > 0)
+             & (dist >= NEAR_HIGH) & (close >= PRICE_LO) & (close <= PRICE_HI)
+             & (amount >= MIN_AMOUNT))
+    score = (ret20 * 100 * W_RET20 + ret60 * 100 * W_RET60 + slope * 100 * W_SLOPE)
+    return strat, score
+
+
 def _ic_stats(fac: pd.DataFrame, mask: pd.DataFrame, fwd_rank: pd.DataFrame,
               min_n: int, w0, label: str) -> dict:
     f = fac.where(mask)
@@ -127,23 +159,11 @@ def main() -> int:
     fwd_rank = fe.forward_rank_matrix(fwd)
     lb20 = fe.lookback_bad(bad, 20, {})
 
+    clean = base_valid & (lb20 == 0)
+    strat, score = build_conditional_universe(close, high, amount, base_valid, lb20)
+    # 无条件域对照臂仍需原始 ret20 / ret60（条件域构造内部已消费过它们）
     ret20 = close / close.shift(20) - 1
     ret60 = close / close.shift(60) - 1
-    ma20 = close.rolling(20, min_periods=fe.ROLL_MIN).mean()
-    slope = ma20 / ma20.shift(20).replace(0.0, np.nan) - 1
-    high20 = high.rolling(20, min_periods=fe.ROLL_MIN).max()
-    dist = close / high20.replace(0.0, np.nan) - 1
-
-    clean = base_valid & (lb20 == 0)
-    board_ok = pd.DataFrame(True, index=close.index, columns=close.columns)
-    drop = [c for c in close.columns if str(c).startswith(("30", "688"))]
-    if drop:
-        board_ok[drop] = False
-
-    strat = (clean & board_ok & (ret20 > 0) & (ret60 >= 0) & (slope > 0)
-             & (dist >= NEAR_HIGH) & (close >= PRICE_LO) & (close <= PRICE_HI)
-             & (amount >= MIN_AMOUNT))
-    score = (ret20 * 100 * W_RET20 + ret60 * 100 * W_RET60 + slope * 100 * W_SLOPE)
 
     w0 = pd.Timestamp(fe.WINDOW_START)
     idx = close.index[close.index >= w0]
