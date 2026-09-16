@@ -3,38 +3,38 @@
   {
    "date": "20260908",
    "summary": {
-    "num_trades": 1,
+    "num_trades": 4,
     "initial_capital": 100000.0,
-    "ending_total": 97926.62,
-    "total_return": -2.07,
-    "max_drawdown": -2.41,
+    "ending_total": 98465.96,
+    "total_return": -1.53,
+    "max_drawdown": -1.53,
     "win_rate": 0.0,
-    "avg_return": -2.13,
+    "avg_return": -3.23,
     "avg_win": 0.0,
-    "avg_loss": -2.13,
+    "avg_loss": -3.23,
     "profit_factor": 0.0,
-    "sharpe": -1.81,
+    "sharpe": -3.48,
     "strategies": "boll,theme",
     "signal_mode": "forward",
     "date": 20260908,
-    "run_date": 20260912,
+    "run_date": 20260915,
     "signal_start": "2026-09-08",
     "signal_end": "2026-09-08",
-    "hold_days": 4,
+    "hold_days": 7,
     "exit_mode": "boll_upper_take+take6%+trailing5%+MA60break",
     "size_mode": "adaptive_weight(权重)",
-    "vol_mode": "scaled_stop+pos0.74",
-    "dd_breaker_dd": 0.99,
+    "vol_mode": "scaled_stop+pos0.52",
+    "dd_breaker_dd": 0.96,
     "dd_breaker_extra_cash": 0,
-    "capital_scale": 0.74,
-    "cash_pct": 26,
+    "capital_scale": 0.52,
+    "cash_pct": 48,
     "signals_days": 1,
     "codes_count": 6,
     "start": "2026-09-08",
-    "end": "2026-09-12",
-    "bench_return": -1.07,
-    "bench_return_exposed": -0.79,
-    "excess_return": -1.28
+    "end": "2026-09-15",
+    "bench_return": -2.38,
+    "bench_return_exposed": -1.24,
+    "excess_return": -0.29
    },
    "equity": [
     {
@@ -727,27 +727,43 @@
     },
     {
      "date": "2026-09-09",
-     "cash": 26060.09,
-     "holding_value": 72135.0,
-     "total": 98195.09,
+     "cash": 48469.76,
+     "holding_value": 51324.0,
+     "total": 99793.76,
      "peak": 100000.0,
-     "drawdown": -1.804910000000004
+     "drawdown": -0.2062400000000052
     },
     {
      "date": "2026-09-10",
-     "cash": 34358.62,
-     "holding_value": 63232.0,
-     "total": 97590.62,
+     "cash": 58844.17,
+     "holding_value": 40718.0,
+     "total": 99562.17,
      "peak": 100000.0,
-     "drawdown": -2.4093800000000045
+     "drawdown": -0.4378300000000017
     },
     {
      "date": "2026-09-11",
-     "cash": 34358.62,
-     "holding_value": 63568.0,
-     "total": 97926.62,
+     "cash": 58844.17,
+     "holding_value": 40226.0,
+     "total": 99070.17,
      "peak": 100000.0,
-     "drawdown": -2.0733800000000047
+     "drawdown": -0.9298300000000018
+    },
+    {
+     "date": "2026-09-14",
+     "cash": 81596.31,
+     "holding_value": 17319.0,
+     "total": 98915.31,
+     "peak": 100000.0,
+     "drawdown": -1.0846900000000024
+    },
+    {
+     "date": "2026-09-15",
+     "cash": 98465.96,
+     "holding_value": 0.0,
+     "total": 98465.96,
+     "peak": 100000.0,
+     "drawdown": -1.5340399999999936
     }
    ],
    "trades": [
@@ -757,48 +773,81 @@
      "sell_date": "2026-09-10",
      "buy_price": 21.221,
      "sell_price": 20.769,
-     "qty": 400,
+     "qty": 500,
      "return_pct": -2.13,
      "exit_reason": "trend_break",
      "name": "华鲁恒升"
+    },
+    {
+     "code": 600516,
+     "buy_date": "2026-09-09",
+     "sell_date": "2026-09-14",
+     "buy_price": 5.255,
+     "sell_price": 5.175,
+     "qty": 4400,
+     "return_pct": -1.53,
+     "exit_reason": "trend_break",
+     "name": "方大炭素"
+    },
+    {
+     "code": 600887,
+     "buy_date": "2026-09-09",
+     "sell_date": "2026-09-15",
+     "buy_price": 26.526,
+     "sell_price": 26.244,
+     "qty": 300,
+     "return_pct": -1.07,
+     "exit_reason": "trend_break",
+     "name": "伊利股份"
+    },
+    {
+     "code": 601155,
+     "buy_date": "2026-09-09",
+     "sell_date": "2026-09-15",
+     "buy_price": 12.272,
+     "sell_price": 11.269,
+     "qty": 800,
+     "return_pct": -8.18,
+     "exit_reason": "trend_break",
+     "name": "新城控股"
     }
    ]
   },
   {
    "date": "20260907",
    "summary": {
-    "num_trades": 0,
+    "num_trades": 2,
     "initial_capital": 100000.0,
-    "ending_total": 98966.84,
-    "total_return": -1.03,
-    "max_drawdown": -1.04,
+    "ending_total": 97912.36,
+    "total_return": -2.09,
+    "max_drawdown": -2.15,
     "win_rate": 0.0,
-    "avg_return": 0.0,
+    "avg_return": -4.39,
     "avg_win": 0.0,
-    "avg_loss": 0.0,
+    "avg_loss": -4.39,
     "profit_factor": 0.0,
-    "sharpe": -2.14,
+    "sharpe": -2.37,
     "strategies": "boll,theme",
     "signal_mode": "forward",
     "date": 20260907,
-    "run_date": 20260912,
+    "run_date": 20260915,
     "signal_start": "2026-09-07",
     "signal_end": "2026-09-07",
-    "hold_days": 5,
+    "hold_days": 8,
     "exit_mode": "boll_upper_take+take6%+trailing5%+MA60break",
     "size_mode": "adaptive_weight(权重)",
-    "vol_mode": "scaled_stop+pos0.7",
-    "dd_breaker_dd": 1.04,
+    "vol_mode": "scaled_stop+pos0.48",
+    "dd_breaker_dd": 0.96,
     "dd_breaker_extra_cash": 0,
-    "capital_scale": 0.7,
-    "cash_pct": 30,
+    "capital_scale": 0.48,
+    "cash_pct": 52,
     "signals_days": 1,
     "codes_count": 3,
     "start": "2026-09-07",
-    "end": "2026-09-12",
-    "bench_return": -1.42,
-    "bench_return_exposed": -0.99,
-    "excess_return": -0.04
+    "end": "2026-09-15",
+    "bench_return": -2.73,
+    "bench_return_exposed": -1.31,
+    "excess_return": -0.78
    },
    "equity": [
     {
@@ -1483,74 +1532,113 @@
     },
     {
      "date": "2026-09-08",
-     "cash": 30195.84,
-     "holding_value": 69808.0,
-     "total": 100003.84,
-     "peak": 100003.84,
+     "cash": 52916.21,
+     "holding_value": 47152.0,
+     "total": 100068.21,
+     "peak": 100068.21,
      "drawdown": 0.0
     },
     {
      "date": "2026-09-09",
-     "cash": 30195.84,
-     "holding_value": 69354.0,
-     "total": 99549.84,
-     "peak": 100003.84,
-     "drawdown": -0.4539825670694246
+     "cash": 52916.21,
+     "holding_value": 46434.0,
+     "total": 99350.21,
+     "peak": 100068.21,
+     "drawdown": -0.7175105860292694
     },
     {
      "date": "2026-09-10",
-     "cash": 30195.84,
-     "holding_value": 69446.0,
-     "total": 99641.84,
-     "peak": 100003.84,
-     "drawdown": -0.3619860997337702
+     "cash": 52916.21,
+     "holding_value": 46610.0,
+     "total": 99526.21,
+     "peak": 100068.21,
+     "drawdown": -0.5416305537992535
     },
     {
      "date": "2026-09-11",
-     "cash": 30195.84,
-     "holding_value": 68771.0,
-     "total": 98966.84,
-     "peak": 100003.84,
-     "drawdown": -1.03696018072906
+     "cash": 52916.21,
+     "holding_value": 46091.0,
+     "total": 99007.21,
+     "peak": 100068.21,
+     "drawdown": -1.0602767852048116
+    },
+    {
+     "date": "2026-09-14",
+     "cash": 52916.21,
+     "holding_value": 46167.0,
+     "total": 99083.21,
+     "peak": 100068.21,
+     "drawdown": -0.9843285894691232
+    },
+    {
+     "date": "2026-09-15",
+     "cash": 97912.36,
+     "holding_value": 0.0,
+     "total": 97912.36,
+     "peak": 100068.21,
+     "drawdown": -2.154380497062959
     }
    ],
-   "trades": []
+   "trades": [
+    {
+     "code": 601155,
+     "buy_date": "2026-09-08",
+     "sell_date": "2026-09-15",
+     "buy_price": 12.162,
+     "sell_price": 11.269,
+     "qty": 1900,
+     "return_pct": -7.35,
+     "exit_reason": "trend_break",
+     "name": "新城控股"
+    },
+    {
+     "code": 600887,
+     "buy_date": "2026-09-08",
+     "sell_date": "2026-09-15",
+     "buy_price": 26.627,
+     "sell_price": 26.244,
+     "qty": 900,
+     "return_pct": -1.44,
+     "exit_reason": "trend_break",
+     "name": "伊利股份"
+    }
+   ]
   },
   {
    "date": "20260904",
    "summary": {
-    "num_trades": 9,
+    "num_trades": 8,
     "initial_capital": 100000.0,
-    "ending_total": 102054.33,
-    "total_return": 2.05,
-    "max_drawdown": -0.45,
-    "win_rate": 77.8,
-    "avg_return": 4.0,
+    "ending_total": 101818.1,
+    "total_return": 1.82,
+    "max_drawdown": -0.12,
+    "win_rate": 87.5,
+    "avg_return": 5.81,
     "avg_win": 6.75,
-    "avg_loss": -5.63,
-    "profit_factor": 4.2,
-    "sharpe": 1.86,
+    "avg_loss": -0.78,
+    "profit_factor": 60.6,
+    "sharpe": 2.23,
     "strategies": "boll,cctv,theme",
     "signal_mode": "forward",
     "date": 20260904,
-    "run_date": 20260912,
+    "run_date": 20260915,
     "signal_start": "2026-09-04",
     "signal_end": "2026-09-04",
-    "hold_days": 8,
+    "hold_days": 11,
     "exit_mode": "boll_upper_take+take6%+trailing5%+MA60break",
     "size_mode": "adaptive_weight(权重)",
-    "vol_mode": "scaled_stop+pos0.74",
-    "dd_breaker_dd": 0.85,
+    "vol_mode": "scaled_stop+pos0.52",
+    "dd_breaker_dd": 0.82,
     "dd_breaker_extra_cash": 0,
-    "capital_scale": 0.74,
-    "cash_pct": 26,
+    "capital_scale": 0.52,
+    "cash_pct": 48,
     "signals_days": 1,
     "codes_count": 10,
     "start": "2026-09-04",
-    "end": "2026-09-12",
-    "bench_return": -0.83,
-    "bench_return_exposed": -0.62,
-    "excess_return": 2.67
+    "end": "2026-09-15",
+    "bench_return": -2.15,
+    "bench_return_exposed": -1.12,
+    "excess_return": 2.94
    },
    "equity": [
     {
@@ -2243,43 +2331,59 @@
     },
     {
      "date": "2026-09-07",
-     "cash": 28001.12,
-     "holding_value": 72486.0,
-     "total": 100487.12,
-     "peak": 100487.12,
+     "cash": 50817.91,
+     "holding_value": 49413.0,
+     "total": 100230.91,
+     "peak": 100230.91,
      "drawdown": 0.0
     },
     {
      "date": "2026-09-08",
-     "cash": 82195.69,
-     "holding_value": 20011.0,
-     "total": 102206.69,
-     "peak": 102206.69,
+     "cash": 87455.85,
+     "holding_value": 14029.0,
+     "total": 101484.85,
+     "peak": 101484.85,
      "drawdown": 0.0
     },
     {
      "date": "2026-09-09",
-     "cash": 90674.94,
-     "holding_value": 11841.0,
-     "total": 102515.94,
-     "peak": 102515.94,
+     "cash": 95935.1,
+     "holding_value": 6004.0,
+     "total": 101939.1,
+     "peak": 101939.1,
      "drawdown": 0.0
     },
     {
      "date": "2026-09-10",
-     "cash": 95076.33,
-     "holding_value": 7023.0,
-     "total": 102099.33,
-     "peak": 102515.94,
-     "drawdown": -0.4063855825737934
+     "cash": 95935.1,
+     "holding_value": 5969.0,
+     "total": 101904.1,
+     "peak": 101939.1,
+     "drawdown": -0.0343342250422065
     },
     {
      "date": "2026-09-11",
-     "cash": 95076.33,
-     "holding_value": 6978.0,
-     "total": 102054.33,
-     "peak": 102515.94,
-     "drawdown": -0.4502811952950932
+     "cash": 95935.1,
+     "holding_value": 5914.0,
+     "total": 101849.1,
+     "peak": 101939.1,
+     "drawdown": -0.0882880072513883
+    },
+    {
+     "date": "2026-09-14",
+     "cash": 95935.1,
+     "holding_value": 5877.0,
+     "total": 101812.1,
+     "peak": 101939.1,
+     "drawdown": -0.1245841880102924
+    },
+    {
+     "date": "2026-09-15",
+     "cash": 95935.1,
+     "holding_value": 5883.0,
+     "total": 101818.1,
+     "peak": 101939.1,
+     "drawdown": -0.1186983208601998
     }
    ],
    "trades": [
@@ -2289,7 +2393,7 @@
      "sell_date": "2026-09-08",
      "buy_price": 6.807,
      "sell_price": 8.012,
-     "qty": 600,
+     "qty": 400,
      "return_pct": 17.71,
      "exit_reason": "take_partial",
      "name": "出版传媒"
@@ -2300,7 +2404,7 @@
      "sell_date": "2026-09-08",
      "buy_price": 6.807,
      "sell_price": 8.012,
-     "qty": 1300,
+     "qty": 900,
      "return_pct": 17.71,
      "exit_reason": "take_pct",
      "name": "出版传媒"
@@ -2311,7 +2415,7 @@
      "sell_date": "2026-09-08",
      "buy_price": 12.212,
      "sell_price": 12.238,
-     "qty": 900,
+     "qty": 600,
      "return_pct": 0.21,
      "exit_reason": "take_band",
      "name": "新城控股"
@@ -2322,7 +2426,7 @@
      "sell_date": "2026-09-08",
      "buy_price": 11.652,
      "sell_price": 11.758,
-     "qty": 1000,
+     "qty": 700,
      "return_pct": 0.91,
      "exit_reason": "trend_break",
      "name": "老白干酒"
@@ -2333,7 +2437,7 @@
      "sell_date": "2026-09-08",
      "buy_price": 15.606,
      "sell_price": 15.485,
-     "qty": 700,
+     "qty": 500,
      "return_pct": -0.78,
      "exit_reason": "trend_break",
      "name": "华域汽车"
@@ -2344,7 +2448,7 @@
      "sell_date": "2026-09-08",
      "buy_price": 4.895,
      "sell_price": 4.925,
-     "qty": 1100,
+     "qty": 600,
      "return_pct": 0.62,
      "exit_reason": "trend_break",
      "name": "浙能电力"
@@ -2370,17 +2474,6 @@
      "return_pct": 5.58,
      "exit_reason": "take_partial_final",
      "name": "国科军工"
-    },
-    {
-     "code": 603530,
-     "buy_date": "2026-09-07",
-     "sell_date": "2026-09-10",
-     "buy_price": 49.249,
-     "sell_price": 44.086,
-     "qty": 100,
-     "return_pct": -10.48,
-     "exit_reason": "trend_break",
-     "name": "神马电力"
     }
    ]
   },
@@ -113529,38 +113622,38 @@
  "latest": {
   "date": "20260908",
   "summary": {
-   "num_trades": 1,
+   "num_trades": 4,
    "initial_capital": 100000.0,
-   "ending_total": 97926.62,
-   "total_return": -2.07,
-   "max_drawdown": -2.41,
+   "ending_total": 98465.96,
+   "total_return": -1.53,
+   "max_drawdown": -1.53,
    "win_rate": 0.0,
-   "avg_return": -2.13,
+   "avg_return": -3.23,
    "avg_win": 0.0,
-   "avg_loss": -2.13,
+   "avg_loss": -3.23,
    "profit_factor": 0.0,
-   "sharpe": -1.81,
+   "sharpe": -3.48,
    "strategies": "boll,theme",
    "signal_mode": "forward",
    "date": 20260908,
-   "run_date": 20260912,
+   "run_date": 20260915,
    "signal_start": "2026-09-08",
    "signal_end": "2026-09-08",
-   "hold_days": 4,
+   "hold_days": 7,
    "exit_mode": "boll_upper_take+take6%+trailing5%+MA60break",
    "size_mode": "adaptive_weight(权重)",
-   "vol_mode": "scaled_stop+pos0.74",
-   "dd_breaker_dd": 0.99,
+   "vol_mode": "scaled_stop+pos0.52",
+   "dd_breaker_dd": 0.96,
    "dd_breaker_extra_cash": 0,
-   "capital_scale": 0.74,
-   "cash_pct": 26,
+   "capital_scale": 0.52,
+   "cash_pct": 48,
    "signals_days": 1,
    "codes_count": 6,
    "start": "2026-09-08",
-   "end": "2026-09-12",
-   "bench_return": -1.07,
-   "bench_return_exposed": -0.79,
-   "excess_return": -1.28
+   "end": "2026-09-15",
+   "bench_return": -2.38,
+   "bench_return_exposed": -1.24,
+   "excess_return": -0.29
   },
   "equity": [
    {
@@ -114253,27 +114346,43 @@
    },
    {
     "date": "2026-09-09",
-    "cash": 26060.09,
-    "holding_value": 72135.0,
-    "total": 98195.09,
+    "cash": 48469.76,
+    "holding_value": 51324.0,
+    "total": 99793.76,
     "peak": 100000.0,
-    "drawdown": -1.804910000000004
+    "drawdown": -0.2062400000000052
    },
    {
     "date": "2026-09-10",
-    "cash": 34358.62,
-    "holding_value": 63232.0,
-    "total": 97590.62,
+    "cash": 58844.17,
+    "holding_value": 40718.0,
+    "total": 99562.17,
     "peak": 100000.0,
-    "drawdown": -2.4093800000000045
+    "drawdown": -0.4378300000000017
    },
    {
     "date": "2026-09-11",
-    "cash": 34358.62,
-    "holding_value": 63568.0,
-    "total": 97926.62,
+    "cash": 58844.17,
+    "holding_value": 40226.0,
+    "total": 99070.17,
     "peak": 100000.0,
-    "drawdown": -2.0733800000000047
+    "drawdown": -0.9298300000000018
+   },
+   {
+    "date": "2026-09-14",
+    "cash": 81596.31,
+    "holding_value": 17319.0,
+    "total": 98915.31,
+    "peak": 100000.0,
+    "drawdown": -1.0846900000000024
+   },
+   {
+    "date": "2026-09-15",
+    "cash": 98465.96,
+    "holding_value": 0.0,
+    "total": 98465.96,
+    "peak": 100000.0,
+    "drawdown": -1.5340399999999936
    }
   ],
   "trades": [
@@ -114283,10 +114392,43 @@
     "sell_date": "2026-09-10",
     "buy_price": 21.221,
     "sell_price": 20.769,
-    "qty": 400,
+    "qty": 500,
     "return_pct": -2.13,
     "exit_reason": "trend_break",
     "name": "华鲁恒升"
+   },
+   {
+    "code": 600516,
+    "buy_date": "2026-09-09",
+    "sell_date": "2026-09-14",
+    "buy_price": 5.255,
+    "sell_price": 5.175,
+    "qty": 4400,
+    "return_pct": -1.53,
+    "exit_reason": "trend_break",
+    "name": "方大炭素"
+   },
+   {
+    "code": 600887,
+    "buy_date": "2026-09-09",
+    "sell_date": "2026-09-15",
+    "buy_price": 26.526,
+    "sell_price": 26.244,
+    "qty": 300,
+    "return_pct": -1.07,
+    "exit_reason": "trend_break",
+    "name": "伊利股份"
+   },
+   {
+    "code": 601155,
+    "buy_date": "2026-09-09",
+    "sell_date": "2026-09-15",
+    "buy_price": 12.272,
+    "sell_price": 11.269,
+    "qty": 800,
+    "return_pct": -8.18,
+    "exit_reason": "trend_break",
+    "name": "新城控股"
    }
   ]
  },
