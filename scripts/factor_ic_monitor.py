@@ -464,7 +464,7 @@ def _format_issue_body(res: dict) -> str:
             lines.append(f"| {ft} | {v.get('n')} | {v.get('span') or '-'} | {ci_s} | {sig_s} |")
         lines.append("")
         lines.append("> 因子类型映射：动量=Momentum；反转·均值回归=Boll；"
-                     "相对强度·资金流=Relativity；题材·事件=Theme/CCTV。"
+                     "相对强度·资金流=Relativity；题材=Theme；事件·舆情=CCTV。"
                      "归并后仍能直接看出「哪类因子在失灵」，而策略级明细保留可用于下钻。")
     conf = res.get("decayed_confirmed") or []
     lines += [

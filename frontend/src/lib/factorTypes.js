@@ -7,20 +7,24 @@
 // - 每策略归一个主因子类型（1:1），保证归并桶清晰、无歧义；
 // - 一个标的可命中多策略 → 可映射到多个因子类型；
 // - 因子类型顺序 / 配色与既有策略认知一致，便于阅读。
+//
+// 2026-09-15 修订：原「题材·事件」拆为「题材」(Theme) 与「事件·舆情」(CCTV) 两类，
+// 去掉合并掩盖（Theme 实为拖累、CCTV 才是正贡献）。
 
 export const STRATEGY_FACTOR_TYPE = {
   boll: '反转·均值回归',
   momentum: '动量',
   relativity: '相对强度·资金流',
-  theme: '题材·事件',
-  cctv: '题材·事件',
+  theme: '题材',
+  cctv: '事件·舆情',
 }
 
 export const FACTOR_TYPE_ORDER = [
   '动量',
   '反转·均值回归',
   '相对强度·资金流',
-  '题材·事件',
+  '题材',
+  '事件·舆情',
   '其他',
 ]
 
@@ -49,7 +53,8 @@ export const FACTOR_TYPE_COLORS = {
   '动量': { bg: 'hsla(217, 91%, 60%, 0.10)', text: '#3B82F6', border: 'hsla(217, 91%, 60%, 0.35)' },
   '反转·均值回归': { bg: 'hsla(229, 87%, 56%, 0.10)', text: '#6366F1', border: 'hsla(229, 87%, 56%, 0.35)' },
   '相对强度·资金流': { bg: 'hsla(157, 81%, 37%, 0.09)', text: '#30A46C', border: 'hsla(157, 81%, 37%, 0.35)' },
-  '题材·事件': { bg: 'hsla(3, 80%, 50%, 0.08)', text: '#E5484D', border: 'hsla(3, 80%, 50%, 0.35)' },
+  '题材': { bg: 'hsla(3, 80%, 50%, 0.08)', text: '#E5484D', border: 'hsla(3, 80%, 50%, 0.35)' },
+  '事件·舆情': { bg: 'hsla(28, 90%, 50%, 0.10)', text: '#F5861F', border: 'hsla(28, 90%, 50%, 0.35)' },
   '其他': { bg: 'hsl(var(--surface-2))', text: 'hsl(var(--muted))', border: 'hsl(var(--border))' },
 }
 

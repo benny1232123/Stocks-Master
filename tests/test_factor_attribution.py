@@ -31,8 +31,8 @@ def test_norm_code_pads_leading_zeros():
 def test_primary_factor_type_uses_first_strategy():
     """多策略取首个作为主类型，保证不重复计数。"""
     assert primary_factor_type("Boll/Momentum") == "反转·均值回归"
-    assert primary_factor_type("CCTV") == "题材·事件"
-    assert primary_factor_type("Theme") == "题材·事件"
+    assert primary_factor_type("CCTV") == "事件·舆情"
+    assert primary_factor_type("Theme") == "题材"
     assert primary_factor_type("Relativity") == "相对强度·资金流"
     assert primary_factor_type("") == "其他"
 
@@ -45,18 +45,18 @@ def _row(src, rp, pos):
 def test_summarize_groups_and_contribution():
     rows = [_row("CCTV", 10.0, 10.0), _row("Boll", -10.0, 10.0)]
     out = summarize(rows, lambda r: primary_factor_type(r["source"]))
-    assert out["题材·事件"]["n"] == 1
-    assert out["题材·事件"]["mean"] == 10.0
-    assert out["题材·事件"]["win_rate"] == 100.0
+    assert out["事件·舆情"]["n"] == 1
+    assert out["事件·舆情"]["mean"] == 10.0
+    assert out["事件·舆情"]["win_rate"] == 100.0
     # 贡献 = 收益×仓位 / 总仓位 = 10*10/20 = 5.0
-    assert out["题材·事件"]["contrib"] == 5.0
+    assert out["事件·舆情"]["contrib"] == 5.0
     assert out["反转·均值回归"]["contrib"] == -5.0
 
 
 def test_summarize_win_rate_and_payoff():
     rows = [_row("CCTV", 5.0, 1.0), _row("CCTV", -2.0, 1.0), _row("CCTV", 1.0, 1.0)]
     out = summarize(rows, lambda r: primary_factor_type(r["source"]))
-    st = out["题材·事件"]
+    st = out["事件·舆情"]
     assert st["n"] == 3
     assert st["win_rate"] == pytest.approx(66.7, abs=0.1)
     assert st["avg_win"] == pytest.approx(3.0)
