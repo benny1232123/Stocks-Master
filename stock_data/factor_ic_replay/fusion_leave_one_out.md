@@ -1,6 +1,6 @@
 # 融合层留一分析：拿掉某个策略，OOS 会怎样？
 
-- 生成：2026-09-16 23:58:10
+- 生成：2026-09-17 00:04:07
 - 窗口：DAL 历史 **88** 个可用信号日（生产口径；比策略层 2018+ 网格窄）
 - 分配器：`shrinkage=0.4`、`floor=3.0`、`zero_negative_edge=True`（与生产 `compute_adaptive_allocation` 同源）
 - 合成规则复刻生产：单票权重 = 来源策略权重最大值 → 归一；**「置零」= 从每票来源里去掉该策略，去空则该票淘汰**；**「压权重」= 该策略权重压到 allocator floor**
@@ -34,8 +34,9 @@
 
 **为什么「零权重日占比」全是 0？** 生产分配器（`smcore/strategy/adaptive_weights.py`）的地板门是**事后**步骤：所有策略先参与 softmax 竞争，再把「负 edge / 样本不足」者统一抬到 `FLOOR`(3.0) 后重新归一化到 100 —— 因此 `zero_negative_edge=True` **并不清零任何策略**（模块文档原话：「无策略被彻底剔除，故分散度始终保留；全为地板时退化为接近等权」）。结论：**融合层结构上没有「置零」这个杠杆** —— 本报告的「置零」变体是**人为构造的反事实**；若真要在融合层排除某策略，必须**改分配器代码**（新增排除名单），而不是改 `adaptive_weights_config.json`。
 
-> ⚠️ **权重 edge 的口径（2026-09-16 更正）**：生产融合的 edge 来自 `smcore/strategy/adaptive_weights.compute_universe_edge`（`edge.source=universe`、`window=30`、`hold_days=10`、`use_benchmark=True`、`benchmark=hs300`）—— 在**候选全集**上算前向收益**减同期沪深300**，是**基准相对口径**（基准不可用时才退化为绝对收益）。而本脚本为省掉整套回放，复刻的是**验证器侧** `walk_forward_validator.causal_edge`（`EDGE_WINDOW=20`，它喂给同一套 `adaptive_weights` 的是**原始 return_pct、未减基准**）。⇒ 两者共用同一套 `adaptive_weights`（同 shrinkage/floor），但 **edge 输入口径不同**（窗口 20 vs 30、绝对 vs 相对），故本报告的权重与「线上当日权重」**可能有差异**；结论层（动量日均独家选票仅 0.24 只 ⇒ 置零增益被稀释）不依赖该差异，但若要严格对齐线上，应改调 `compute_universe_edge`。
+> ⚠️ **权重 edge 的口径（2026-09-16 两轮更正）**：生产融合的 edge 走 `smcore/strategy/adaptive_weights.compute_universe_edge`（`edge.source=universe`、`use_benchmark=True`/`benchmark=hs300`、`hold_days=10`）—— 在**候选全集**上算前向收益**减同期沪深300**，是**基准相对口径**（基准不可用时才退化为绝对收益）。本脚本为省掉整套回放，复刻的是**验证器侧** `walk_forward_validator.causal_edge`（`EDGE_WINDOW=20`，喂给同一套 `adaptive_weights` 的是**原始 return_pct、未减基准**）。
 
+> ⚠️ **有效窗口是 20 个信号日，不是配置里的 30**：`compute_adaptive_allocation(edge_window=20)` 的**函数默认值被显式传给** `compute_edge()`，从而把 `adaptive_weights_config.json` 的 `edge.window: 30` **整个遮蔽掉**（实测 `__meta__` = `{window: 20, signal_days: 30, benchmark: hs300}`；`signal_days=30` 是因为内部会多取 `hold_days` 个以保证有效样本 ≈ window）。⇒ 两侧窗口**实际一致（都是 20）**，唯一实质差异是**绝对收益 vs 基准相对**。故本报告权重与「线上当日权重」量级可比、数值会有差；结论层（动量日均独家选票仅 0.24 只 ⇒ 置零增益被稀释）不依赖该差异。
 > 更正记录（2026-09-16）：本节早期版本曾写「`causal_edge` 未减基准 ⇒ 分配器区分不了 alpha 与 beta」—— 那是**验证器侧实现**的特性，**不适用于生产**（生产走基准相对口径），故该论断已删除。
 
 ### 一.2 ⚠️ 新发现（**不构成行动建议**）：`theme` 置零过门

@@ -62,6 +62,9 @@ TURN_TOL = 0.10          # 提案日均换手允许比现行高出的绝对幅�
 VARIANTS = ("zero", "floor")   # zero=从来源里去掉；floor=权重压到分配器 floor
 OUT_NAME = "fusion_leave_one_out"
 GATED_STRATEGY = "momentum"    # 本次预注册只针对它；其余行仅作透明度
+# 验证器侧 edge 窗口（报告里须与「生产有效窗口」对照说明：生产实际也是 20，
+# 因为 compute_adaptive_allocation(edge_window=20) 默认值遮蔽了配置的 edge.window=30）
+_EDGE_WINDOW = wf.EDGE_WINDOW
 
 
 def _portfolio(picks: list[dict], weights: dict, drop: str | None,
@@ -357,16 +360,21 @@ def main() -> int:
           "全为地板时退化为接近等权」）。结论：**融合层结构上没有「置零」这个杠杆** —— "
           "本报告的「置零」变体是**人为构造的反事实**；若真要在融合层排除某策略，"
           "必须**改分配器代码**（新增排除名单），而不是改 `adaptive_weights_config.json`。", "",
-          "> ⚠️ **权重 edge 的口径（2026-09-16 更正）**：生产融合的 edge 来自 "
-          "`smcore/strategy/adaptive_weights.compute_universe_edge`"
-          "（`edge.source=universe`、`window=30`、`hold_days=10`、`use_benchmark=True`、"
-          "`benchmark=hs300`）—— 在**候选全集**上算前向收益**减同期沪深300**，是**基准相对口径**"
-          "（基准不可用时才退化为绝对收益）。而本脚本为省掉整套回放，复刻的是**验证器侧** "
-          "`walk_forward_validator.causal_edge`（`EDGE_WINDOW=20`，它喂给同一套 `adaptive_weights` 的"
-          "是**原始 return_pct、未减基准**）。⇒ 两者共用同一套 `adaptive_weights`（同 shrinkage/floor），"
-          "但 **edge 输入口径不同**（窗口 20 vs 30、绝对 vs 相对），故本报告的权重与"
-          "「线上当日权重」**可能有差异**；结论层（动量日均独家选票仅 0.24 只 ⇒ 置零增益被稀释）"
-          "不依赖该差异，但若要严格对齐线上，应改调 `compute_universe_edge`。", "",
+          "> ⚠️ **权重 edge 的口径（2026-09-16 两轮更正）**：生产融合的 edge 走 "
+          "`smcore/strategy/adaptive_weights.compute_universe_edge`（`edge.source=universe`、"
+          "`use_benchmark=True`/`benchmark=hs300`、`hold_days=10`）—— 在**候选全集**上算前向收益"
+          "**减同期沪深300**，是**基准相对口径**（基准不可用时才退化为绝对收益）。"
+          f"本脚本为省掉整套回放，复刻的是**验证器侧** `walk_forward_validator.causal_edge`"
+          f"（`EDGE_WINDOW={_EDGE_WINDOW}`，喂给同一套 `adaptive_weights` 的是**原始 return_pct、"
+          "未减基准**）。",
+          "",
+          "> ⚠️ **有效窗口是 20 个信号日，不是配置里的 30**：`compute_adaptive_allocation("
+          "edge_window=20)` 的**函数默认值被显式传给** `compute_edge()`，从而把 "
+          "`adaptive_weights_config.json` 的 `edge.window: 30` **整个遮蔽掉**（实测 `__meta__` = "
+          "`{window: 20, signal_days: 30, benchmark: hs300}`；`signal_days=30` 是因为内部会多取 "
+          "`hold_days` 个以保证有效样本 ≈ window）。⇒ 两侧窗口**实际一致（都是 20）**，"
+          "唯一实质差异是**绝对收益 vs 基准相对**。故本报告权重与「线上当日权重」量级可比、"
+          "数值会有差；结论层（动量日均独家选票仅 0.24 只 ⇒ 置零增益被稀释）不依赖该差异。",
           "> 更正记录（2026-09-16）：本节早期版本曾写「`causal_edge` 未减基准 ⇒ 分配器区分不了 "
           "alpha 与 beta」—— 那是**验证器侧实现**的特性，**不适用于生产**（生产走基准相对口径），"
           "故该论断已删除。", ""]
