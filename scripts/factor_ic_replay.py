@@ -26,11 +26,15 @@
 
 用法：python scripts/factor_ic_replay.py
 输出：stock_data/factor_ic_replay/replay_summary.md + replay_detail.json
+
+实现说明（2026-09-16）：数据准备（载入 / 坏柱 / 有效域 / 前向收益）、8 个基线因子定义
+与横截面 IC 已抽到 smcore/strategy/factor_engine.py（单源，供 mine_factors.py 共用）。
+**常数与数值与抽出前完全一致**；预注册清单与纪律仍由本脚本声明。
 """
 from __future__ import annotations
 
-import glob
 import json
+import sys
 import time
 from pathlib import Path
 
@@ -38,153 +42,71 @@ import numpy as np
 import pandas as pd
 
 ROOT = Path(__file__).resolve().parents[1]
-KDATA_DIR = ROOT / "stock_data" / "k_data"
-OUT_DIR = ROOT / "stock_data" / "factor_ic_replay"
+if str(ROOT) not in sys.path:
+    sys.path.insert(0, str(ROOT))
 
-# ── 预注册参数（禁 magic number 之外的随意改动；改 = 新一轮并注明）────────
-LOAD_START = "2017-06-01"   # 预热缓冲
-WINDOW_START = "2018-01-01" # 结论窗口
-WARMUP_WIN = 120            # 预热观察窗
-WARMUP_MIN = 60             # 窗内最少有效收盘数
-PRICE_FLOOR = 2.0           # 剔低价股
-FWD = 10                    # 前向持有交易日
-TOP_N = 50                  # 单因子组合持仓数
-REBAL_EVERY = 10            # 非重叠换仓间隔（交易日）
-COST_RT = 0.003             # 往返成本 0.3%（佣金+印花税+滑点，预注册）
-MIN_N_DAY = 300             # 当日有效横截面下限
-ROLL_MIN = 15               # 滚动统计 min_periods（容忍短停牌）
-BAD_TOL = 0.002             # 坏柱判定容差
+from smcore.strategy import factor_engine as fe  # noqa: E402
 
-# 因子 -> (prior 方向 +1=做多高值 / -1=做多低值, 回看窗)
-FACTORS = {
-    "mom20":  (+1, 20),
-    "mom60":  (+1, 60),
-    "rev5":   (-1, 5),
-    "vol20":  (-1, 20),
-    "amp20":  (-1, 20),
-    "liq20":  (-1, 20),
-    "illiq20": (+1, 20),
-    "dist20": (-1, 20),
-}
+# ── 预注册参数（值见 factor_engine；此处仅重导出，保持既有引用名不破）──────
+LOAD_START = fe.LOAD_START
+WINDOW_START = fe.WINDOW_START
+WARMUP_WIN = fe.WARMUP_WIN
+WARMUP_MIN = fe.WARMUP_MIN
+PRICE_FLOOR = fe.PRICE_FLOOR
+FWD = fe.FWD
+TOP_N = fe.TOP_N
+REBAL_EVERY = fe.REBAL_EVERY
+COST_RT = fe.COST_RT
+MIN_N_DAY = fe.MIN_N_DAY
+ROLL_MIN = fe.ROLL_MIN
+BAD_TOL = fe.BAD_TOL
 
+FACTORS = fe.PRICE_FACTORS
+FIRST_FACTOR = fe.FIRST_FACTOR
+KDATA_DIR = fe.KDATA_DIR
+OUT_DIR = fe.OUT_DIR
 
-FIRST_FACTOR = next(iter(FACTORS))  # dict 保序，取第一个作为「有效日」的代表
+# 兼容既有调用方（scripts/simple_strategy.py 直接取这两个名字）
+load_matrices = fe.load_matrices
+_limit_series = fe.limit_series
 
 
-def _limit_series(codes: pd.Index) -> pd.Series:
-    """板内涨跌停幅度（近似）：创业板/科创板 20%，北交所 30%，其余 10%。"""
-    def lim(c: str) -> float:
-        c = str(c)
-        if c.startswith(("300", "301", "688")):
-            return 0.20
-        if c.startswith(("43", "83", "87", "92")):
-            return 0.30
-        return 0.10
-    return pd.Series([lim(c) for c in codes], index=codes)
-
-
-def load_matrices() -> dict[str, pd.DataFrame]:
-    """批量直读 parquet 桶 → 宽表矩阵。
-
-    ⚠️ 刻意不走 smcore/data/kline.py：其读路径会触发 write_kline_cache
-    （kline.py:780-781 检测断层时 force_refresh 全历史重拉）。本脚本只读不写。
-    """
-    files = sorted(glob.glob(str(KDATA_DIR / "qfq_*.parquet")))
-    if not files:
-        raise SystemExit(f"no parquet under {KDATA_DIR}")
-    frames = []
-    for f in files:
-        d = pd.read_parquet(f)
-        d["date"] = pd.to_datetime(d["date"])
-        d["code"] = d["code"].astype("category")
-        frames.append(d[d["date"] >= pd.Timestamp(LOAD_START)])
-        del d
-    df = pd.concat(frames, ignore_index=True).drop_duplicates(["code", "date"])
-    del frames
-    df = df.sort_values(["date", "code"])
-    mats = {}
-    for col in ("close", "high", "low", "amount"):
-        mats[col] = df.pivot(index="date", columns="code", values=col).sort_index()
-    return mats
+def math_sqrt(n: int) -> float:
+    return n ** 0.5
 
 
 def main() -> int:
     t0 = time.time()
     print("load...", flush=True)
-    mats = load_matrices()
+    mats = fe.load_matrices()
     close, high, low, amount = mats["close"], mats["high"], mats["low"], mats["amount"]
     print(f"  grid {close.shape[0]} days x {close.shape[1]} codes  ({time.time()-t0:.0f}s)", flush=True)
 
-    # ── 日收益 / 坏柱标记 ────────────────────────────────────────────
-    ret1 = close.pct_change(fill_method=None)
-    lim = _limit_series(close.columns)
-    lim_mat = pd.DataFrame(np.tile(lim.values, (close.shape[0], 1)),
-                           index=close.index, columns=close.columns)
-    bad = (ret1.abs() > lim_mat * 1.005 + BAD_TOL).fillna(0.0)
+    # ── 日收益 / 坏柱标记 / 有效域 / 前向收益（均走共享引擎）──────────
+    ret1, bad = fe.daily_returns_and_bad(close)
     n_bad = int(bad.values.sum())
-
-    # 回看窗坏柱累积（含当日）：k=0..w-1（按窗口长度缓存，避免重复计算）
-    _lb_cache: dict[int, pd.DataFrame] = {}
-
-    def lookback_bad(w: int) -> pd.DataFrame:
-        if w not in _lb_cache:
-            acc = bad.copy()
-            for k in range(1, w):
-                acc = np.maximum(acc, bad.shift(k, fill_value=0.0))
-            _lb_cache[w] = acc
-        return _lb_cache[w]
-
-    # 前向窗坏柱（t+1..t+FWD）
-    fwd_bad = bad.copy()
-    for k in range(1, FWD + 1):
-        fwd_bad = np.maximum(fwd_bad, bad.shift(-k, fill_value=0.0))
-
-    warm = close.rolling(WARMUP_WIN, min_periods=1).count() >= WARMUP_MIN
-    base_valid = (close.notna()) & (close >= PRICE_FLOOR) & warm
+    lb_cache: dict = {}
+    fwd_bad = fe.forward_bad_mask(bad, FWD)
+    base_valid = fe.base_valid_mask(close)
 
     # ── 因子 ────────────────────────────────────────────────────────
     print("factors...", flush=True)
-    ma20 = close.rolling(20, min_periods=ROLL_MIN).mean()
-    amt20 = amount.rolling(20, min_periods=ROLL_MIN).mean().where(lambda x: x > 0)
-    amt_pos = amount.where(amount > 0)
-    fac: dict[str, pd.DataFrame] = {
-        "mom20": close / close.shift(20) - 1,
-        "mom60": close / close.shift(60) - 1,
-        "rev5": close / close.shift(5) - 1,
-        "vol20": ret1.rolling(20, min_periods=ROLL_MIN).std(),
-        "amp20": ((high - low) / close).rolling(20, min_periods=ROLL_MIN).mean(),
-        "liq20": np.log(amt20),
-        "illiq20": (ret1.abs() / amt_pos).rolling(20, min_periods=ROLL_MIN).mean(),
-        "dist20": close / ma20 - 1,
-    }
-    fac_valid = {}
-    for name, (_, lb) in FACTORS.items():
-        lb_eff = min(lb, 20) if name != "mom60" else 60
-        fac_valid[name] = base_valid & fac[name].notna() & (lookback_bad(lb_eff) == 0)
-        fac[name] = fac[name].where(fac_valid[name])
+    fac = fe.build_price_factors(close, high, low, amount, ret1)
+    fac, _fac_valid = fe.apply_factor_validity(fac, base_valid, bad, cache=lb_cache)
 
     # ── 前向收益 ────────────────────────────────────────────────────
-    fwd = (close.shift(-FWD) / close - 1).where((fwd_bad == 0) & base_valid)
+    fwd = fe.forward_return_matrix(close, fwd_bad, base_valid, FWD)
 
     dates = close.index
     pos = {d: i for i, d in enumerate(dates)}
 
-    # ── 每日横截面 Spearman IC（秩相关，向量化）──────────────────────
+    # ── 每日横截面 Spearman IC（秩相关，向量化）─────────────────────
     print("daily IC...", flush=True)
-    fwd_rank = fwd.rank(axis=1, pct=True)
+    fwd_rank = fe.forward_rank_matrix(fwd)
     ic_days = {}
     daily_ic: dict[str, pd.Series] = {}
     for name in FACTORS:
-        r = fac[name].rank(axis=1, pct=True)
-        m = r.notna() & fwd_rank.notna()
-        n = m.sum(axis=1)
-        a, b = r.where(m), fwd_rank.where(m)
-        am, bm = a.mean(axis=1), b.mean(axis=1)
-        cov = (a * b).mean(axis=1) - am * bm
-        va = (a * a).mean(axis=1) - am * am
-        vb = (b * b).mean(axis=1) - bm * bm
-        ic = cov / np.sqrt(np.maximum(va * vb, 1e-24))
-        ic[n < MIN_N_DAY] = np.nan
+        ic = fe.cross_sectional_ic(fac[name], fwd_rank, MIN_N_DAY)
         # 预注册结论窗口：2018-01-01 起（2017-06~12 仅作因子预热，不计入统计）
         daily_ic[name] = ic[ic.index >= pd.Timestamp(WINDOW_START)].dropna()
         ic_days[name] = len(daily_ic[name])
@@ -381,10 +303,6 @@ def main() -> int:
     (OUT_DIR / "replay_summary.md").write_text("\n".join(lines), encoding="utf-8")
     print(f"DONE in {time.time()-t0:.0f}s -> {OUT_DIR}", flush=True)
     return 0
-
-
-def math_sqrt(n: int) -> float:
-    return n ** 0.5
 
 
 if __name__ == "__main__":
