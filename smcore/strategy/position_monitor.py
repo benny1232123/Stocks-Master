@@ -29,6 +29,7 @@ from typing import Optional
 import pandas as pd
 
 from smcore.config.defaults import STOCK_DATA_DIR
+from smcore.strategy.factor_types import factor_type_of
 from smcore.strategy.risk_rules import (
     RISK_CONFIG,
     compute_adaptive_risk_params,
@@ -112,14 +113,23 @@ def simulate_position(
         end_date: 评估截止日（如 paper_tracker 的「下一信号日」）
         stop_pct: 逐只波动率自适应止损（优先于全局 stop_loss_pct）；None 则回退全局
         take_price: Boll 上轨（均值回归止盈目标）；None 则只用固定百分比止盈
-        strategy: 来源策略（boll/relativity 为均值回归，不启用 MA60 趋势破位）
+        strategy: 来源策略（因子类型属「反转·*」或「相对强度·*」者视为均值回归，
+                  不启用 MA60 趋势破位；判定见 factor_types.factor_type_of）
 
     Returns:
         {"return_pct", "exit_reason", "sell_date", "buy_price", "sell_price"}
         无数据时 return_pct=None（而非 0.0）：缺数据不是"恰好打平"，调用方必须跳过，
         否则 walk-forward 的 edge/单调性统计会被伪零收益污染。
     """
-    is_mr = any(s.strip().lower() in ("boll", "relativity") for s in strategy.replace("/", ",").split(",") if s.strip())
+    # 均值回归家族判定：按**因子类型**归并（反转·*/相对强度·*），与 fusion 趋势闸门同口径。
+    # ⚠️ 原实现硬编码 ("boll", "relativity")。boll/relativity 沿价格轴拆出原子因子后，
+    # 原子来源的持仓（Boll_Oversold / Rel_Up …）会被误判为「非均值回归」→ 错误启用
+    # MA60 趋势破位退出（本函数 docstring 明确 MR 不启用该规则），行为静默漂移。
+    is_mr = any(
+        factor_type_of(s.strip()).startswith(("反转", "相对强度"))
+        for s in strategy.replace("/", ",").split(",")
+        if s.strip()
+    )
     # MA 需要回看窗口，故 K 线起点前移 trend_exit_ma+ 天
     start = (buy_date - timedelta(days=trend_exit_ma + 20)).strftime("%Y-%m-%d")
     end = (end_date + timedelta(days=2)).strftime("%Y-%m-%d")

@@ -19,6 +19,7 @@ import backtrader as bt
 from smcore.backtest.loader import load_index_data, load_price_data
 from smcore.backtest.signal_backtest import BacktestResult
 from smcore.backtest.strategies import CNCommInfo, MultiStrategy, PriceData
+from smcore.strategy.factor_types import factor_type_of
 
 # A 股真实交易成本：佣金万2.5（单笔最低5元）+ 卖出印花税千0.5
 _COMM_RATE = 0.00025
@@ -637,13 +638,19 @@ def run_forward_signal_backtest(
             if enable_exits:
                 # 逐行止损比例：波动率自适应（个股 vol20 定）回退全局 stop_loss_pct
                 row_stop = h.get("stop_pct")
-                # 入场策略 → 退出路由：均值回归(boll/relativity) 不启用 MA60 趋势破位
+                # 入场策略 → 退出路由：均值回归家族（反转·*/相对强度·*）不启用 MA60 趋势破位。
+                # ⚠️ 原实现硬编码 ("boll", "relativity")：boll/relativity 拆成原子因子后，
+                # 原子来源的持仓（Boll_Oversold / Rel_Up / Rel_Down …）会被误判为「非均值回归」
+                # → **错误启用 MA60 趋势破位退出**，而它们的止盈本就该走上轨。改按因子类型归并
+                # （与 fusion 趋势闸门、position_monitor 同口径）。
                 _strats = [
                     s.strip().lower()
                     for s in str(h.get("strategy", "")).replace("/", "，").split("，")
                     if s.strip()
                 ]
-                _is_mr = any(s in ("boll", "relativity") for s in _strats)
+                _is_mr = any(
+                    factor_type_of(s).startswith(("反转", "相对强度")) for s in _strats
+                )
                 # 分批止盈：盈利达阈值先卖一部，余仓收紧跟踪止损（最高 max_tranches 批）。
                 # 末批（已达批数上限）整仓清掉；非末批仅减仓、余仓继续持有让利润奔跑。
                 if (

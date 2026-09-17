@@ -50,6 +50,7 @@ from smcore.strategy.fusion import (
 )
 # 动态阈值 + 趋势守卫 + 市场闸门：内联过滤与生产 fusion 完全同源
 from smcore.strategy.regime_filter import _dynamic_thresholds, _passes_trend_guard
+from smcore.strategy.factor_types import factor_type_of
 # 多维市场仪表盘：波动率自适应风控的共同输入
 from smcore.strategy.market import compute_market_profile
 # 自适应现金：波动率分位 S 型曲线 + 趋势 regime 调整（替代硬编码 _VOL_POS_SCALE_MAP）
@@ -270,7 +271,15 @@ def _backtest_one(path: Path, sd: date, hold_days: int, portfolio_curve=None, dd
             code = str(row["股票代码"]).strip()
             hit = [s.strip().lower() for s in str(row.get("来源策略", "")).split("/") if s.strip()]
             # 市场闸门：下行防御时剔除纯均值回归票（与 fusion 趋势闸门同源）
-            if _regime == "下行防御" and hit and set(hit) <= {"boll", "relativity"}:
+            # ⚠️ 原实现硬编码 {"boll", "relativity"}。boll/relativity 拆出原子因子后，
+            # 原子来源的票（boll_oversold / rel_up …）**不会**被闸门剔除，
+            # 导致回测口径与生产 fusion 分叉（回测会多留下一批弱市必亏的票）。
+            # 改按因子类型归并（反转·*/相对强度·*），与 fusion 完全同口径。
+            if (
+                _regime == "下行防御"
+                and hit
+                and all(factor_type_of(s).startswith(("反转", "相对强度")) for s in hit)
+            ):
                 gate_dropped += 1
                 _keep_mask.append(False)
                 continue

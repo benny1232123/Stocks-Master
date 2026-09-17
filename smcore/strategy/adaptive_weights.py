@@ -113,6 +113,17 @@ _BUILTIN_DEFAULTS = {
     # ⚠️ 必须注册于此 _BUILTIN_DEFAULTS：否则 _load_config/save_config 会忽略/丢弃它。
     "exclude_no_evidence_strategies": True,
     "min_evidence_for_allocation": 1,
+    # ── 探索预算池上限（2026-09-17，与上一条配套的**可扩展性**修复）──
+    # 原逻辑：每个无证据策略固定拿 eff_floor(=3%)，于是无证据策略的总探索额度 =
+    # 3% × 个数，会**线性吞噬**总预算，挤压有证据策略：
+    #   9 个无证据 + 9 个有证据 → 有证据合计仅 85；25 个 → 52；34 个 → 25；40 个 → 8。
+    # 更糟的是「3% × 个数 > 100%」（≥34 个无证据）时 rem 变负 → 有证据策略拿到**负权重**、
+    # 权重合计不等于 100（实测 40 总数 / 4 有证据 → 合计 101、单个 −2.00），属数学崩坏。
+    # 改为「探索预算池」：无证据策略合计不超过本上限（默认 30%），池内按个数均分。
+    # 因子少时与旧行为**完全一致**（9×3% = 27% ≤ 30% → 每个仍是 3.0），
+    # 因子多时自动等比缩小（40 个 → 每个 0.75%），有证据策略始终保住 ≥70%。
+    # ⚠️ 必须注册于此 _BUILTIN_DEFAULTS：否则 _load_config/save_config 会忽略/丢弃它。
+    "explore_pool_cap_pct": 30.0,
     # 样本外单调性守卫容差（百分点）：见 test_walk_forward.test_out_of_sample_monotonicity。
     # 项目 OOS 结论（WALK_FORWARD_VALIDATION.md）已判定单调性「非跨 regime 稳健」
     # （3 regime 仅 1 跑赢等权，robust=False，edge 处噪声级 ±0.8pp）。故该守卫不再硬断言
@@ -794,9 +805,11 @@ def _finalize_allocation_weights(
     规则：
     - 黑名单策略强制 0（不受 FLOOR 影响）。
     - exclude_no_evidence=True 时：无任何已实现归因历史(n < min_ev_n)的策略只保留
-      eff_floor 的「探索权重」（用于让其候选票进入 DAL 积累业绩），不吸收被清零策略
+      「探索权重」（用于让其候选票进入 DAL 积累业绩），不吸收被清零策略
       释放的额度；释放额度全部分给「有证据」的幸存策略。这堵死「无证据默认均分」陷阱
       （曾让 momentum 凭空拿 13%、fundamental 凭空拿 32%）。
+      探索权重总额受 `explore_pool_cap_pct`（默认 30%）封顶，池内在无证据策略间**均分**
+      → 因子菜单扩容时不会线性挤压有证据策略（详见该键注释）。
     - exclude_no_evidence=False（或阈值=0）：退化为原行为——所有非黑名单策略按初稿
       权重归一化到 100（用户若想让新策略立即参与分配、愿承担无证据权重风险，可关此开关）。
     返回值之和恒为 100（四舍五入误差锚定到「有证据」的最大者，绝不补给无证据策略）。
@@ -827,11 +840,16 @@ def _finalize_allocation_weights(
         else:
             out = {s: (base[s] / tot * 100.0 if s not in excluded else 0.0) for s in base}
     else:
-        # 无证据策略拿「固定」探索额度 = 各 eff_floor（不随幸存池大小放大），
-        # 有证据策略瓜分剩余 (100 - 探索额度) 并按各自权重比例分配。
+        # 无证据策略拿「固定」探索额度，有证据策略瓜分剩余 (100 - 探索额度) 并按各自权重比例分配。
         # 这样即便 boll/relativity 在弱 regime 下也只拿地板权重，fundamental 仍固定 ≈3%，
         # 不会被 renormalize 放大到 ~1/3（曾出现 32% 无证据权重）。
-        floor_alloc = eff_floor * len(no_ev)
+        # ⚠️ 2026-09-17 可扩展性修复：探索额度必须**封顶**（默认 30%），不能是 3% × 个数。
+        # 否则「因子菜单扩容」会线性挤压有证据策略（9→40 个无证据时，9 个有证据的合计
+        # 从 85 掉到 8），且 ≥34 个无证据时 rem 变负 → 有证据策略拿到负权重、合计≠100。
+        # 因子少时行为与旧版完全一致（9×3%=27% ≤ 30% → 每个仍 3.0）。
+        cap = float(CONFIG.get("explore_pool_cap_pct", 30.0) or 30.0)
+        floor_alloc = min(eff_floor * len(no_ev), cap)
+        per_no_ev = floor_alloc / len(no_ev) if no_ev else 0.0
         rem = 100.0 - floor_alloc
         ev_sum = sum(base[s] for s in ev)
         if ev_sum <= 0:
@@ -850,17 +868,40 @@ def _finalize_allocation_weights(
                 if s in ev:
                     out[s] = base[s] / ev_sum * rem
                 elif s in no_ev:
-                    out[s] = eff_floor
+                    out[s] = per_no_ev
                 else:
                     out[s] = 0.0
 
-    pct = {s: int(round(out.get(s, 0.0))) for s in weights}
+    # 整数化：最大余数法（Hamilton 配额）分配，保证合计**恒为 100** 且无负权重。
+    # ⚠️ 原实现 = int(round(x)) 后把差额一股脑锚定到「有证据最大者」。策略数一多，
+    # 各策略 round 误差会累计超过锚点自身权重，clamp 到 0 后**合计不再等于 100**
+    # （实测 60 策略：合计 115）。最大余数法按小数部分从大到小逐位补差，
+    # 补差位数 d < 策略数，天然不会越界；策略少时结果与旧实现一致。
+    total_out = sum(out.get(s, 0.0) for s in weights)
+    if total_out > 0:
+        scaled = {s: out.get(s, 0.0) / total_out * 100.0 for s in weights}
+    else:
+        scaled = {s: 0.0 for s in weights}
+    pct = {s: int(scaled[s]) for s in weights}
     d = 100 - sum(pct.values())
-    if d != 0:
-        # 修差值锚定到「有证据」的最大者，绝不补给无证据策略
-        anchor_src = [s for s in ev]
-        anchor = max(anchor_src, key=lambda s: pct.get(s, 0)) if anchor_src else max(pct, key=pct.get)
-        pct[anchor] = max(0, pct[anchor] + d)
+    if d > 0:
+        # 候选限定「非黑名单」，且**有证据优先**——延续「取整差额绝不补给
+        # 无证据/黑名单策略」的既有契约（黑名单必须恒为 0，探索额度不得被放大）。
+        order = sorted(
+            (s for s in weights if s not in excluded),
+            key=lambda s: (s not in ev, -(scaled[s] - int(scaled[s])), -scaled[s], s),
+        )
+        for s in order[:d]:
+            pct[s] += 1
+    elif d < 0:
+        # 理论不可达（向下取整只会欠不会超），留作防御：按权重升序逐位 −1
+        order = sorted(weights, key=lambda s: (pct[s], scaled[s], s))
+        for s in order:
+            if d == 0:
+                break
+            if pct[s] > 0:
+                pct[s] -= 1
+                d += 1
     return pct
 
 
