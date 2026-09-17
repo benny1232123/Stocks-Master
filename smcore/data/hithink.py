@@ -102,36 +102,97 @@ def _get(path: str, params: dict | None = None, retries: int = 2):
 
 
 # ───────────────────────── K 线 ─────────────────────────
+
+# ⚠️ 个股历史 K 的**单次请求跨度上限**（2026-09-14 实测；见 skills/hithink-finance-api §限制2）：
+#    ``start`` 距 ``end`` > **~3652 自然日** → 服务端**整段静默返回空**（code=0 且 item=[]），
+#    既不报错也不截断。留足余量取 1500 天。
+#    （本文件此前写「个股无此限制」是**错的**，已按实测更正。）
+#
+# 为什么必须在本函数内分片（2026-09-17 事故取证，见 .workbuddy/_probe_repull.txt）：
+#    ``kline.fetch_daily_k`` 的「复权基准守卫」发现历史断层时会**从缓存最早日全量重拉**，
+#    即请求 ``2015-01-05 ~ 今天``（>4000 天）。不分片 ⇒ hithink 静默返空 ⇒ 回退链
+#    **静默换源到 akshare**，让 akshare 的序列**整段覆盖** hithink 缓存（实测 000019：
+#    2844 行 → 2690 行，数据来源被换掉），随后断层归零、守卫误判「自愈成功」并静默接受。
+#    跨源混血污染由此产生，且完全不可见。
+_HK_HIST_CHUNK_DAYS = int(os.getenv("HITHINK_HIST_CHUNK_DAYS", "1500"))
+_HK_HIST_CHUNK_RETRY = int(os.getenv("HITHINK_HIST_CHUNK_RETRY", "3"))
+
+_HIST_COLUMNS = ["date", "open", "high", "low", "close", "volume", "amount"]
+
+
+def _hist_row(it: dict) -> dict:
+    return {
+        "date": _ms_to_date(it.get("date_ms")),
+        "open": _num(it.get("open_price")),
+        "high": _num(it.get("high_price")),
+        "low": _num(it.get("low_price")),
+        "close": _num(it.get("close_price")),
+        "volume": _num(it.get("volume")),
+        "amount": _num(it.get("turnover")),
+    }
+
+
 def fetch_historical_k(code, start: date, end: date, adjust: str = "qfq") -> pd.DataFrame:
     """历史日 K，返回 kline.py 规范列: date,open,high,low,close,volume,amount。
 
     adjust: qfq(前复权,默认)/hfq/bfq。
+
+    内部按 ``_HK_HIST_CHUNK_DAYS`` 分片请求（绕开服务端跨度上限）后拼接、按日去重。
+    分片语义是**全有或全无**：一旦已经开始拿到数据，任一分片重试后仍为空 → 整次返回空。
+    宁可让调用方降级到其它后端，也不交出一条中途被挖空的序列 —— 截断序列看起来
+    「正常且全为正价」，仅靠「非空 + 正价」判据检不出（2026-09-14 实测 002533 /
+    300189 / 600644 / 603033 因此丢过 2023-03 之后的全部数据）。
+    例外：**开头**的空分片（请求起点早于上市日）允许跳过，只要后面有数据。
     """
     ts = to_thscode(code)
     if not ts:
         return pd.DataFrame()
     adj = _ADJ_MAP.get(str(adjust).lower(), "forward")
-    data = _get(
-        "/api/a-share/prices/historical",
-        {"thscode": ts, "interval": "1d", "start": _ms(start), "end": _ms(end), "adjust": adj},
-    )
-    if not data:
+    try:
+        s_d, e_d = _as_date(start), _as_date(end)
+    except Exception:
         return pd.DataFrame()
-    items = data.get("item") or []
-    rows = [
-        {
-            "date": _ms_to_date(it.get("date_ms")),
-            "open": _num(it.get("open_price")),
-            "high": _num(it.get("high_price")),
-            "low": _num(it.get("low_price")),
-            "close": _num(it.get("close_price")),
-            "volume": _num(it.get("volume")),
-            "amount": _num(it.get("turnover")),
-        }
-        for it in items
-        if it.get("date_ms")
-    ]
-    return pd.DataFrame(rows, columns=["date", "open", "high", "low", "close", "volume", "amount"])
+    if s_d > e_d:
+        return pd.DataFrame()
+
+    attempts = max(1, _HK_HIST_CHUNK_RETRY)
+    rows: list = []
+    seen_data = False
+    cur = s_d
+    while cur <= e_d:
+        chunk_end = min(cur + timedelta(days=_HK_HIST_CHUNK_DAYS), e_d)
+        items: list = []
+        for attempt in range(attempts):
+            data = _get(
+                "/api/a-share/prices/historical",
+                {"thscode": ts, "interval": "1d",
+                 "start": _ms(cur), "end": _ms(chunk_end), "adjust": adj},
+            )
+            items = (data or {}).get("item") or []
+            if items:
+                break
+            if attempt + 1 < attempts:
+                time.sleep(0.5 * (attempt + 1))
+        if items:
+            rows.extend(_hist_row(it) for it in items if it.get("date_ms"))
+            seen_data = True
+        elif seen_data:
+            # 有数据之后出现空洞 = 接口抖动/限流（或跨度仍超限）→ 不可交付截断序列
+            import sys as _sys
+            print(
+                f"[hithink] WARN: {ts} {cur}~{chunk_end} 分片重试 {attempts} 次仍为空"
+                f"（接口抖动/限流）→ 本次整体判失败，交调用方降级到其它后端",
+                file=_sys.stderr,
+            )
+            return pd.DataFrame()
+        # 否则：开头的空分片 = 请求起点早于上市日，正常跳过
+        cur = chunk_end + timedelta(days=1)
+
+    if not rows:
+        return pd.DataFrame(columns=_HIST_COLUMNS)
+    return pd.DataFrame(rows, columns=_HIST_COLUMNS).drop_duplicates(
+        subset=["date"], keep="last"
+    ).reset_index(drop=True)
 
 
 # ───────────────────────── 行情快照 ─────────────────────────
@@ -320,8 +381,10 @@ def anomaly_stock(thscodes) -> list:
 # 不报错、不截断）。实测：2023-05-31~今(799根) ✅ / 2020-01-01~2022-01-20(仅486根) ❌空 /
 # 单次 2020-01-01~今 ❌空 —— 可见瓶颈是**起点日期**而非根数，故不能靠"缩短区间"规避，
 # 必须分片：早于窗口的片返回空、窗口内的片正常，拼接后即得完整可用序列。
-# 注意：**个股**历史 K 端点（/api/a-share/prices/historical）无此限制（实测 2400 自然日/
-# 1598 根正常），故 fetch_historical_k 不做分片。
+# 注意：**个股**历史 K 端点（/api/a-share/prices/historical）的限制**与指数不同但同样存在**
+# —— 单次跨度 > ~3652 自然日即静默返空（见 fetch_historical_k 上方的实测记录与事故背景）。
+# 本行此前写「个股无此限制」是错的，已于 2026-09-17 更正；个股侧现由
+# _HK_HIST_CHUNK_DAYS=1500 分片，指数侧用下面的 750。
 _INDEX_HIST_CHUNK_DAYS = 750
 
 
