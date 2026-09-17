@@ -25,9 +25,10 @@ concurrency:
 jobs:
   daily-pick:
     runs-on: ubuntu-latest
-    # 步骤上限之和约 115(策略) + 55(回测) + 装依赖/融合/预热 ≈ 190min：
-    # 旧值 90 会在数据源变慢时硬杀 job，当日产出全部丢失且提交步骤不执行
-    timeout-minutes: 200
+    # 步骤上限之和约 90(K线刷新) + 40(A批) + 55(回测) + 装依赖/清单/预热/快照 ≈ 230min：
+    # 旧值 90 会在数据源变慢时硬杀 job，当日产出全部丢失且提交步骤不执行；
+    # 2026-09-17 退役 5 遗留策略、改为「全宇宙 K 线刷新 + A 批生成」后重估为 240。
+    timeout-minutes: 240
     permissions:
       contents: write
       issues: write
@@ -126,7 +127,9 @@ jobs:
 
       - name: K 线缓存刷新（全宇宙补齐到信号日，供 A 批因子使用）
         if: steps.gate.outputs.ok == 'true'
-        timeout-minutes: 60
+        # 实测 4380 只 ≈ 50min（fetch_daily_k 的尾部缺口段使每个交易日都要 1 次
+        # HTTP/只，属稳态成本而非首跑特例）→ 取 90min 留约 1.8× 余量。
+        timeout-minutes: 90
         env:
           KLINE_BACKEND: hithink
           HITHINK_FINANCE_API_KEY: ${{ secrets.HITHINK_FINANCE_API_KEY }}
