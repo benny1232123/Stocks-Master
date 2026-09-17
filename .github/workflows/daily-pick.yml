@@ -124,6 +124,22 @@ jobs:
         run: |
           python scripts/verify_data_freshness.py --signal-date ${{ steps.gate.outputs.today }}
 
+      - name: K 线缓存刷新（全宇宙补齐到信号日，供 A 批因子使用）
+        if: steps.gate.outputs.ok == 'true'
+        timeout-minutes: 60
+        env:
+          KLINE_BACKEND: hithink
+          HITHINK_FINANCE_API_KEY: ${{ secrets.HITHINK_FINANCE_API_KEY }}
+        run: |
+          # 事故修复（2026-09-17）：A 批因子（zoo_factor_strategy.py）按其设计只读
+          # stock_data/k_data 缓存，而该缓存此前是被已退役的 5 个遗留策略步骤
+          # 「顺带」刷新的（尤其 momentum 遍历全宇宙 fetch_daily_k）。
+          # 本步骤把这份刷新提为显式动作，并做覆盖度门控：信号日有效截面低于门槛
+          # 直接失败（红 build + 告警），不再静默产出空表导致当日清单缺失。
+          python scripts/prepull_klines.py --date ${{ steps.gate.outputs.today }}
+          echo "### K 线缓存刷新" >> $GITHUB_STEP_SUMMARY
+          echo "✅ 全宇宙已补齐到信号日（覆盖度见上方日志）" >> $GITHUB_STEP_SUMMARY
+
       - name: 因子池 A 批选股（12 价格因子）
         id: factors
         continue-on-error: true
@@ -283,7 +299,6 @@ jobs:
               ls stock_data/Daily-Action-List-*.csv >/dev/null 2>&1 && git add -f stock_data/Daily-Action-List-*.csv || true
               ls stock_data/Multi-Backtest-*.csv >/dev/null 2>&1 && git add -f stock_data/Multi-Backtest-*.csv || true
               ls stock_data/Stock-Selection-*.csv >/dev/null 2>&1 && git add -f stock_data/Stock-Selection-*.csv || true
-              ls stock_data/CCTV-Sector-Stock-Pool-*.csv >/dev/null 2>&1 && git add -f stock_data/CCTV-Sector-Stock-Pool-*.csv || true
               [ -f stock_data/backtest_status.txt ] && git add -f stock_data/backtest_status.txt || true
               if git diff --cached --quiet; then
                 echo "无变更（冲突回退后为空），跳过推送"
@@ -341,10 +356,16 @@ jobs:
           # 区分「真无信号」与「数据源/脚本挂了」：
           # - 有策略产出文件但 Daily-Action-List 为空 → 正常过滤，不告警
           # - 无任何策略产出文件且 Daily-Action-List 不存在/为空 → 疑似执行链路故障，开 issue
-          # A 批 12 因子是否产出（zoo_factor_strategy.py 生成）
+          # A 批 12 因子的**非空**产出数（zoo_factor_strategy.py 生成）。
+          # ⚠️ 只数文件是否存在，会把「写了表头但 0 票」的空表算作有产出 → 2026-09-17
+          # 曾因此静默漏报：12 个空表 + 无 Daily-Action-List，却仍报 success。故必须数数据行。
           n_strat=0
           for L in PVCorr20 PVCorr60 CVAmt20 CVAmt60 Skew20 Skew60 VRatio20_120 VRatio10_60 DistLo10 DistLo60 Vol20 Illiq20; do
-            [ -f "stock_data/Stock-Selection-${L}-${TODAY}.csv" ] && n_strat=$((n_strat+1))
+            F="stock_data/Stock-Selection-${L}-${TODAY}.csv"
+            if [ -f "$F" ]; then
+              N=$(tail -n +2 "$F" | wc -l | tr -d ' ')
+              [ "${N:-0}" -gt 0 ] && n_strat=$((n_strat+1))
+            fi
           done
 
           action_file="stock_data/Daily-Action-List-${TODAY}.csv"
