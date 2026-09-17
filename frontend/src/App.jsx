@@ -747,13 +747,10 @@ function App() {
   const [btTaskId, setBtTaskId] = useState(null)
   const [scanProgress, setScanProgress] = useState({ current: 0, total: 0 })
 
-  // 手动多策略回测表单
-  const _today = localDateStr()
-  const _yearAgo = localDateStr(new Date(Date.now() - 365 * 86400000))
-  const [multiCodes, setMultiCodes] = useState('600519,000858')
-  const [multiStart, setMultiStart] = useState(_yearAgo)
-  const [multiEnd, setMultiEnd] = useState(_today)
-  const [multiStrats, setMultiStrats] = useState({ boll: true, relativity: true, theme: true, cctv: false })
+  // 「手动多策略回测」表单已于 2026-09-17 退役：其 4 个策略（boll/relativity/
+  // theme/cctv）已随菜单收缩为 A 批 12 价格因子而移除（STRAT_LABEL 无这些键会渲染空白），
+  // 且 /api/backtests/run 在生产 RENDER_LITE=1 下恒 503。回测请看上方
+  // 「每日自动回测 · 前向信号回测」（CI 对真实融合清单做的前向回测）。
 
   // 信号日下拉：以全部 DAL 日期为基准，回测未完结的显示"持仓中"
   const btDateMap = useMemo(() => new Map((dailyBacktests || []).map((d) => [d.date, d])), [dailyBacktests])
@@ -839,7 +836,7 @@ function App() {
 
   async function startFusion() {
     setScanPhase('fusion')
-    setScanLogs((prev) => [...prev, 'Boll 扫描完成，开始策略融合...'])
+    setScanLogs((prev) => [...prev, '开始策略融合...'])
     try {
       const today = localDateStr().replace(/-/g, '')
       const resp = await fetch('/api/selection/fusion', {
@@ -878,34 +875,6 @@ function App() {
         setDailyDates(d.items || [])
       }
     } catch { /* 忽略 */ }
-  }
-
-  // 手动多策略 Backtrader 回测
-  async function runMultiBacktest() {
-    const codes = multiCodes.split(/[\n,，\s]+/).map((s) => s.trim()).filter(Boolean)
-    if (!codes.length) { setError('请输入股票代码'); return }
-    const strategies = Object.entries(multiStrats).filter(([, v]) => v).map(([k]) => k).join(',')
-    if (!strategies) { setError('请至少选择一个策略'); return }
-    setBacktestRun(null)
-    setScanLogs([])
-    setError('')
-    try {
-      const resp = await fetch('/api/backtests/run', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          mode: 'multi',
-          codes,
-          start: multiStart,
-          end: multiEnd,
-          strategies,
-          initial_capital: 100000,
-        }),
-      })
-      if (!resp.ok) { setError('回测请求失败'); return }
-      const { task_id } = await resp.json()
-      setBtTaskId(task_id)
-    } catch { setError('回测启动失败') }
   }
 
   const [analysisLoading, setAnalysisLoading] = useState(false)
@@ -1281,9 +1250,6 @@ function App() {
   const realtimePositions = portfolio?.realtime_positions ?? []
   const pnlSummary = portfolio?.pnl_summary ?? {}
   const latestBacktest = backtest?.latest ?? null
-  const backtestSummary = backtestRun?.summary ?? null
-  const backtestEquity = backtestRun?.equity ?? []
-  const backtestTrades = backtestRun?.trades ?? []
   const analysisSignal = analysis?.signal ?? null
   const analysisLatest = analysis?.latest ?? null
   const selectionRows = selectionScan?.rows ?? []
@@ -3090,112 +3056,6 @@ function App() {
             )}
             </SectionCard>
 
-            <SectionCard title="手动多策略回测">
-              <div className="bt-form">
-                <div className="bt-field">
-                  <label>股票代码（逗号 / 换行分隔）</label>
-                  <textarea
-                    className="bt-codes"
-                    rows={3}
-                    value={multiCodes}
-                    onChange={(e) => setMultiCodes(e.target.value)}
-                    placeholder="例如 600519,000858,300750"
-                  />
-                </div>
-                <div className="bt-row">
-                  <div className="bt-field">
-                    <label>开始日期</label>
-                    <input type="date" value={multiStart} onChange={(e) => setMultiStart(e.target.value)} />
-                  </div>
-                  <div className="bt-field">
-                    <label>结束日期</label>
-                    <input type="date" value={multiEnd} onChange={(e) => setMultiEnd(e.target.value)} />
-                  </div>
-                </div>
-                <div className="bt-field">
-                  <label>策略（多策略融合打分）</label>
-                  <div className="bt-strats">
-                    {['boll', 'relativity', 'theme', 'cctv'].map((s) => (
-                      <label key={s} className="bt-strat">
-                        <input
-                          type="checkbox"
-                          checked={multiStrats[s]}
-                          onChange={(e) => setMultiStrats((p) => ({ ...p, [s]: e.target.checked }))}
-                        />
-                        {STRAT_LABEL[s]}
-                      </label>
-                    ))}
-                  </div>
-                </div>
-                <button className="btn-primary" onClick={runMultiBacktest} disabled={btTaskId && backtestRun === null}>
-                  运行多策略回测
-                </button>
-                <p className="bt-hint">
-                  Backtrader 多策略引擎：Boll 低吸 + 相对强弱(Relativity，需指数) + 题材轮动量价 + CCTV 舆情(需外部输入)。
-                  单票仓位上限 30%，止损=布林下轨 / 止盈=布林上轨，含 A股佣金万2.5 + 印花税千0.5。
-                </p>
-              </div>
-            </SectionCard>
-
-            <SectionCard title="回测">
-              {backtestSummary ? (
-                <>
-                  <div className="grid grid-cols-3 lg:grid-cols-6 gap-3">
-                    <StatCard label="总收益率" value={`${backtestSummary.total_return ?? '--'}%`} />
-                    <StatCard label="最大回撤" value={`${backtestSummary.max_drawdown ?? '--'}%`} />
-                    <StatCard label="胜率" value={`${backtestSummary.win_rate ?? '--'}%`} />
-                    <StatCard label="交易笔数" value={backtestSummary.num_trades ?? '--'} />
-                    <StatCard label="夏普比率" value={backtestSummary.sharpe ?? '--'} />
-                    <StatCard label="期末权益" value={backtestSummary.ending_total ? `${(backtestSummary.ending_total / 10000).toFixed(1)}万` : '--'} />
-                  </div>
-                  <EquityChart equity={backtestEquity} initialCapital={backtestSummary.initial_capital ?? 100000} />
-                  {backtestTrades.length > 0 ? (
-                    <div className="table-shell spaced">
-                      <div className="section-head"><h3>交易明细</h3><span>共 {backtestTrades.length} 笔</span></div>
-                      {backtestTrades.slice(0, 10).map((t, i) => (
-                        <div key={i} className="table-row">
-                          <span className="t-code-wrap">
-                            <span className="t-code">{String(t.code).padStart(6, '0')}</span>
-                            {t.name ? <span className="t-name">{t.name}</span> : null}
-                          </span>
-                          <strong>{t.buy_date} → {t.sell_date}</strong>
-                          <em className={cn(t.return_pct >= 0 ? 'text-up' : 'text-down')}>
-                            {t.return_pct >= 0 ? '+' : ''}{t.return_pct}%
-                          </em>
-                        </div>
-                      ))}
-                    </div>
-                  ) : null}
-                </>
-              ) : (
-                <div className="bt-empty">
-                  <div className="bt-empty-icon">📊</div>
-                  <div className="bt-empty-title">尚无回测结果</div>
-                  <div className="bt-empty-desc">运行一次完整的选股 → 回测流程，权益曲线会自动出现在这里</div>
-                  <div className="bt-steps">
-                    <div className="bt-step">
-                      <span className="bt-step-num">1</span>
-                      <span className="bt-step-text">去「选股」设置价格区间</span>
-                    </div>
-                    <div className="bt-step-arrow">→</div>
-                    <div className="bt-step">
-                      <span className="bt-step-num">2</span>
-                      <span className="bt-step-text">点击「开始选股」</span>
-                    </div>
-                    <div className="bt-step-arrow">→</div>
-                    <div className="bt-step">
-                      <span className="bt-step-num">3</span>
-                      <span className="bt-step-text">等待多策略扫描 + 自动回测完成</span>
-                    </div>
-                    <div className="bt-step-arrow">→</div>
-                    <div className="bt-step">
-                      <span className="bt-step-num">4</span>
-                      <span className="bt-step-text">回到这里查看权益曲线</span>
-                    </div>
-                  </div>
-                </div>
-              )}
-            </SectionCard>
           </>
         ) : null}
 
