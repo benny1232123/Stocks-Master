@@ -658,6 +658,41 @@ def _slice(df: pd.DataFrame, start: date, end: date) -> pd.DataFrame:
     return _normalize(tmp)
 
 
+# ── 落盘前的「窗口化」自洽巡检参数（2026-09-17 事故后定案）──────────────────
+# 守卫②（整段断层扫描）**只扫最近 KLINE_BREAK_SCAN_DAYS 个自然日**，不再扫全历史。
+# 依据（全部实测，见 .workbuddy/_breaks_census.txt / _diag_breaks.txt / _probe_repull.txt）：
+#   · 全宇宙 4380 只中 3009 只（68.7%）含断层，但断层点 **660/661 落在 2015–2024 深历史**，
+#     落在最近 400 日的**只有 111 只（2.5%）**；A 批因子的最长窗口是 120 交易日。
+#   · 深历史断层是 **hithink 源头自带**：用 force_refresh 重拉 11 年，得到的还是同样那批
+#     断层（000019 重拉前后都是 79 个）→ 守卫的「全量重拉」对它**永远无解**，
+#     却会**每次刷新都触发**（4380 只里的 3009 只，每只多一轮 11 年拉取）。
+#   · 而「因子真正会用到」的窗口内的断层必须继续拦——所以是**收窄**，不是关闭。
+# 取 500 天（> prepull 的 lookback 400 天）留余量；置 0 可退回扫全历史（仅供排查）。
+KLINE_BREAK_SCAN_DAYS = int(os.getenv("KLINE_BREAK_SCAN_DAYS", "500"))
+
+# akshare（新浪源）**默认不参与 K 线回退链**（2026-09-17 按用户要求摘除）。
+# 摘除理由：hithink 超跨度静默返空时它曾「接单」，把 akshare 的 11 年序列**整段覆盖**进
+# hithink 缓存（实测 000019：2844 → 2690 行），换源后断层归零、守卫误判「自愈成功」——
+# 跨源混血污染且完全不可见。需要临时排查时用 KLINE_AKSHARE_FALLBACK=1 显式打开。
+KLINE_AKSHARE_FALLBACK = os.getenv("KLINE_AKSHARE_FALLBACK", "0") == "1"
+
+
+def _break_scan_window(df: pd.DataFrame, end: date, days: int) -> pd.DataFrame:
+    """截取用于断层扫描的尾部窗口（含窗口前一根 bar，以便算窗口首根的相邻比值）。
+
+    days <= 0 表示不截取（扫全历史）。df 为空/无 date 列时原样返回。
+    """
+    if days <= 0 or df is None or df.empty or "date" not in df.columns:
+        return df
+    d = df.reset_index(drop=True)
+    dt = pd.to_datetime(d["date"], errors="coerce")
+    pos = dt[dt >= (pd.Timestamp(end) - pd.Timedelta(days=int(days)))].index
+    if len(pos) == 0:
+        return d.iloc[0:0]
+    # 多带一根前导 bar：窗口首根的比值需要它的前收盘，否则窗口边界漏检
+    return d.iloc[max(0, int(pos[0]) - 1):]
+
+
 def fetch_daily_k(
     code,
     start_date,
@@ -766,7 +801,13 @@ def fetch_daily_k(
     # 现改为：只有当某后端把**所有缺失段**都取到（segments 为空表示缓存已覆盖全部）
     # 才接受它；否则换下一个源，全失败才退回缓存。
     preferred = _backend()
-    fallback_chain = [preferred] + [b for b in ("tdx", "hithink", "akshare", "baostock") if b != preferred]
+    # ⚠️ akshare 默认不在回退链上（见 KLINE_AKSHARE_FALLBACK 的说明）：它的 11 年序列曾在
+    # hithink 超跨度静默返空时「接单」，整段覆盖 hithink 缓存，造成完全不可见的跨源混血污染。
+    # 需要临时排查时置 KLINE_AKSHARE_FALLBACK=1。
+    _chain = ["tdx", "hithink", "baostock"]
+    if KLINE_AKSHARE_FALLBACK:
+        _chain.insert(2, "akshare")
+    fallback_chain = [preferred] + [b for b in _chain if b != preferred]
     for backend in fallback_chain:
         parts = []
         fetched_all = True
@@ -787,14 +828,17 @@ def fetch_daily_k(
     # 两层防御，确保落盘数据「单一复权基准、物理自洽」：
     #  ① 接缝漂移检测：缓存与新段在重叠交易日的收盘偏差 > 容差，说明缓存基准已过期，
     #     丢弃缓存、从最早日全量重拉（保留历史区间）。
-    #  ② 整段自洽性检查（落盘前）：扫整条 merged 序列，相邻交易日跳变超该板块涨跌停
-    #     即物理不可能（只可能是复权错误）——含缓存中段的历史污染（接缝一致也抓不到）。
+    #  ② 整段自洽性检查（落盘前）：相邻交易日跳变超该板块涨跌停即物理不可能
+    #     （只可能是复权错误）——含缓存中段的历史污染（接缝一致也抓不到）。
+    #     ⚠️ 2026-09-17 起**只扫最近 KLINE_BREAK_SCAN_DAYS 天**（原为全历史），依据见该常量。
     # 注意：重拉调用传入 force_refresh=True，本守卫的 `not force_refresh` 条件使其不会重入，
     # 因此不会无限递归；重拉得到的是单一源全量数据，至少内部自洽（真有跳变则告警接受）。
+    # ⚠️ 两处重拉都**先判返回值**：重拉没拿到数据时不许把已有数据丢掉 —— ① 退回单一基准的
+    # 缓存切片（避免把两套基准缝在一起），② 保留已拼好的单一基准序列继续落盘。
     if parts and not cached.empty and not force_refresh:
         drift = _detect_adjust_drift(cached, pd.concat(parts, ignore_index=True))
         if drift > KLINE_DRIFT_TOL:
-            return fetch_daily_k(
+            healed = fetch_daily_k(
                 code6,
                 min(request_start, cache_min or request_start),
                 request_end,
@@ -804,6 +848,17 @@ def fetch_daily_k(
                 max_cache_age_hours=max_cache_age_hours,
                 _no_retry=True,
             )
+            if healed is not None and not healed.empty:
+                return healed
+            # ⚠️ 重拉没取到数据（源不可用 / 超出单次跨度上限）时，**绝不能**把「旧基准缓存 +
+            # 新基准段」的拼接结果回给调用方或落盘 —— 那正是 2026-08-09 那个 +46% 接缝事故
+            # 的成因。退回**单一基准**的缓存切片（本次不落盘、不污染缓存），并明确告警。
+            import warnings as _w
+            _w.warn(
+                f"[kline] {code6} 缓存基准漂移 {drift:.4f}（容差 {KLINE_DRIFT_TOL}），"
+                f"全量重拉未取到数据 → 退回缓存切片（单一基准，本次不落盘）"
+            )
+            return _drop_unfinished_today(_slice(cached, request_start, request_end))
 
     merged = _normalize(pd.concat([cached, *parts], ignore_index=True)) if (not cached.empty or parts) else _empty_df()
     if merged.empty and not cached.empty:
@@ -811,7 +866,11 @@ def fetch_daily_k(
 
     # ② 整段自洽性检查：任何非市场跳变都触发全量重拉
     if not merged.empty:
-        breaks = find_price_breaks(merged, code6)
+        # ⚠️ 只扫「因子真正会用到」的尾部窗口（依据见 KLINE_BREAK_SCAN_DAYS 的实测说明）：
+        # 深历史断层是源头自带、重拉无解，全历史扫描会让 68.7% 的票每次刷新都白拉一轮 11 年。
+        # 窗口内的断层仍然照拦 —— 这是**收窄**，不是关闭。
+        _scan = _break_scan_window(merged, request_end, KLINE_BREAK_SCAN_DAYS)
+        breaks = find_price_breaks(_scan, code6) if not _scan.empty else []
         if breaks and HITHINK_QFQ_CHECK:
             # 交叉校验：断层若由真实分红/送股解释，则属「缓存基准过期需重拉」的预期事件；
             # 无法解释的断层疑似真实数据错误，单独告警（仍触发下方全量重拉，安全不变）。
@@ -835,7 +894,7 @@ def fetch_daily_k(
                 )
         if breaks:
             if (not force_refresh) and (not _no_retry):
-                return fetch_daily_k(
+                healed = fetch_daily_k(
                     code6,
                     min(request_start, cache_min or request_start),
                     request_end,
@@ -845,11 +904,21 @@ def fetch_daily_k(
                     max_cache_age_hours=max_cache_age_hours,
                     _no_retry=True,
                 )
-            import warnings
-            warnings.warn(
-                f"[kline] {code6} {len(breaks)} 处复权跳变未被自愈，已用单次全量拉取覆盖"
-                f"（可能是真实除权/停复牌导致的合法大跳变）。"
-            )
+                if healed is not None and not healed.empty:
+                    return healed
+                # 重拉没取到数据 → **保留已经拼好的单一基准序列**继续落盘，
+                # 不因「自愈失败」把已经拿到的数据一起丢掉。
+                import warnings
+                warnings.warn(
+                    f"[kline] {code6} {len(breaks)} 处复权跳变；全量重拉未取到数据，"
+                    f"保留现有序列（{len(merged)} 行，单一基准）继续落盘"
+                )
+            else:
+                import warnings
+                warnings.warn(
+                    f"[kline] {code6} {len(breaks)} 处复权跳变未被自愈，已用单次全量拉取覆盖"
+                    f"（可能是真实除权/停复牌导致的合法大跳变）。"
+                )
 
     # 收盘前丢弃当日未完成 bar（含缓存里历史残留的半成品），再落盘
     merged = _drop_unfinished_today(merged)
