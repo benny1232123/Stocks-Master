@@ -13,14 +13,14 @@
     "avg_win": 0.0,
     "avg_loss": -3.23,
     "profit_factor": 0.0,
-    "sharpe": -3.48,
+    "sharpe": -3.46,
     "strategies": "boll,theme",
     "signal_mode": "forward",
     "date": 20260908,
-    "run_date": 20260915,
+    "run_date": 20260916,
     "signal_start": "2026-09-08",
     "signal_end": "2026-09-08",
-    "hold_days": 7,
+    "hold_days": 8,
     "exit_mode": "boll_upper_take+take6%+trailing5%+MA60break",
     "size_mode": "adaptive_weight(权重)",
     "vol_mode": "scaled_stop+pos0.52",
@@ -31,10 +31,10 @@
     "signals_days": 1,
     "codes_count": 6,
     "start": "2026-09-08",
-    "end": "2026-09-15",
-    "bench_return": -2.38,
-    "bench_return_exposed": -1.24,
-    "excess_return": -0.29
+    "end": "2026-09-16",
+    "bench_return": -1.72,
+    "bench_return_exposed": -0.9,
+    "excess_return": -0.63
    },
    "equity": [
     {
@@ -764,6 +764,14 @@
      "total": 98465.96,
      "peak": 100000.0,
      "drawdown": -1.5340399999999936
+    },
+    {
+     "date": "2026-09-16",
+     "cash": 98465.96,
+     "holding_value": 0.0,
+     "total": 98465.96,
+     "peak": 100000.0,
+     "drawdown": -1.5340399999999936
     }
    ],
    "trades": [
@@ -826,14 +834,14 @@
     "avg_win": 0.0,
     "avg_loss": -4.39,
     "profit_factor": 0.0,
-    "sharpe": -2.37,
+    "sharpe": -2.35,
     "strategies": "boll,theme",
     "signal_mode": "forward",
     "date": 20260907,
-    "run_date": 20260915,
+    "run_date": 20260916,
     "signal_start": "2026-09-07",
     "signal_end": "2026-09-07",
-    "hold_days": 8,
+    "hold_days": 9,
     "exit_mode": "boll_upper_take+take6%+trailing5%+MA60break",
     "size_mode": "adaptive_weight(权重)",
     "vol_mode": "scaled_stop+pos0.48",
@@ -844,10 +852,10 @@
     "signals_days": 1,
     "codes_count": 3,
     "start": "2026-09-07",
-    "end": "2026-09-15",
-    "bench_return": -2.73,
-    "bench_return_exposed": -1.31,
-    "excess_return": -0.78
+    "end": "2026-09-16",
+    "bench_return": -2.07,
+    "bench_return_exposed": -0.99,
+    "excess_return": -1.1
    },
    "equity": [
     {
@@ -1572,6 +1580,14 @@
     },
     {
      "date": "2026-09-15",
+     "cash": 97912.36,
+     "holding_value": 0.0,
+     "total": 97912.36,
+     "peak": 100068.21,
+     "drawdown": -2.154380497062959
+    },
+    {
+     "date": "2026-09-16",
      "cash": 97912.36,
      "holding_value": 0.0,
      "total": 97912.36,
@@ -113632,14 +113648,14 @@
    "avg_win": 0.0,
    "avg_loss": -3.23,
    "profit_factor": 0.0,
-   "sharpe": -3.48,
+   "sharpe": -3.46,
    "strategies": "boll,theme",
    "signal_mode": "forward",
    "date": 20260908,
-   "run_date": 20260915,
+   "run_date": 20260916,
    "signal_start": "2026-09-08",
    "signal_end": "2026-09-08",
-   "hold_days": 7,
+   "hold_days": 8,
    "exit_mode": "boll_upper_take+take6%+trailing5%+MA60break",
    "size_mode": "adaptive_weight(权重)",
    "vol_mode": "scaled_stop+pos0.52",
@@ -113650,10 +113666,10 @@
    "signals_days": 1,
    "codes_count": 6,
    "start": "2026-09-08",
-   "end": "2026-09-15",
-   "bench_return": -2.38,
-   "bench_return_exposed": -1.24,
-   "excess_return": -0.29
+   "end": "2026-09-16",
+   "bench_return": -1.72,
+   "bench_return_exposed": -0.9,
+   "excess_return": -0.63
   },
   "equity": [
    {
@@ -114378,6 +114394,14 @@
    },
    {
     "date": "2026-09-15",
+    "cash": 98465.96,
+    "holding_value": 0.0,
+    "total": 98465.96,
+    "peak": 100000.0,
+    "drawdown": -1.5340399999999936
+   },
+   {
+    "date": "2026-09-16",
     "cash": 98465.96,
     "holding_value": 0.0,
     "total": 98465.96,
