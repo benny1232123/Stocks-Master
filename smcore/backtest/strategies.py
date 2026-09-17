@@ -19,6 +19,8 @@ import numpy as np
 
 import backtrader as bt
 
+from smcore.strategy.factor_types import RETIRED_STRATEGY_NAMES
+
 
 # ── 自定义行情数据（带成交额，供 Theme 策略）───────────────────────────────
 class PriceData(bt.feeds.PandasData):
@@ -53,7 +55,7 @@ class CNCommInfo(bt.CommInfoBase):
 # ── 多策略融合回测策略 ──────────────────────────────────────────────────
 class MultiStrategy(bt.Strategy):
     params = (
-        ("strategies", "boll,relativity,theme"),  # 启用的策略（cctv 需外部注入才有效）
+        ("strategies", ",".join(RETIRED_STRATEGY_NAMES)),  # 启用的策略（cctv 需外部注入才有效）
         ("boll_period", 20),
         ("boll_k", 1.645),
         ("boll_near_ratio", 1.015),
@@ -74,7 +76,11 @@ class MultiStrategy(bt.Strategy):
     )
 
     # 默认策略权重（与 fusion.STRATEGY_BASE_SCORE 对应，归一化为仓位比例）
-    DEFAULT_WEIGHTS = {"boll": 0.40, "relativity": 0.25, "theme": 0.20, "cctv": 0.15}
+    # 默认策略权重（与 fusion.STRATEGY_BASE_SCORE 对应，归一化为仓位比例）。
+    # 集中派生自 RETIRED_STRATEGY_NAMES：沿用历史权重，未显式列出者（如 momentum）
+    # 给 0（该策略在 _compute_hits 无分支，不参与打分），保证总数恒 1.0。
+    _LEGACY_WEIGHTS = {"boll": 0.40, "relativity": 0.25, "theme": 0.20, "cctv": 0.15}
+    DEFAULT_WEIGHTS = {s: _LEGACY_WEIGHTS.get(s, 0.0) for s in RETIRED_STRATEGY_NAMES}
 
     def __init__(self) -> None:
         self.enabled = {s.strip().lower() for s in str(self.p.strategies).split(",") if s.strip()}

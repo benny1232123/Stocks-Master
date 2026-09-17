@@ -19,7 +19,7 @@ import backtrader as bt
 from smcore.backtest.loader import load_index_data, load_price_data
 from smcore.backtest.signal_backtest import BacktestResult
 from smcore.backtest.strategies import CNCommInfo, MultiStrategy, PriceData
-from smcore.strategy.factor_types import factor_type_of
+from smcore.strategy.factor_types import RETIRED_STRATEGY_NAMES, factor_type_of
 
 # A 股真实交易成本：佣金万2.5（单笔最低5元）+ 卖出印花税千0.5
 _COMM_RATE = 0.00025
@@ -152,7 +152,7 @@ def run_multi_strategy_backtest(
     end: date,
     *,
     initial_capital: float = 100000.0,
-    strategies: str = "boll,relativity,theme",
+    strategies: str = ",".join(RETIRED_STRATEGY_NAMES),
     cctv_hits: Optional[dict[str, int]] = None,
     commission: bool = True,
     **kw,
@@ -163,7 +163,7 @@ def run_multi_strategy_backtest(
         codes: 股票代码列表（任意格式，内部格式化）
         start/end: 回测区间（date）
         initial_capital: 初始资金
-        strategies: 启用的策略，逗号分隔（boll/relativity/theme/cctv）
+        strategies: 启用的策略，逗号分隔（默认见 RETIRED_STRATEGY_NAMES：boll/relativity/theme/cctv/momentum）
         cctv_hits: 题材命中 dict（code->命中数），启用 cctv 时生效
         commission: 是否启用 A股佣金/印花税
         **kw: 透传给 MultiStrategy 的其他参数（如 boll_period、max_hold_days）

@@ -50,7 +50,7 @@ from smcore.strategy.fusion import (
 )
 # 动态阈值 + 趋势守卫 + 市场闸门：内联过滤与生产 fusion 完全同源
 from smcore.strategy.regime_filter import _dynamic_thresholds, _passes_trend_guard
-from smcore.strategy.factor_types import factor_type_of
+from smcore.strategy.factor_types import RETIRED_STRATEGY_NAMES, factor_type_of
 # 多维市场仪表盘：波动率自适应风控的共同输入
 from smcore.strategy.market import compute_market_profile
 # 自适应现金：波动率分位 S 型曲线 + 趋势 regime 调整（替代硬编码 _VOL_POS_SCALE_MAP）
@@ -60,12 +60,9 @@ from smcore.strategy.risk_rules import compute_adaptive_exit_params
 # 动态风险引擎：统一输出 现金/仓位规模/出场参数（含双信号防御下线钳制）
 from smcore.strategy.dynamic_risk import compute_dynamic_risk
 
-STRAT_MAP = {
-    "boll": "boll",
-    "relativity": "relativity",
-    "theme": "theme",
-    "cctv": "cctv",
-}
+# 遗留策略名 → 自身（保留 map 形态以兼容 derive_strategies 的查找语义）。
+# 集中派生自 RETIRED_STRATEGY_NAMES，避免散落硬编码漏掉 momentum。
+STRAT_MAP = {s: s for s in RETIRED_STRATEGY_NAMES}
 
 # 回测只取综合评分最高的前 TOP_N 只，避免信号过多把资金摊成数百个迷你仓位、
 # 导致权益曲线近乎水平（「曲线不动」）。TOP_N 个等权仓位每只约 initial/TOP_N，曲线才能看出涨跌。
@@ -160,7 +157,9 @@ def derive_strategies(source_series: pd.Series) -> str:
             if key in STRAT_MAP:
                 enabled.add(STRAT_MAP[key])
     if not enabled:
-        enabled = {"boll", "relativity", "theme"}
+        # 无来源策略命中时退回全部遗留策略（集中派生自 RETIRED_STRATEGY_NAMES，
+        # 不再硬编码 3 个导致漏掉 cctv/momentum）。
+        enabled = set(RETIRED_STRATEGY_NAMES)
     return ",".join(sorted(enabled))
 
 
@@ -406,7 +405,7 @@ def _backtest_one(path: Path, sd: date, hold_days: int, portfolio_curve=None, dd
                 print(f"  [波动率自适应] 市场波动={_prof.volatility_level} 总仓位缩放={capital_scale} "
                       f"逐只止损: {sum(1 for s in _stops if s)}/{len(_stops)} 只已定")
 
-    strategies = derive_strategies(df["来源策略"]) if "来源策略" in df.columns else "boll,relativity,theme"
+    strategies = derive_strategies(df["来源策略"]) if "来源策略" in df.columns else ",".join(RETIRED_STRATEGY_NAMES)
 
     size_by = os.environ.get("BACKTEST_SIZE_BY", "权重" if "权重" in df.columns else "综合评分") or None
 

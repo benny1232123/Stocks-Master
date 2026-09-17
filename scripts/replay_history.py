@@ -52,11 +52,12 @@ ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
 
 from smcore.config.defaults import STOCK_DATA_DIR  # noqa: E402
+from smcore.strategy.factor_types import RETIRED_STRATEGY_NAMES  # noqa: E402
 
 RESULT_DIR = ROOT / ".workbuddy" / "replay_results"
 RESULT_DIR.mkdir(parents=True, exist_ok=True)
 
-STRATS_FROZEN = ("theme", "cctv", "relativity", "momentum")
+STRATS_FROZEN = RETIRED_STRATEGY_NAMES  # 集中派生，避免漏掉 boll
 # 必须与 smcore/strategy/picks_loader.py 中 _load_*_picks 读取的精确文件名一致
 # （fusion 按 {pattern}-{date}.csv 精确匹配，仅缺失时 3 日内回退，无前视偏差）。
 STRAT_FILE = {

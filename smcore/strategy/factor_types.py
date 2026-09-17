@@ -89,6 +89,15 @@ FACTOR_TYPE_ORDER = [
     "其他",
 ]
 
+# 已退役（legacy）策略名集合：boll/relativity/theme/cctv/momentum 是上一版复合策略，
+# 在 2026-09-17 重构中已从活跃菜单移除（菜单收缩为 A 批 12 个因子池）。
+# 该集合是这些遗留名字的**唯一真源**，供 daily_backtest.py / replay_history.py /
+# backtest/engine.py / backtest/strategies.py 等遗留子系统统一引用，避免各自硬编码
+# 导致「漏 momentum（STRAT_MAP）」「漏 boll（STRATS_FROZEN）」这类漂移。
+# ⚠️ 活跃菜单（STRATEGY_ORDER）不含这些名字；若未来某个 legacy 名字复活，
+# 须先从本集合移除并加入 STRATEGY_ORDER，不要两边同时保留。
+RETIRED_STRATEGY_NAMES = ("boll", "relativity", "theme", "cctv", "momentum")
+
 _DEFAULT_TYPE = "其他"
 
 

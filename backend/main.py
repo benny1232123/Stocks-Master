@@ -746,7 +746,7 @@ def run_backtest(payload: dict) -> dict:
     if mode == "multi":
         start = _parse_date(payload.get("start"), date.today() - timedelta(days=365))
         end = _parse_date(payload.get("end"), date.today())
-        strategies = payload.get("strategies", "boll,relativity,theme")
+        strategies = payload.get("strategies", ",".join(RETIRED_STRATEGY_NAMES))
         task_id = _create_heavy_task("backtest")
     if task_id is None:
         raise HTTPException(status_code=429, detail=f"已有 {_MAX_HEAVY_TASKS} 个重任务在运行，请稍后再试")
