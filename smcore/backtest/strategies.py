@@ -21,6 +21,14 @@ import backtrader as bt
 
 from smcore.strategy.factor_types import RETIRED_STRATEGY_NAMES
 
+# 遗留策略的历史权重（MultiStrategy.DEFAULT_WEIGHTS 由它与 RETIRED_STRATEGY_NAMES 派生）。
+# ⚠️ 必须定义在**模块级**，不能写成 MultiStrategy 的类属性：类体内的推导式有**独立作用域**，
+#    看不到类体命名空间（LOAD_NAME 只在类体顶层生效），写成类属性会直接 NameError →
+#    整个 smcore.backtest 导入失败 → daily_backtest 静默失效。
+#    2026-09-17 回归：680c7c3 引入，由 tests/test_backtest_import_smoke.py 兜住。
+# 未显式列出的遗留策略（momentum）给 0：它在 _compute_hits 无分支、不参与打分，总数仍恒 1.0。
+_LEGACY_WEIGHTS = {"boll": 0.40, "relativity": 0.25, "theme": 0.20, "cctv": 0.15}
+
 
 # ── 自定义行情数据（带成交额，供 Theme 策略）───────────────────────────────
 class PriceData(bt.feeds.PandasData):
@@ -75,11 +83,8 @@ class MultiStrategy(bt.Strategy):
         ("cctv_hits", {}),          # 外部题材命中：code -> 命中数（cctv 策略启用时生效）
     )
 
-    # 默认策略权重（与 fusion.STRATEGY_BASE_SCORE 对应，归一化为仓位比例）
     # 默认策略权重（与 fusion.STRATEGY_BASE_SCORE 对应，归一化为仓位比例）。
-    # 集中派生自 RETIRED_STRATEGY_NAMES：沿用历史权重，未显式列出者（如 momentum）
-    # 给 0（该策略在 _compute_hits 无分支，不参与打分），保证总数恒 1.0。
-    _LEGACY_WEIGHTS = {"boll": 0.40, "relativity": 0.25, "theme": 0.20, "cctv": 0.15}
+    # 集中派生自模块级 RETIRED_STRATEGY_NAMES + _LEGACY_WEIGHTS（见文件顶部说明为何不能在类体内算）。
     DEFAULT_WEIGHTS = {s: _LEGACY_WEIGHTS.get(s, 0.0) for s in RETIRED_STRATEGY_NAMES}
 
     def __init__(self) -> None:
