@@ -835,7 +835,11 @@
 .top-code { font-family: var(--font-mono); font-size: 0.8rem; font-weight: 700; color: hsl(var(--foreground)); flex-shrink: 0; }
 .top-name { font-size: 0.85rem; font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 
-/* 策略标签 */
+/* 策略标签
+   ⚠️ 每个已注册策略都需要一条 .top-tag--<策略id> 规则（id 见 lib/factorTypes.js）。
+   缺规则的策略标签会失去配色（仅剩基类样式），属「静默降级」——
+   tests/test_frontend_registry_parity.py 会断言本文件覆盖全部策略 id。
+   2026-09-17 补齐：momentum 原本就缺失，另加 9 个新策略。 */
 .top-tags { display: inline-flex; gap: 4px; flex-wrap: wrap; }
 .top-tag {
   font-size: 0.65rem; padding: 1px 6px; border-radius: 4px; font-weight: 600;
@@ -845,6 +849,19 @@
 .top-tag--relativity { background: hsl(280, 60%, 92%); color: hsl(280, 55%, 35%); }
 .top-tag--theme  { background: hsl(150, 50%, 90%); color: hsl(150, 45%, 28%); }
 .top-tag--cctv    { background: hsl(20, 80%, 90%); color: hsl(20, 65%, 38%); }
+.top-tag--momentum { background: hsl(200, 80%, 92%); color: hsl(200, 70%, 32%); }
+/* 基本面族（青/石板色系） */
+.top-tag--quality { background: hsl(199, 85%, 92%); color: hsl(199, 70%, 32%); }
+.top-tag--value   { background: hsl(185, 70%, 92%); color: hsl(185, 60%, 30%); }
+.top-tag--size    { background: hsl(215, 20%, 91%); color: hsl(215, 20%, 35%); }
+/* 反转族原子（靛/紫系，与 boll 同族） */
+.top-tag--boll_oversold     { background: hsl(258, 80%, 93%); color: hsl(258, 60%, 38%); }
+.top-tag--boll_near_lower   { background: hsl(262, 75%, 93%); color: hsl(262, 55%, 36%); }
+.top-tag--boll_mid_pullback { background: hsl(255, 85%, 94%); color: hsl(255, 55%, 40%); }
+.top-tag--boll_squeeze      { background: hsl(244, 70%, 93%); color: hsl(244, 55%, 40%); }
+/* 相对强度族原子（绿系，与 relativity 同族） */
+.top-tag--rel_up   { background: hsl(160, 70%, 90%); color: hsl(160, 55%, 28%); }
+.top-tag--rel_down { background: hsl(161, 80%, 90%); color: hsl(161, 60%, 26%); }
 
 /* 副行：买入价/现价/仓位 */
 .top-sub { display: flex; gap: 12px; font-size: 0.72rem; color: hsl(var(--muted-foreground)); font-family: var(--font-mono); flex-wrap: wrap; }

@@ -277,11 +277,24 @@ function EquityChart({ equity, initialCapital }) {
   )
 }
 
+// 策略 id → 展示标签。id 集合必须与后端 factor_types.STRATEGY_ORDER 一致
+// （tests/test_frontend_registry_parity.py 守卫）；缺项时调用方有 `|| s` 兜底，
+// 但 top-tag 配色需要 styles.css 里对应的 .top-tag--<id> 规则。
 const STRAT_LABEL = {
   boll: 'Boll 低吸',
   relativity: 'Relativity 相对强弱',
   theme: 'Theme 题材动量',
   cctv: 'CCTV 舆情',
+  momentum: 'Momentum 动量',
+  quality: 'Quality 质量',
+  value: 'Value 估值',
+  size: 'Size 规模',
+  boll_oversold: 'Boll 超卖',
+  boll_near_lower: 'Boll 近下轨',
+  boll_mid_pullback: 'Boll 中轨回踩',
+  boll_squeeze: 'Boll 带宽收口',
+  rel_up: 'Rel 上涨满足',
+  rel_down: 'Rel 抗跌满足',
 }
 
 // 回测持仓的退出原因 → 中文标签（说明仓位按市场信号平仓，非固定持有）

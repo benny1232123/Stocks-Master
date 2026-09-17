@@ -1,6 +1,11 @@
 import { useState } from 'react'
 import { cn } from '../lib/utils'
-import { factorTypesOfSource, getFactorTypeColor } from '../lib/factorTypes'
+import {
+  factorTypesOfSource,
+  getFactorTypeColor,
+  hasTypeFamily,
+  STRATEGY_FACTOR_TYPE,
+} from '../lib/factorTypes'
 
 function DailyExpandableList({ rows, onCodeClick }) {
   const [expanded, setExpanded] = useState(new Set())
@@ -8,14 +13,14 @@ function DailyExpandableList({ rows, onCodeClick }) {
   // hasNum: 兼容 num() 返回 null 的安全守卫（!isNaN(null)===true 是 JS 坑）
   const hasNum = (v) => v != null && !isNaN(v)
 
-  // 策略颜色映射
-  const STRAT_COLORS = {
-    'Boll': { bg: 'hsla(229, 87%, 56%, 0.10)', text: '#6366F1', border: 'hsla(229, 87%, 56%, 0.35)' },
-    'Relativity': { bg: 'hsla(157, 81%, 37%, 0.09)', text: '#30A46C', border: 'hsla(157, 81%, 37%, 0.35)' },
-    'Theme': { bg: 'hsla(38, 92%, 50%, 0.10)', text: '#F59E0B', border: 'hsla(38, 92%, 50%, 0.35)' },
-    'CCTV': { bg: 'hsla(3, 80%, 50%, 0.08)', text: '#E5484D', border: 'hsla(3, 80%, 50%, 0.35)' },
+  // 策略标签颜色：DAL 的「来源策略」标签小写后就是策略 id，故直接复用因子类型配色表。
+  // 原实现是第三份硬编码 STRAT_COLORS（只登记 Boll/Relativity/Theme/CCTV 四个），
+  // 新增策略一律落到灰色兜底 → 2026-09-17 改为从单一注册表推导，不再有第三处副本。
+  const _DEFAULT_STRAT_COLOR = { bg: 'hsl(var(--surface-2))', text: 'hsl(var(--muted))', border: 'hsl(var(--border))' }
+  const getStratColor = (label) => {
+    const t = STRATEGY_FACTOR_TYPE[String(label ?? '').trim().toLowerCase()]
+    return t ? getFactorTypeColor(t) : _DEFAULT_STRAT_COLOR
   }
-  const getStratColor = (s) => STRAT_COLORS[s] || { bg: 'hsl(var(--surface-2))', text: 'hsl(var(--muted))', border: 'hsl(var(--border))' }
 
   // 评分等级色
   const scoreGrade = (s) => {
@@ -38,8 +43,10 @@ function DailyExpandableList({ rows, onCodeClick }) {
     const ma20 = num(row, 'MA20')
     const stratStr = String(row['来源策略'] ?? '')
     const hit = Number(row['命中策略数'] ?? stratStr.split('/').filter(Boolean).length) || 1
-    // 相对强弱维度改按因子类型判定（与后端 factor_types.py 对齐，避免依赖原始策略名拼写）
-    const hasRS = factorTypesOfSource(row['来源策略'] ?? '').includes('相对强度·资金流')
+    // 相对强弱维度改按因子**家族**判定（与后端 factor_types.py / fusion 趋势闸门同口径）：
+    // 原实现精确匹配 '相对强度·资金流'，boll/relativity 拆出 Rel_Up/Rel_Down 后
+    // 原子来源的票会漏判 → 该维度静默失效。改用前缀归并覆盖整族。
+    const hasRS = hasTypeFamily(row['来源策略'] ?? '', '相对强度')
 
     // 1) 超卖深度：价格越贴近/跌破下轨，反弹赔率越好
     let oversold = 50
