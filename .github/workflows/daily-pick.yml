@@ -239,7 +239,12 @@ jobs:
           SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
           SUPABASE_KEY: ${{ secrets.SUPABASE_KEY }}
         run: |
-          python scripts/daily_backtest.py || true
+          # ⚠️ 不要在这里加 `|| true`（2026-09-17 拆除）：本步骤已有 continue-on-error: true，
+          # 失败不会阻塞后续的数据提交步骤；再加 `|| true` 只会让「脚本崩溃」与「脚本跑完」
+          # 在 CI 上完全不可区分。事故：680c7c3 让 smcore.backtest 导入即 NameError，
+          # daily_backtest 当场挂掉，却被 `|| true` 吞成绿色，回测面板静默停更。
+          # daily_backtest.main() 的所有分支都 return 0，非 0 只可能来自未捕获异常。
+          python scripts/daily_backtest.py
           echo "=== 回测状态 ==="
           cat stock_data/backtest_status.txt 2>/dev/null || echo "无状态文件"
 
