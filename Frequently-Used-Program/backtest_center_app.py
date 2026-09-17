@@ -19,6 +19,18 @@ REPO_ROOT = APP_FILE.parents[1]
 STOCK_DATA_DIR = REPO_ROOT / "stock_data"
 UI_UPLOAD_DIR = STOCK_DATA_DIR / "ui_uploads"
 
+# 信号来源（下拉）与「单策略自动满仓」判定共用同一份定义，避免两处硬编码漂移。
+# 本工具是遗留 signal 回测台，配比模型为 boll/theme/relativity/cctv；
+# 下拉里除「全部」外的可选单一来源 = SINGLE_STRATEGY_KEYS。
+STRATEGY_SOURCE_LABELS = {
+    "boll": "Boll",
+    "relativity": "Relativity",
+    "theme": "Theme-Turnover",
+    "all": "全部",
+}
+SINGLE_STRATEGY_KEYS = tuple(k for k in STRATEGY_SOURCE_LABELS if k != "all")
+STRATEGY_SOURCE_OPTIONS = (*SINGLE_STRATEGY_KEYS, "all")
+
 
 def _ts() -> str:
     return datetime.now().strftime("%Y%m%d_%H%M%S")
@@ -467,14 +479,9 @@ def _render_signal_tab() -> None:
         col_sel_1, col_sel_2, col_sel_3 = st.columns(3)
         strategy_key = col_sel_1.selectbox(
             "信号来源",
-            options=["boll", "relativity", "theme", "all"],
-            format_func=lambda x: {
-                "boll": "Boll",
-                "relativity": "Relativity",
-                "theme": "Theme-Turnover",
-                "all": "全部",
-            }[x],
-            index=3,
+            options=list(STRATEGY_SOURCE_OPTIONS),
+            format_func=lambda x: STRATEGY_SOURCE_LABELS[x],
+            index=len(STRATEGY_SOURCE_OPTIONS) - 1,
         )
         include_archive = col_sel_2.checkbox("包含 archive 历史", value=True)
         default_start_date, default_end_date = _default_signal_date_range(include_archive=True)
@@ -542,7 +549,7 @@ def _render_signal_tab() -> None:
         st.caption("CSV列示例：信号日期,boll,theme,relativity,cctv,cash；日期支持 YYYYMMDD 或 YYYY-MM-DD。")
         st.caption("配比优先级：配比CSV > 市场自动配比 > 手工输入配比。")
 
-    if auto_full_single and strategy_key in {"boll", "relativity", "theme"}:
+    if auto_full_single and strategy_key in SINGLE_STRATEGY_KEYS:
         ratio_boll = 100.0 if strategy_key == "boll" else 0.0
         ratio_theme = 100.0 if strategy_key == "theme" else 0.0
         ratio_relativity = 100.0 if strategy_key == "relativity" else 0.0
