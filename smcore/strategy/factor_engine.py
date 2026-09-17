@@ -112,6 +112,27 @@ def load_matrices(cols: tuple[str, ...] = ("close", "high", "low", "amount"),
     return mats
 
 
+def signal_day_coverage(close: pd.DataFrame, date_str: str) -> tuple[int, int]:
+    """信号日**有效截面**：(该日非空代码数, 总代码数)。``date_str`` 形如 ``YYYYMMDD``。
+
+    "有效截面" = 因子矩阵在信号日那一行的非空格数，也就是横截面因子与 z 分**真正能看到的
+    样本量**。这是判断"当日能不能出票"的唯一正确指标——只看"某个数据源有当日 bar"
+    （如按 2 只样本股抽查）会把 4363/4380 → 1/4380 的崩塌判成"数据正常"
+    （2026-09-17 A 批空产出事故的直接成因）。
+    """
+    ts = pd.Timestamp(f"{date_str[:4]}-{date_str[4:6]}-{date_str[6:]}")
+    total = int(close.shape[1])
+    if ts not in close.index:
+        return 0, total
+    return int(close.loc[ts].notna().sum()), total
+
+
+def load_signal_day_coverage(date_str: str, load_start: str | None = None) -> tuple[int, int]:
+    """便捷版：自己读矩阵再算覆盖度（离线，无网络）。"""
+    close = load_matrices(cols=("close",), load_start=load_start or LOAD_START)["close"]
+    return signal_day_coverage(close, date_str)
+
+
 # ── 掩码 ────────────────────────────────────────────────────────────────
 def limit_series(codes) -> pd.Series:
     """板内涨跌停幅度（近似）：创业板/科创板 20%，北交所 30%，其余 10%。"""

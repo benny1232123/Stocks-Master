@@ -39,8 +39,6 @@ import sys
 from datetime import datetime, timedelta
 from pathlib import Path
 
-import pandas as pd
-
 ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
@@ -69,13 +67,10 @@ def _run_chunk(codes: list[str], start: str, end: str) -> int:
 # ── 覆盖度：信号日那一行的非空代码数（= A 批因子实际能看到的截面）────────
 
 def _coverage(date_str: str, load_start: str) -> tuple[int, int]:
+    """信号日有效截面——复用 factor_engine 的权威度量（与 verify_data_freshness 同口径）。"""
     from smcore.strategy import factor_engine as fe
 
-    close = fe.load_matrices(cols=("close",), load_start=load_start)["close"]
-    ts = pd.Timestamp(f"{date_str[:4]}-{date_str[4:6]}-{date_str[6:]}")
-    if ts not in close.index:
-        return 0, int(close.shape[1])
-    return int(close.loc[ts].notna().sum()), int(close.shape[1])
+    return fe.load_signal_day_coverage(date_str, load_start)
 
 
 def main() -> int:
