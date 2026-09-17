@@ -35,6 +35,9 @@ def _build_report_text(
     n_cctv: int,
     n_momentum: int = 0,
     *,
+    n_quality: int = 0,
+    n_value: int = 0,
+    n_size: int = 0,
     source_dates: dict[str, Optional[str]] | None = None,
     max_stale_days: int = 3,
     max_single_weight_pct: float = 10.0,
@@ -47,6 +50,9 @@ def _build_report_text(
         "Theme": n_theme,
         "CCTV": n_cctv,
         "Momentum": n_momentum,
+        "Quality": n_quality,
+        "Value": n_value,
+        "Size": n_size,
     }
     sd = source_dates or {}
     contrib_lines = []
@@ -73,7 +79,7 @@ def _build_report_text(
         stale_notes = _format_source_date_notes(date_yyyymmdd, sd, max_stale_days=max_stale_days)
         header = "\n## 今日操作清单\n- 无候选"
         summary = "\n### 策略贡献度\n" + "\n".join(contrib_lines) + (
-            f"\n> 📊 仅 {active_count}/5 个策略有输出，清单可能不完整。" if active_count < 3 else ""
+            f"\n> 📊 仅 {active_count}/{len(strat_raw)} 个策略有输出，清单可能不完整。" if active_count < 3 else ""
         ) + ft_contrib_text
         return header + ("\n" + stale_notes if stale_notes else "") + summary
 
@@ -83,7 +89,7 @@ def _build_report_text(
         "",
         "### 策略贡献度",
         *contrib_lines,
-        "" if active_count >= 3 else f"> ⚠️ 仅 {active_count}/5 个策略有输出，回测/决策参考价值有限。",
+        "" if active_count >= 3 else f"> ⚠️ 仅 {active_count}/{len(strat_raw)} 个策略有输出，回测/决策参考价值有限。",
         "",
     ]
     lines.extend(ft_contrib_text.split("\n"))

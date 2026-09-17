@@ -45,7 +45,7 @@ if __package__ in (None, ""):
 from smcore.config.defaults import STOCK_DATA_DIR
 from smcore.utils.code import format_stock_code
 
-ALL_STRATEGIES = ["boll", "theme", "relativity", "momentum", "cctv", "fundamental"]
+ALL_STRATEGIES = ["boll", "theme", "relativity", "momentum", "cctv", "quality", "value", "size"]
 
 # ── 可热更新的超参配置（月度 walk-forward 重验 CI 可改写本文件）──
 # 文件缺失 / 解析失败时回退到内置默认，保证「零配置也能跑」且行为不变。

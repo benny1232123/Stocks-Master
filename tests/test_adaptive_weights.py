@@ -216,7 +216,7 @@ def test_no_evidence_strategy_capped_to_floor(monkeypatch):
         "boll":       {"edge": 2.0, "n": 30, "win_rate": 55, "avg": 2.0},
         "relativity": {"edge": 1.0, "n": 30, "win_rate": 52, "avg": 1.0},
         # fundamental：刚接入，零归因历史
-        "fundamental": {"edge": 0.0, "n": 0, "win_rate": None, "avg": None},
+        "quality": {"edge": 0.0, "n": 0, "win_rate": None, "avg": None},
         "theme":      {"edge": 0.0, "n": 0, "win_rate": None, "avg": None},
         "cctv":       {"edge": 0.0, "n": 0, "win_rate": None, "avg": None},
         "momentum":   {"edge": 0.0, "n": 0, "win_rate": None, "avg": None},
@@ -237,11 +237,11 @@ def test_no_evidence_strategy_capped_to_floor(monkeypatch):
     assert w["theme"] == 0 and w["cctv"] == 0 and w["momentum"] == 0
     # fundamental 只拿 floor 探索权重（固定 ≈3%，不随幸存池放大）
     FLOOR = aw.CONFIG["FLOOR"]
-    assert w["fundamental"] > 0, w
-    assert w["fundamental"] <= FLOOR + 1, w
-    assert w["fundamental"] >= 1, w
+    assert w["quality"] > 0, w
+    assert w["quality"] <= FLOOR + 1, w
+    assert w["quality"] >= 1, w
     # 有证据的策略吃掉释放额度
-    assert w["boll"] > w["fundamental"] and w["relativity"] > w["fundamental"], w
+    assert w["boll"] > w["quality"] and w["relativity"] > w["quality"], w
     assert sum(w.values()) == 100
 
 
@@ -257,7 +257,7 @@ def test_no_evidence_gate_can_be_disabled(monkeypatch):
     fake_edge = {
         "boll":       {"edge": 2.0, "n": 30, "win_rate": 55, "avg": 2.0},
         "relativity": {"edge": 1.0, "n": 30, "win_rate": 52, "avg": 1.0},
-        "fundamental": {"edge": 0.0, "n": 0, "win_rate": None, "avg": None},
+        "quality": {"edge": 0.0, "n": 0, "win_rate": None, "avg": None},
         "theme":      {"edge": 0.0, "n": 0, "win_rate": None, "avg": None},
         "cctv":       {"edge": 0.0, "n": 0, "win_rate": None, "avg": None},
         "momentum":   {"edge": 0.0, "n": 0, "win_rate": None, "avg": None},
@@ -277,4 +277,4 @@ def test_no_evidence_gate_can_be_disabled(monkeypatch):
     assert w["theme"] == 0 and w["cctv"] == 0 and w["momentum"] == 0
     assert sum(w.values()) == 100
     # 关闭门控后 fundamental 仍有正权重（不被强制压到 floor 区间外），且仍 > 0
-    assert w["fundamental"] > 0, w
+    assert w["quality"] > 0, w

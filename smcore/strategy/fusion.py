@@ -110,7 +110,7 @@ from .picks_loader import (
     _find_strategy_csv,
     _load_boll_picks,
     _load_cctv_picks,
-    _load_fundamental_picks,
+    _load_fund_factor_picks,
     _load_momentum_picks,
     _load_relativity_picks,
     _load_theme_picks,
@@ -165,7 +165,7 @@ __all__ = [
     "_load_theme_picks",
     "_load_cctv_picks",
     "_load_momentum_picks",
-    "_load_fundamental_picks",
+    "_load_fund_factor_picks",
     # boll_levels
     "_compute_boll_levels",
     # position_sizing
@@ -220,7 +220,9 @@ def fuse_signals(
     theme, theme_date = _load_theme_picks(date_yyyymmdd, max_stale_days=max_stale_days)
     cctv, cctv_date = _load_cctv_picks(date_yyyymmdd, max_stale_days=max_stale_days)
     momentum, mom_date = _load_momentum_picks(date_yyyymmdd, max_stale_days=max_stale_days)
-    fundamental, fund_date = _load_fundamental_picks(date_yyyymmdd, max_stale_days=max_stale_days)
+    quality, qual_date = _load_fund_factor_picks("Quality", date_yyyymmdd, max_stale_days=max_stale_days)
+    value, val_date = _load_fund_factor_picks("Value", date_yyyymmdd, max_stale_days=max_stale_days)
+    size, size_date = _load_fund_factor_picks("Size", date_yyyymmdd, max_stale_days=max_stale_days)
 
     source_dates = {
         "Boll": boll_date,
@@ -228,11 +230,14 @@ def fuse_signals(
         "Theme": theme_date,
         "CCTV": cctv_date,
         "Momentum": mom_date,
-        "Fundamental": fund_date,
+        "Quality": qual_date,
+        "Value": val_date,
+        "Size": size_date,
     }
 
     # 合并所有代码
-    all_codes = set(boll) | set(relativity) | set(theme) | set(cctv) | set(momentum) | set(fundamental)
+    all_codes = (set(boll) | set(relativity) | set(theme) | set(cctv)
+                 | set(momentum) | set(quality) | set(value) | set(size))
     if not all_codes:
         return pd.DataFrame(), "今日无任何策略命中，无可操作清单。"
 
@@ -323,10 +328,18 @@ def fuse_signals(
             hit_strategies.append("Momentum")
             score += strategy_scores.get("momentum", 0)
             name = momentum[code]["name"] or name
-        if code in fundamental:
-            hit_strategies.append("Fundamental")
-            score += strategy_scores.get("fundamental", 0)
-            name = fundamental[code]["name"] or name
+        if code in quality:
+            hit_strategies.append("Quality")
+            score += strategy_scores.get("quality", 0)
+            name = quality[code]["name"] or name
+        if code in value:
+            hit_strategies.append("Value")
+            score += strategy_scores.get("value", 0)
+            name = value[code]["name"] or name
+        if code in size:
+            hit_strategies.append("Size")
+            score += strategy_scores.get("size", 0)
+            name = size[code]["name"] or name
 
         # ── 买入价兜底：非 Boll 策略无建议买入价时用信号日收盘价 ─────────
         if buy_price is None and levels:
@@ -372,6 +385,9 @@ def fuse_signals(
             "theme": len(theme),
             "cctv": len(cctv),
             "momentum": len(momentum),
+            "quality": len(quality),
+            "value": len(value),
+            "size": len(size),
         }
         # 取命中策略中权重最高者
         best_weight = 0
@@ -540,6 +556,9 @@ def fuse_signals(
         len(theme),
         len(cctv),
         len(momentum),
+        n_quality=len(quality),
+        n_value=len(value),
+        n_size=len(size),
         source_dates=source_dates,
         max_stale_days=max_stale_days,
         max_single_weight_pct=max_single_eff,
@@ -551,12 +570,18 @@ def fuse_signals(
             report += f"\n- 🚦 趋势闸门触发（市场下行防御）：剔除 {gated_out} 只纯均值回归候选（Boll/Relativity），仅留顺势策略"
         else:
             cold_tag = "（冷启动等权）" if cold else "（自适应·按近期业绩）"
+            # 权重逐策略动态渲染（策略集随 ALL_STRATEGIES 自适应，勿硬编码名字）
+            w_txt = " / ".join(
+                f"{name} {adaptive_pct.get(key)}"
+                for name, key in (
+                    ("Boll", "boll"), ("Relativity", "relativity"), ("CCTV", "cctv"),
+                    ("Momentum", "momentum"), ("Theme", "theme"),
+                    ("Quality", "quality"), ("Value", "value"), ("Size", "size"),
+                )
+            )
             report += (
                 f"\n- 🚦 市场状态：{regime}（趋势闸门生效）；"
-                f"策略权重{cold_tag}：Boll {adaptive_pct.get('boll')} / "
-                f"Momentum {adaptive_pct.get('momentum')} / Theme {adaptive_pct.get('theme')} / "
-                f"Relativity {adaptive_pct.get('relativity')} / CCTV {adaptive_pct.get('cctv')}；"
-                f"现金 {cash_pct}%"
+                f"策略权重{cold_tag}：{w_txt}；现金 {cash_pct}%"
             )
     if rs_filtered_out:
         report += f"\n- 📉 相对强度过滤剔除 {rs_filtered_out} 只跑输大盘超 {rs_tol * 100:.0f}% 的票（alpha 弱，直接不治本；阈值随市浮动）"
