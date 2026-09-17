@@ -222,6 +222,34 @@ def _match_ths_sector(industry: str, ths: dict) -> Optional[str]:
 
 
 # ───────────────────────── 复权因子事件流 × qfq 守卫交叉校验 ─────────────────────────
+# 除权事件流按「代码 + 当日」记忆化。
+#
+# ⚠️ 为什么必须有这一层（2026-09-17 实测）：``classify_breaks`` 对**每个**断层都调
+# ``corporate_action_explains``，而后者的入参只有 code6（无日期区间）→ 同一只票的 N 个
+# 断层会发起 N 次**入参完全相同**的 HTTP 请求。污染严重的票断层数可达 79 个（000019），
+# 于是单只票就多出 79 次网络往返，成为 K 线刷新里除「全量重拉」之外的第二大成本。
+# 记忆化后 N 次 → 1 次，且**不改变任何判定结果**（入参相同则结果确定）。
+# 键含当日日期：除权事件流是日频增量数据，跨日必须重取（长驻进程不会读到陈旧事件）。
+_EVENT_CACHE: dict[tuple[str, str], list] = {}
+_EVENT_CACHE_MAX = 2000
+
+
+def _events_for(code6: str) -> list:
+    """取（并缓存）某代码的除权事件流；失败按空列表处理（fail-soft）。"""
+    key = (code6, date.today().strftime("%Y%m%d"))
+    if key in _EVENT_CACHE:
+        return _EVENT_CACHE[key]
+    if len(_EVENT_CACHE) > _EVENT_CACHE_MAX:
+        # 全宇宙刷新（数千只）时防止无界增长；清空后仅损失少量命中率，语义不变。
+        _EVENT_CACHE.clear()
+    try:
+        evs = _hk.fetch_adjustment_factors(code6) or []
+    except Exception:
+        evs = []
+    _EVENT_CACHE[key] = evs
+    return evs
+
+
 def corporate_action_explains(code6: str, break_date: str, ratio: float,
                               prev_close: float | None = None, tol: float = 0.03) -> bool:
     """该复权断层是否由真实分红/送股解释（break_date 邻近有除权事件且幅度吻合）。
@@ -231,10 +259,7 @@ def corporate_action_explains(code6: str, break_date: str, ratio: float,
     """
     if not _hk.available() or not code6 or not break_date:
         return False
-    try:
-        evs = _hk.fetch_adjustment_factors(code6)
-    except Exception:
-        return False
+    evs = _events_for(code6)
     if not evs:
         return False
     from datetime import date as _date
