@@ -345,7 +345,9 @@ jobs:
           fi
 
       - name: 失败告警（无候选且无策略产出时开 issue）
-        if: steps.gate.outputs.ok == 'true'
+        # always(): 前置步骤失败（如 K 线刷新覆盖度不达标）时也必须告警——
+        # 否则「红 build 但无人开 issue」，与本次事故的静默失败是同一类漏洞。
+        if: always() && steps.gate.outputs.ok == 'true'
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           TODAY: ${{ steps.gate.outputs.today }}
