@@ -12,6 +12,8 @@ import pandas as pd
 from smcore.config.defaults import STOCK_DATA_DIR
 from smcore.strategy.factor_types import (
     FACTOR_TYPE_ORDER,
+    STRATEGY_LABEL,
+    STRATEGY_ORDER,
     factor_types_of_source,
     rollup_counts,
 )
@@ -29,48 +31,39 @@ ACTION_LIST_COLUMNS = [
 def _build_report_text(
     df: pd.DataFrame,
     date_yyyymmdd: str,
-    n_boll: int,
-    n_relativity: int,
-    n_theme: int,
-    n_cctv: int,
-    n_momentum: int = 0,
     *,
-    n_quality: int = 0,
-    n_value: int = 0,
-    n_size: int = 0,
+    counts: dict[str, int] | None = None,
     source_dates: dict[str, Optional[str]] | None = None,
     max_stale_days: int = 3,
     max_single_weight_pct: float = 10.0,
 ) -> str:
-    """生成日报段落。"""
-    # ── 策略贡献度汇总（显眼置顶，一眼看出哪几个策略在出力）──
-    strat_raw = {
-        "Boll": n_boll,
-        "Relativity": n_relativity,
-        "Theme": n_theme,
-        "CCTV": n_cctv,
-        "Momentum": n_momentum,
-        "Quality": n_quality,
-        "Value": n_value,
-        "Size": n_size,
-    }
+    """生成日报段落。
+
+    ``counts`` = {策略 id: 候选数}（唯一输入）。策略集与展示标签自适应
+    ``factor_types.STRATEGY_ORDER / STRATEGY_LABEL``——原 8 个 n_* 参数已收敛为
+    一个 dict，新增因子只需注册、不必改本函数签名。
+    """
+    cnt = {s: int((counts or {}).get(s, 0) or 0) for s in STRATEGY_ORDER}
     sd = source_dates or {}
     contrib_lines = []
-    for name, cnt in strat_raw.items():
-        actual = sd.get(name)
+    for sid in STRATEGY_ORDER:
+        label = STRATEGY_LABEL[sid]
+        c = cnt[sid]
+        actual = sd.get(label)
         if actual is None:
             status = "❌ 缺失（未找到文件）"
-        elif cnt == 0:
+        elif c == 0:
             status = f"⚪ 产出=0（{actual} 数据为空）"
         elif actual != date_yyyymmdd:
-            status = f"✅ {cnt} 只（{actual}，回退{max_stale_days}天内）"
+            status = f"✅ {c} 只（{actual}，回退{max_stale_days}天内）"
         else:
-            status = f"✅ {cnt} 只"
-        contrib_lines.append(f"- {name}: {status}")
-    active_count = sum(1 for c in strat_raw.values() if c > 0)
+            status = f"✅ {c} 只"
+        contrib_lines.append(f"- {label}: {status}")
+    n_strategies = len(STRATEGY_ORDER)
+    active_count = sum(1 for c in cnt.values() if c > 0)
 
     # ── 因子类型贡献度（按因子类型归并；用户 2026-09-15 要求，策略名仍保留于上方明细）──
-    ft_counts = rollup_counts({k.lower(): v for k, v in strat_raw.items()})
+    ft_counts = rollup_counts(cnt)
     ft_contrib_text = "\n### 因子类型贡献度\n" + "\n".join(
         f"- {ft}: {ft_counts[ft]} 只" for ft in FACTOR_TYPE_ORDER if ft in ft_counts
     )
@@ -79,7 +72,7 @@ def _build_report_text(
         stale_notes = _format_source_date_notes(date_yyyymmdd, sd, max_stale_days=max_stale_days)
         header = "\n## 今日操作清单\n- 无候选"
         summary = "\n### 策略贡献度\n" + "\n".join(contrib_lines) + (
-            f"\n> 📊 仅 {active_count}/{len(strat_raw)} 个策略有输出，清单可能不完整。" if active_count < 3 else ""
+            f"\n> 📊 仅 {active_count}/{n_strategies} 个策略有输出，清单可能不完整。" if active_count < 3 else ""
         ) + ft_contrib_text
         return header + ("\n" + stale_notes if stale_notes else "") + summary
 
@@ -89,7 +82,7 @@ def _build_report_text(
         "",
         "### 策略贡献度",
         *contrib_lines,
-        "" if active_count >= 3 else f"> ⚠️ 仅 {active_count}/{len(strat_raw)} 个策略有输出，回测/决策参考价值有限。",
+        "" if active_count >= 3 else f"> ⚠️ 仅 {active_count}/{n_strategies} 个策略有输出，回测/决策参考价值有限。",
         "",
     ]
     lines.extend(ft_contrib_text.split("\n"))

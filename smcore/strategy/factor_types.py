@@ -28,13 +28,56 @@ STRATEGY_FACTOR_TYPE = {
     "quality": "基本面·质量",
     "value": "基本面·估值",
     "size": "基本面·规模",
+    # 2026-09-17：boll / relativity 两个「复合策略」沿价格轴拆成原子因子，各自独立竞权。
+    # boll 的布林触发 4 个原子（互斥优先级，与 evaluate_boll_signal 一致）：
+    "boll_oversold": "反转·超卖",
+    "boll_near_lower": "反转·近下轨",
+    "boll_mid_pullback": "反转·中轨回踩",
+    "boll_squeeze": "反转·带宽收口",
+    # relativity 的相对强度触发 2 个原子（各自独立，可同时命中）：
+    "rel_up": "相对强度·上涨满足率",
+    "rel_down": "相对强度·抗跌满足率",
 }
 
-# 展示顺序（与既有策略认知一致，便于阅读）
+# 策略 id → DAL「来源策略」/报告展示标签（唯一真相源）。
+# ⚠️ 约束：label.lower() 必须 == id —— adaptive_weights._norm_strategies 把 DAL 来源策略
+# 转小写后与 ALL_STRATEGIES 求交集做归因，标签大小写写错会让该策略永远归因不到 edge。
+STRATEGY_LABEL = {
+    "boll": "Boll",
+    "relativity": "Relativity",
+    "theme": "Theme",
+    "cctv": "CCTV",
+    "momentum": "Momentum",
+    "quality": "Quality",
+    "value": "Value",
+    "size": "Size",
+    "boll_oversold": "Boll_Oversold",
+    "boll_near_lower": "Boll_Near_Lower",
+    "boll_mid_pullback": "Boll_Mid_Pullback",
+    "boll_squeeze": "Boll_Squeeze",
+    "rel_up": "Rel_Up",
+    "rel_down": "Rel_Down",
+}
+
+# 策略 id 规范顺序（供报告/权重行动态渲染；与 fusion 命中标签顺序一致）
+STRATEGY_ORDER = [
+    "boll", "relativity", "theme", "cctv", "momentum",
+    "quality", "value", "size",
+    "boll_oversold", "boll_near_lower", "boll_mid_pullback", "boll_squeeze",
+    "rel_up", "rel_down",
+]
+
+# 展示顺序（与既有策略认知一致，便于阅读）：同一族的原子紧随其复合体排布
 FACTOR_TYPE_ORDER = [
     "动量",
     "反转·均值回归",
+    "反转·超卖",
+    "反转·近下轨",
+    "反转·中轨回踩",
+    "反转·带宽收口",
     "相对强度·资金流",
+    "相对强度·上涨满足率",
+    "相对强度·抗跌满足率",
     "题材",
     "事件·舆情",
     "基本面·质量",
@@ -44,6 +87,32 @@ FACTOR_TYPE_ORDER = [
 ]
 
 _DEFAULT_TYPE = "其他"
+
+
+def label_of(strategy: str) -> str:
+    """策略 id → DAL/报告标签（未注册时回退原样字符串，保证 fail-soft）。"""
+    key = _normalize(strategy)
+    return STRATEGY_LABEL.get(key, str(strategy).strip())
+
+
+def _assert_label_invariant() -> None:
+    """守住「标签小写 == id」这一归因硬约束。
+
+    归因链路（adaptive_weights._norm_strategies）把 DAL「来源策略」转小写后与
+    ALL_STRATEGIES 求交集；标签一旦与 id 大小写/拼写不一致，该策略会**静默**归因不到
+    edge（表现为权重长期停在无证据 floor）。这里的断言让错误在导入期就暴露。
+    """
+    for sid, label in STRATEGY_LABEL.items():
+        if label.lower() != sid:
+            raise AssertionError(
+                f"STRATEGY_LABEL[{sid!r}]={label!r} 的 lower() 必须等于 id，否则归因失效"
+            )
+    missing = [s for s in STRATEGY_ORDER if s not in STRATEGY_FACTOR_TYPE]
+    if missing:
+        raise AssertionError(f"STRATEGY_ORDER 含未注册因子类型的策略：{missing}")
+
+
+_assert_label_invariant()
 
 
 def _normalize(name: str) -> str:

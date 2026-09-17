@@ -32,7 +32,9 @@ def _build_patch(up_dates, down_dates, down_beats=True):
     def fake_sig_days():
         return list(all_dates)
 
-    def fake_weights(sd, shrinkage=None, floor=None, zero_negative_edge=True):
+    def fake_weights(sd, shrinkage=None, floor=None, zero_negative_edge=True, **kwargs):
+        # **kwargs：吸收 _weights_for_day 后续新增的具名参数（position_weighted /
+        # factor_timing 等）——否则 run() 一升级签名，本 stub 即 TypeError（曾静默漂移）。
         return (dict(WEIGHTS), False)
 
     def fake_picks(sd, exit_kwargs=None):

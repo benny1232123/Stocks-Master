@@ -83,10 +83,12 @@ def test_build_report_text_factor_type_rollup_and_column():
          "综合评分": 60, "建议仓位%": 4, "止损价(下轨)": 9.0, "止盈价(上轨)": 11.0,
          "来源策略": "CCTV"},
     ])
-    # n_boll=2, n_momentum=3, n_theme=1, n_cctv=1 → 归并：反转·均值回归2 / 动量3 / 题材1 / 事件·舆情1
+    # counts 按策略 id 传入 → 归并：反转·均值回归2 / 动量3 / 题材1 / 事件·舆情1
     text = report._build_report_text(
         df, "20260911",
-        n_boll=2, n_relativity=0, n_theme=1, n_cctv=1, n_momentum=3,
+        counts={"boll": 2, "relativity": 0, "theme": 1, "cctv": 1, "momentum": 3},
+        source_dates={"Boll": "20260911", "Momentum": "20260911",
+                      "Theme": "20260911", "CCTV": "20260911"},
     )
     assert "### 因子类型贡献度" in text
     assert "反转·均值回归: 2 只" in text
@@ -103,6 +105,6 @@ def test_build_report_empty_still_has_factor_type_section():
     """空清单路径（df.empty）也必须带「因子类型贡献度」小节，保持两段报告结构一致。"""
     text = report._build_report_text(
         pd.DataFrame(), "20260911",
-        n_boll=0, n_relativity=0, n_theme=0, n_cctv=0, n_momentum=0,
+        counts={},
     )
     assert "### 因子类型贡献度" in text

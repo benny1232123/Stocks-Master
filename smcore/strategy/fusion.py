@@ -8,6 +8,9 @@
 - Stock-Selection-Relativity-YYYYMMDD.csv    (+ 上涨满足率, 抗跌满足率)
 - Stock-Selection-Ashare-Theme-Turnover-*.csv (+ 综合分, 题材标签)
 - CCTV-Sector-Stock-Pool-YYYYMMDD.csv        (股票代码, 股票名称, 板块, 热度分)
+- Stock-Selection-<因子>-YYYYMMDD.csv        (综合分型；因子集 = factor_types.STRATEGY_ORDER)
+  含基本面族 Quality/Value/Size 与价格原子族 Boll_Oversold/Boll_Near_Lower/
+  Boll_Mid_Pullback/Boll_Squeeze/Rel_Up/Rel_Down（均由 picks_loader._load_scored_picks 泛型装载）
 
 输出：
 - stock_data/Daily-Action-List-YYYYMMDD.csv
@@ -35,6 +38,7 @@ from datetime import datetime
 import pandas as pd
 
 from smcore.config.defaults import STOCK_DATA_DIR
+from smcore.strategy.factor_types import STRATEGY_LABEL, STRATEGY_ORDER, factor_type_of
 from smcore.strategy.market import compute_market_profile
 from smcore.strategy import sectors as sector_mod
 from smcore.strategy.risk_rules import (
@@ -110,9 +114,9 @@ from .picks_loader import (
     _find_strategy_csv,
     _load_boll_picks,
     _load_cctv_picks,
-    _load_fund_factor_picks,
     _load_momentum_picks,
     _load_relativity_picks,
+    _load_scored_picks,
     _load_theme_picks,
 )
 from .boll_levels import _compute_boll_levels
@@ -165,7 +169,7 @@ __all__ = [
     "_load_theme_picks",
     "_load_cctv_picks",
     "_load_momentum_picks",
-    "_load_fund_factor_picks",
+    "_load_scored_picks",
     # boll_levels
     "_compute_boll_levels",
     # position_sizing
@@ -220,24 +224,38 @@ def fuse_signals(
     theme, theme_date = _load_theme_picks(date_yyyymmdd, max_stale_days=max_stale_days)
     cctv, cctv_date = _load_cctv_picks(date_yyyymmdd, max_stale_days=max_stale_days)
     momentum, mom_date = _load_momentum_picks(date_yyyymmdd, max_stale_days=max_stale_days)
-    quality, qual_date = _load_fund_factor_picks("Quality", date_yyyymmdd, max_stale_days=max_stale_days)
-    value, val_date = _load_fund_factor_picks("Value", date_yyyymmdd, max_stale_days=max_stale_days)
-    size, size_date = _load_fund_factor_picks("Size", date_yyyymmdd, max_stale_days=max_stale_days)
 
-    source_dates = {
-        "Boll": boll_date,
-        "Relativity": rel_date,
-        "Theme": theme_date,
-        "CCTV": cctv_date,
-        "Momentum": mom_date,
-        "Quality": qual_date,
-        "Value": val_date,
-        "Size": size_date,
+    # 「综合分」型策略（基本面族 Quality/Value/Size + 价格原子族 Boll_*/Rel_*）共用泛型
+    # 加载器，按注册表批量装载。单一真相源 = factor_types.STRATEGY_ORDER/STRATEGY_LABEL
+    # → 新增因子只需在 factor_types 注册 + 产出同名 CSV，本函数无需改动。
+    _SPECIAL_IDS = ("boll", "relativity", "theme", "cctv", "momentum")
+    picks_by_strat: dict[str, dict] = {
+        "boll": boll,
+        "relativity": relativity,
+        "theme": theme,
+        "cctv": cctv,
+        "momentum": momentum,
     }
+    dates_by_strat: dict[str, Optional[str]] = {
+        "boll": boll_date,
+        "relativity": rel_date,
+        "theme": theme_date,
+        "cctv": cctv_date,
+        "momentum": mom_date,
+    }
+    for sid in [s for s in STRATEGY_ORDER if s not in _SPECIAL_IDS]:
+        picks, actual = _load_scored_picks(
+            STRATEGY_LABEL[sid], date_yyyymmdd, max_stale_days=max_stale_days
+        )
+        picks_by_strat[sid] = picks
+        dates_by_strat[sid] = actual
+
+    source_dates = {STRATEGY_LABEL[s]: dates_by_strat.get(s) for s in STRATEGY_ORDER}
 
     # 合并所有代码
-    all_codes = (set(boll) | set(relativity) | set(theme) | set(cctv)
-                 | set(momentum) | set(quality) | set(value) | set(size))
+    all_codes: set[str] = set()
+    for _sid in STRATEGY_ORDER:
+        all_codes |= set(picks_by_strat.get(_sid) or {})
     if not all_codes:
         return pd.DataFrame(), "今日无任何策略命中，无可操作清单。"
 
@@ -304,42 +322,24 @@ def fuse_signals(
         name = ""
         buy_price = None
 
-        if code in boll:
-            hit_strategies.append("Boll")
-            score += strategy_scores.get("boll", 0)
-            name = boll[code]["name"] or name
-            buy_price = boll[code].get("buy_price")
-        if code in relativity:
-            hit_strategies.append("Relativity")
-            score += strategy_scores.get("relativity", 0)
-            name = relativity[code]["name"] or name
-        if code in theme:
-            hit_strategies.append("Theme")
-            score += strategy_scores.get("theme", 0)
-            name = theme[code]["name"] or name
-            # Theme 综合分作为额外加权（综合分 0-100；系数与上限来自 risk_config.json）
-            theme_score = theme[code].get("score") or 0
-            score += min(theme_score * _FUSION_CFG["theme_score_weight"], _FUSION_CFG["theme_score_cap"])
-        if code in cctv:
-            hit_strategies.append("CCTV")
-            score += strategy_scores.get("cctv", 0)
-            name = cctv[code]["name"] or name
-        if code in momentum:
-            hit_strategies.append("Momentum")
-            score += strategy_scores.get("momentum", 0)
-            name = momentum[code]["name"] or name
-        if code in quality:
-            hit_strategies.append("Quality")
-            score += strategy_scores.get("quality", 0)
-            name = quality[code]["name"] or name
-        if code in value:
-            hit_strategies.append("Value")
-            score += strategy_scores.get("value", 0)
-            name = value[code]["name"] or name
-        if code in size:
-            hit_strategies.append("Size")
-            score += strategy_scores.get("size", 0)
-            name = size[code]["name"] or name
+        # ── 逐策略命中（遍历 STRATEGY_ORDER，决定 DAL「来源策略」拼接顺序）──
+        # 新增因子只需在 factor_types 注册，本处无需改动（此前的 8 个硬编码分支已消除）。
+        for _sid in STRATEGY_ORDER:
+            _picks = picks_by_strat.get(_sid)
+            if not _picks or code not in _picks:
+                continue
+            hit_strategies.append(STRATEGY_LABEL[_sid])
+            score += strategy_scores.get(_sid, 0)
+            name = _picks[code].get("name") or name
+            if _sid == "boll":
+                buy_price = _picks[code].get("buy_price")
+            elif _sid == "theme":
+                # Theme 综合分作为额外加权（综合分 0-100；系数与上限来自 risk_config.json）
+                theme_score = _picks[code].get("score") or 0
+                score += min(
+                    theme_score * _FUSION_CFG["theme_score_weight"],
+                    _FUSION_CFG["theme_score_cap"],
+                )
 
         # ── 买入价兜底：非 Boll 策略无建议买入价时用信号日收盘价 ─────────
         if buy_price is None and levels:
@@ -353,9 +353,13 @@ def fuse_signals(
         if len(hit_strategies) > 1:
             score += (len(hit_strategies) - 1) * _adaptive_multi_hit_bonus(len(adaptive_pct) - list(adaptive_pct.values()).count(0))
 
-        # 趋势闸门：下行防御时不买纯均值回归票（Boll/Relativity）。
+        # 趋势闸门：下行防御时不买纯均值回归/相对强度票（原仅 Boll/Relativity）。
         # 其「次日买、持有10日」在弱市必亏（实测 BASELINE 弱市 -5%~-9%），直接不出。
-        if market_gate and regime == "下行防御" and set(hit_strategies) <= {"Boll", "Relativity"}:
+        # ⚠️ 判定改为按**因子类型**归并（而非硬编码策略名）：这样 boll/relativity 沿价格轴
+        # 拆出的原子因子（反转·*、相对强度·*）**自动继承**同一保护，不会因拆分而静默失效。
+        if market_gate and regime == "下行防御" and hit_strategies and all(
+            factor_type_of(h).startswith(("反转", "相对强度")) for h in hit_strategies
+        ):
             gated_out += 1
             continue
 
@@ -379,16 +383,7 @@ def fuse_signals(
 
         # 仓位分配：按命中策略中权重最大的那个分配，单票取该策略权重的 1/N（N=该策略候选数）
         # 避免大池子策略（如 CCTV 673只）把仓位稀释到 0
-        strategy_pick_counts = {
-            "boll": len(boll),
-            "relativity": len(relativity),
-            "theme": len(theme),
-            "cctv": len(cctv),
-            "momentum": len(momentum),
-            "quality": len(quality),
-            "value": len(value),
-            "size": len(size),
-        }
+        strategy_pick_counts = {s: len(picks_by_strat.get(s) or {}) for s in STRATEGY_ORDER}
         # 取命中策略中权重最高者
         best_weight = 0
         best_raw = 0.0
@@ -547,18 +542,11 @@ def fuse_signals(
     else:
         weight_hit = False
 
-    # 生成日报段落
+    # 生成日报段落（counts 按策略 id 传入，策略集自适应）
     report = _build_report_text(
         df,
         date_yyyymmdd,
-        len(boll),
-        len(relativity),
-        len(theme),
-        len(cctv),
-        len(momentum),
-        n_quality=len(quality),
-        n_value=len(value),
-        n_size=len(size),
+        counts={s: len(picks_by_strat.get(s) or {}) for s in STRATEGY_ORDER},
         source_dates=source_dates,
         max_stale_days=max_stale_days,
         max_single_weight_pct=max_single_eff,
@@ -570,14 +558,9 @@ def fuse_signals(
             report += f"\n- 🚦 趋势闸门触发（市场下行防御）：剔除 {gated_out} 只纯均值回归候选（Boll/Relativity），仅留顺势策略"
         else:
             cold_tag = "（冷启动等权）" if cold else "（自适应·按近期业绩）"
-            # 权重逐策略动态渲染（策略集随 ALL_STRATEGIES 自适应，勿硬编码名字）
+            # 权重逐策略动态渲染（策略集随 factor_types.STRATEGY_ORDER 自适应，勿硬编码名字）
             w_txt = " / ".join(
-                f"{name} {adaptive_pct.get(key)}"
-                for name, key in (
-                    ("Boll", "boll"), ("Relativity", "relativity"), ("CCTV", "cctv"),
-                    ("Momentum", "momentum"), ("Theme", "theme"),
-                    ("Quality", "quality"), ("Value", "value"), ("Size", "size"),
-                )
+                f"{STRATEGY_LABEL[s]} {adaptive_pct.get(s)}" for s in STRATEGY_ORDER
             )
             report += (
                 f"\n- 🚦 市场状态：{regime}（趋势闸门生效）；"

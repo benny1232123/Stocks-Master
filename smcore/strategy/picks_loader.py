@@ -163,14 +163,15 @@ def _load_momentum_picks(date_yyyymmdd: str, *, max_stale_days: int = 3) -> tupl
     return picks, actual_date
 
 
-def _load_fund_factor_picks(
+def _load_scored_picks(
     factor: str, date_yyyymmdd: str, *, max_stale_days: int = 3
 ) -> tuple[dict, Optional[str]]:
-    """读取基本面族某因子（Quality/Value/Size）选股结果，返回 ({code: {...}}, 实际数据日期)。
+    """读取「综合分」型策略的选股结果，返回 ({code: {...}}, 实际数据日期)。
 
-    与 boll/momentum 同契约：消费 `Stock-Selection-<factor>-*.csv`。三个因子
-    （质量/估值/规模）均与价格/成交量正交，缺失或空表时返回空（fail-soft），
-    对融合链路是 no-op。
+    消费 `Stock-Selection-<factor>-*.csv`（列：股票代码/股票名称/综合分）。
+    覆盖基本面族（Quality/Value/Size）与价格原子族（Boll_Oversold/…/Rel_Down）——
+    它们契约相同、都是「按综合分排序的候选清单」，故共用一个泛型加载器。
+    缺失或空表时返回空 dict（fail-soft），对融合链路是 no-op。
     """
     found = _find_strategy_csv(f"Stock-Selection-{factor}", date_yyyymmdd, max_stale_days=max_stale_days)
     if not found:

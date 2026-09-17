@@ -80,10 +80,13 @@ def test_apply_mask_renormalizes(monkeypatch):
     out = ft.apply_mask(weights, signal_date="20240107", points=pts)
     assert out["momentum"] == 0.0
     assert abs(sum(out.values()) - 100.0) < 1e-6
-    # 其余 4 个（含无数据的 3 个，保留）均分 → 25
+    # 除 momentum 外全部保留（含无数据的新策略）→ 等分 100/(n-1)
+    # （勿硬编码策略数：策略集随 factor_types.STRATEGY_ORDER 增长）
+    n_kept = len([s for s in ALL_STRATEGIES if s != "momentum"])
+    share = 100.0 / n_kept
     for s in ALL_STRATEGIES:
         if s != "momentum":
-            assert abs(out[s] - 25.0) < 1e-6
+            assert abs(out[s] - share) < 1e-6
 
 
 def test_apply_mask_all_off_returns_original(monkeypatch):
@@ -100,7 +103,9 @@ def test_apply_factor_timing_rounds_to_100(monkeypatch):
     from smcore.strategy import adaptive_weights as aw
 
     def fake_apply(weights, signal_date=None, points=None):
-        return {s: 20.7 for s in ALL_STRATEGIES}  # 和 103.5 → 取整需修正回 100
+        # 任意策略数下总和均略超 100（×1.035）→ 取整后需修正回 100。
+        # （勿硬编码 20.7/策略：策略集随 factor_types.STRATEGY_ORDER 增长）
+        return {s: 100.0 * 1.035 / len(ALL_STRATEGIES) for s in ALL_STRATEGIES}
 
     monkeypatch.setattr(ft, "apply_mask", fake_apply)
     out = aw._apply_factor_timing({s: 20 for s in ALL_STRATEGIES}, signal_date="20240107")

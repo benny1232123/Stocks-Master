@@ -43,9 +43,12 @@ if __package__ in (None, ""):
     sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
 from smcore.config.defaults import STOCK_DATA_DIR
+from smcore.strategy.factor_types import STRATEGY_ORDER
 from smcore.utils.code import format_stock_code
 
-ALL_STRATEGIES = ["boll", "theme", "relativity", "momentum", "cctv", "quality", "value", "size"]
+# 策略清单 = factor_types.STRATEGY_ORDER（唯一真相源，避免多处硬编码漂移）。
+# 顺序仅影响字典迭代/并列取整锚点，无策略语义。
+ALL_STRATEGIES = list(STRATEGY_ORDER)
 
 # ── 可热更新的超参配置（月度 walk-forward 重验 CI 可改写本文件）──
 # 文件缺失 / 解析失败时回退到内置默认，保证「零配置也能跑」且行为不变。
@@ -832,8 +835,15 @@ def _finalize_allocation_weights(
         rem = 100.0 - floor_alloc
         ev_sum = sum(base[s] for s in ev)
         if ev_sum <= 0:
-            # 退化（正常不应触发：到达此处时 total_n>=min_n 至少保证有证据策略非空）
-            out = {s: (eff_floor if s not in excluded else 0.0) for s in base}
+            # 全体无证据（ev 为空）= 冷启动：非黑名单策略**等权**。
+            # ⚠️ 此处曾退化为「各给 eff_floor 后把差额锚定到最大者」——当 ev 为空时
+            # 最大者由字典序/初始值决定，等于把 ~76% 权重随手扔给某个任意策略。
+            # 该分支在「boll/relativity 退役 + 新原子全部 n=0」时**必然**触发，
+            # 属严重错误。语义对齐 compute_adaptive_allocation 的 cold_start 回退：
+            # 没有任何业绩信息时，唯一无偏选择就是等权。
+            live = [s for s in base if s not in excluded]
+            eq = 100.0 / len(live) if live else 0.0
+            out = {s: (eq if s not in excluded else 0.0) for s in base}
         else:
             out = {}
             for s in base:
@@ -887,8 +897,23 @@ def compute_adaptive_allocation(
                 f"权重静默回退等权，cold_start=True。",
                 file=sys.stderr,
             )
-        eq = round(100 / len(ALL_STRATEGIES))
-        return edge, {s: eq for s in ALL_STRATEGIES}, 0, True
+        # ⚠️ 冷启动等权同样必须尊重黑名单：否则「结构性判死刑」的策略会在历史不足时
+        # 复活拿到等权份额（黑名单契约是「不受任何路径影响」）。等权只在**非黑名单**
+        # 策略间分配，并把取整差额锚定到其中一个，保证恒为 100。
+        excluded_cold = {s.lower() for s in (CONFIG.get("excluded_strategies") or [])}
+        live_cold = [s for s in ALL_STRATEGIES if s not in excluded_cold]
+        if live_cold:
+            cold_w = {
+                s: (int(round(100.0 / len(live_cold))) if s not in excluded_cold else 0)
+                for s in ALL_STRATEGIES
+            }
+            d = 100 - sum(cold_w.values())
+            if d:
+                anchor = max(live_cold, key=lambda s: cold_w[s])
+                cold_w[anchor] = max(0, cold_w[anchor] + d)
+        else:
+            cold_w = {s: 0 for s in ALL_STRATEGIES}
+        return edge, cold_w, 0, True
     weights = adaptive_weights(
         edge, shrinkage=shrinkage, floor=eff_floor,
         zero_negative_edge=zero_negative_edge, min_evidence_n=min_evidence_n,

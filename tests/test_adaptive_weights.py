@@ -278,3 +278,63 @@ def test_no_evidence_gate_can_be_disabled(monkeypatch):
     assert sum(w.values()) == 100
     # 关闭门控后 fundamental 仍有正权重（不被强制压到 floor 区间外），且仍 > 0
     assert w["quality"] > 0, w
+
+
+def test_cold_start_equal_weight_respects_blacklist(monkeypatch):
+    """冷启动（归因样本不足 → 等权回退）也必须把黑名单清零。
+
+    回归：冷启动早退路径原先直接 `{s: round(100/len) for s in ALL_STRATEGIES}`，
+    完全绕过黑名单 —— 一旦历史样本不足，被判「结构性死刑」的策略就会复活拿等权份额，
+    违反黑名单「不受任何路径影响」的契约。
+    """
+    from smcore.strategy import adaptive_weights as aw
+
+    monkeypatch.setattr(
+        aw, "compute_edge",
+        lambda *a, **k: {s: {"edge": 0.0, "n": 0} for s in ALL_STRATEGIES},
+    )
+    monkeypatch.setattr(
+        aw, "CONFIG",
+        {**aw.CONFIG, "excluded_strategies": ["boll", "theme"]},
+    )
+    _edge, w, _cash, cold = aw.compute_adaptive_allocation(min_n=8)
+    assert cold, "样本为 0 应走冷启动路径"
+    assert w["boll"] == 0 and w["theme"] == 0, w
+    live = [s for s in ALL_STRATEGIES if s not in ("boll", "theme")]
+    assert all(w[s] > 0 for s in live), w
+    assert sum(w.values()) == 100
+
+
+def test_all_no_evidence_never_hands_sway_to_one_strategy(monkeypatch):
+    """全部「存活」策略都无归因历史时，绝不能把大头随手给某个策略。
+
+    回归（2026-09-17）：退役 boll/relativity 的同一时刻，新原子因子全部 n=0，
+    于是「有证据集」为空，_finalize_allocation_weights 的退化分支曾退化为
+    「各给 eff_floor 后把差额锚定到最大者」→ 实测把 ~76% 给某个任意策略。
+    正确语义：无任何业绩信息时 = 冷启动等权（仅在有资格的策略间）。
+    """
+    from smcore.strategy import adaptive_weights as aw
+
+    fake = {s: {"edge": 0.0, "n": 0, "win_rate": None, "avg": None} for s in ALL_STRATEGIES}
+    # 已退役的复合体仍带着厚历史（所以不会走冷启动早退）——正是真实场景
+    fake["boll"] = {"edge": 3.0, "n": 100, "win_rate": 55, "avg": 3.0}
+    fake["relativity"] = {"edge": 2.0, "n": 100, "win_rate": 54, "avg": 2.0}
+    monkeypatch.setattr(aw, "compute_edge", lambda *a, **k: fake)
+    monkeypatch.setattr(
+        aw, "CONFIG",
+        {**aw.CONFIG,
+         "factor_timing": {**aw.CONFIG.get("factor_timing", {}), "enabled": False},
+         "excluded_strategies": ["theme", "cctv", "momentum", "boll", "relativity"],
+         "exclude_no_evidence_strategies": True,
+         "min_evidence_for_allocation": 1},
+    )
+    _edge, w, _cash, cold = aw.compute_adaptive_allocation(min_n=1)
+    assert not cold
+    assert w["boll"] == 0 and w["relativity"] == 0, w
+    assert sum(w.values()) == 100
+    live = [s for s in ALL_STRATEGIES if w.get(s, 0) > 0]
+    assert live, w
+    share = 100.0 / len(live)
+    # 无信息 → 等权：不允许任何策略独吞（曾出现 ~76%）也不允许某个饿死
+    assert max(w[s] for s in live) <= 2 * share, w
+    assert min(w[s] for s in live) >= share / 2, w
