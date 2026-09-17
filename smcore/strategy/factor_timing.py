@@ -30,6 +30,7 @@ from smcore.strategy.adaptive_weights import (
     ALL_STRATEGIES,
     CONFIG,
     _aggregate_excess,
+    _benchmark_forward_ret,
     _norm_code,
     _norm_strategies,
     adaptive_weights,
@@ -190,15 +191,23 @@ def _day_records(sd: str) -> list[tuple[str, set[str], float]]:
 def _causal_weights(sd: str) -> dict[str, float]:
     """第 sd 天的因果权重：仅用严格早于 sd 的历史 edge → adaptive_weights。
 
-    内部 edge 聚合用等权口径（与 CONFIG["edge"]["position_weighted"] 默认一致）。
+    内部 edge 聚合用等权口径（与 CONFIG["edge"]["position_weighted"] 默认一致），
+    且超额收益**相对沪深300基准**，与生产 ``compute_universe_edge(use_benchmark=True)``
+    同口径——避免把"市场β"误计为策略 edge（旧实现直接用绝对收益 rp，导致信念 IC
+    在绝对口径下被市场系统性漂移污染）。基准不可用时退化为绝对收益（与生产一致）。
     """
     past = [d for d in _signal_days() if d < sd][-EDGE_WINDOW:]
+    bench_cache: dict[str, float | None] = {}
     strat_pairs: dict[str, list] = {s: [] for s in ALL_STRATEGIES}
     for d in past:
+        if d not in bench_cache:
+            bench_cache[d] = _benchmark_forward_ret(d, HOLD_DAYS)
+        b = bench_cache[d]
         for _code, sources, rp in _day_records(d):
+            excess = rp - b if b is not None else rp
             for s in sources:
                 if s in strat_pairs:
-                    strat_pairs[s].append((rp, None))
+                    strat_pairs[s].append((excess, None))
     edge: dict[str, dict] = {}
     for s, prs in strat_pairs.items():
         e, win, n, sdv = _aggregate_excess(prs, False)
