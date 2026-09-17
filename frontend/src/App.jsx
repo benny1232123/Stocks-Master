@@ -295,6 +295,25 @@ const STRAT_LABEL = {
   boll_squeeze: 'Boll 带宽收口',
   rel_up: 'Rel 上涨满足',
   rel_down: 'Rel 抗跌满足',
+  // A 批：因子池存活价格因子
+  pvcorr20: 'PVCorr20 量价相关',
+  pvcorr60: 'PVCorr60 量价相关',
+  cvamt20: 'CVAmt20 成交稳定',
+  cvamt60: 'CVAmt60 成交稳定',
+  skew20: 'Skew20 收益偏度',
+  skew60: 'Skew60 收益偏度',
+  vratio20_120: 'VRatio20_120 波动比',
+  vratio10_60: 'VRatio10_60 波动比',
+  distlo10: 'DistLo10 距低点',
+  distlo60: 'DistLo60 距低点',
+  vol20: 'Vol20 波动',
+  illiq20: 'Illiq20 非流动性',
+  // C 批：基本面单指标原子 + 反向动量
+  roe: 'ROE 质量',
+  gross_margin: 'Gross_Margin 毛利率',
+  ep: 'EP 估值',
+  bp: 'BP 估值',
+  lowmom20: 'LowMom20 前期弱势',
 }
 
 // 回测持仓的退出原因 → 中文标签（说明仓位按市场信号平仓，非固定持有）

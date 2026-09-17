@@ -862,6 +862,25 @@
 /* 相对强度族原子（绿系，与 relativity 同族） */
 .top-tag--rel_up   { background: hsl(160, 70%, 90%); color: hsl(160, 55%, 28%); }
 .top-tag--rel_down { background: hsl(161, 80%, 90%); color: hsl(161, 60%, 26%); }
+/* A 批：因子池存活价格因子（色相彼此拉开，与上面各族不撞色） */
+.top-tag--pvcorr20 { background: hsl(330, 81%, 92%); color: hsl(330, 70%, 40%); }
+.top-tag--pvcorr60 { background: hsl(330, 81%, 93%); color: hsl(330, 65%, 42%); }
+.top-tag--cvamt20  { background: hsl(292, 84%, 92%); color: hsl(292, 70%, 36%); }
+.top-tag--cvamt60  { background: hsl(292, 84%, 93%); color: hsl(292, 65%, 38%); }
+.top-tag--skew20   { background: hsl(224, 76%, 92%); color: hsl(224, 70%, 34%); }
+.top-tag--skew60   { background: hsl(224, 76%, 93%); color: hsl(224, 65%, 36%); }
+.top-tag--vratio20_120 { background: hsl(189, 94%, 91%); color: hsl(189, 80%, 30%); }
+.top-tag--vratio10_60  { background: hsl(189, 94%, 92%); color: hsl(189, 75%, 32%); }
+.top-tag--distlo10 { background: hsl(30, 8%, 92%); color: hsl(30, 8%, 32%); }
+.top-tag--distlo60 { background: hsl(30, 8%, 93%); color: hsl(30, 6%, 34%); }
+.top-tag--vol20    { background: hsl(43, 96%, 90%); color: hsl(40, 95%, 35%); }
+.top-tag--illiq20  { background: hsl(80, 79%, 90%); color: hsl(80, 70%, 26%); }
+/* C 批：基本面单指标原子（天蓝/青系，与 quality/value 同族）+ 反向动量（紫系） */
+.top-tag--roe          { background: hsl(199, 93%, 92%); color: hsl(199, 80%, 40%); }
+.top-tag--gross_margin { background: hsl(201, 96%, 92%); color: hsl(201, 90%, 32%); }
+.top-tag--ep           { background: hsl(172, 66%, 90%); color: hsl(172, 70%, 34%); }
+.top-tag--bp           { background: hsl(175, 77%, 90%); color: hsl(175, 75%, 26%); }
+.top-tag--lowmom20     { background: hsl(271, 91%, 93%); color: hsl(271, 70%, 50%); }
 
 /* 副行：买入价/现价/仓位 */
 .top-sub { display: flex; gap: 12px; font-size: 0.72rem; color: hsl(var(--muted-foreground)); font-family: var(--font-mono); flex-wrap: wrap; }

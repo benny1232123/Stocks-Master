@@ -3,12 +3,29 @@
 """基本面族正交策略生成器（2026-09-17 由单一 fundamental 拆分而来）。
 
 定位：在价格/成交量策略（boll=反转·均值回归 / relativity=相对强度·资金流）之外，
-提供三个**彼此正交**的基本面维度，各自独立出选股 CSV、独立进分配器，便于横向对比
+提供若干**彼此正交**的基本面维度，各自独立出选股 CSV、独立进分配器，便于横向对比
 谁的真实 edge 更高（这就是「因子驱动主导」的菜单）：
 
-- Quality（基本面·质量）：截面 z(ROE) + z(毛利率)      —— 高盈利质量
-- Value  （基本面·估值）：截面 z(-PE) + z(-PB)          —— 低估值
-- Size   （基本面·规模）：截面 z(-总市值)               —— 小盘
+复合体（2026-09-17 第一批）::
+
+    Quality（基本面·质量）：截面 z(ROE) + z(毛利率)      —— 高盈利质量
+    Value  （基本面·估值）：截面 z(-PE) + z(-PB)          —— 低估值
+    Size   （基本面·规模）：截面 z(-总市值)               —— 小盘
+
+单指标原子（2026-09-17 第三批，C 批）::
+
+    ROE          （基本面·质量·ROE）    = Value/Quality 的 ROE 腿
+    Gross_Margin （基本面·质量·毛利率） = Quality 的毛利率腿
+    EP           （基本面·估值·EP）      = Value 的 PE 腿
+    BP           （基本面·估值·BP）      = Value 的 PB 腿
+
+⚠️ 原子与复合体**并存**（与 boll → 4 个布林原子同一做法）：复合体是两腿均值，
+单腿可能被另一腿稀释。让二者同时进入分配器、各自凭**已实现 edge** 竞权，
+就能用实盘业绩回答「复合体 vs 其原子谁更强」，而不是靠人拍脑袋。
+
+腿的定义与复合体**逐字一致**（只做 z 化、不做非线性变换）：故「EP」实现为
+``z(-PE)`` 而非 ``z(1/PE)``——小分母（PE→0）在倒数形式下会产生极端离群值主导 z 分，
+而 ``-PE`` 是该复合体一直在用的形式，保持一致才有可比性。
 
 数据源：`stock_data/fundamental_cache/<code>.json`（flat 快照，字段
 roe / gross_margin / pe / pb / mkt_cap，由 smcore/strategy/fundamental.py 联网填充）。
@@ -17,14 +34,16 @@ roe / gross_margin / pe / pb / mkt_cap，由 smcore/strategy/fundamental.py 联�
 
 设计纪律（与全系统一致）：
 - 输出严格沿用 `Stock-Selection-<Name>-YYYYMMDD.csv` 契约（股票代码/股票名称/综合分），
-  由 `picks_loader._load_fund_factor_picks` 消费。
+  由 `picks_loader._load_scored_picks` 泛型装载。
 - 不碰任何权重/融合逻辑——权重完全交给 `compute_adaptive_allocation` 按各策略**已实现
   edge** 自适应决定；初期无历史 → 无证据门控只给 floor 探索权重，跑出正 edge 才加分。
-- 三个因子**刻意不含** turnover/amount_20（与 relativity 的资金流维度重叠，非正交）；
+- 因子**刻意不含** turnover/amount_20（与 relativity 的资金流维度重叠，非正交）；
   成长(revenue_growth) 待 v2 PIT 缓存刷新后再加。
 - ⚠️ 缓存是「当前快照」而非时点精确(PIT)：历史信号日回填用的是当下截面（离线可达的最佳
   近似），因此各历史日的选股内容相同、仅文件名不同——用于让策略在回放/归因中有完整候选
-  历史；不影响权重逻辑（权重只看真实前向 edge）。
+  历史；不影响权重逻辑（权重只看真实前向 edge）。也不做历史 IC 回放（无 PIT 数据）。
+- ⚠️ `FACTORS` 的取值即 CSV 文件名里的因子名，必须与 `factor_types.STRATEGY_LABEL`
+  逐字一致（大小写含下划线），由 `tests/test_strategy_menu_parity.py` 守卫。
 
 用法::
 
@@ -48,7 +67,8 @@ ROOT = Path(__file__).resolve().parents[1]
 CACHE_DIR = ROOT / "stock_data" / "fundamental_cache"
 DATA_DIR = ROOT / "stock_data"
 
-FACTORS = ("Quality", "Value", "Size")
+# 复合体 3 个 + 单指标原子 4 个。名字 = STRATEGY_LABEL[id]（见文件头纪律）。
+FACTORS = ("Quality", "Value", "Size", "ROE", "Gross_Margin", "EP", "BP")
 
 
 def _zscore(values: list[float]) -> list[float]:
@@ -94,6 +114,30 @@ def _load_cache() -> list[dict]:
     return rows
 
 
+def _single_metric_z(rows: list[dict], key: str, *, positive_only: bool = False,
+                     upper: float | None = None) -> dict:
+    """**单指标原子**的通用打分：在可得子集上取 z(该指标)。
+
+    - ``positive_only``：只保留 >0 的值（PE/PB 的合理性过滤，与复合体一致）；
+    - ``upper``：上界过滤（PE<300 / PB<50，剔除异常值）。
+    与复合体对应的腿**完全同口径**——复合体就是把两条腿的 z 做等权平均。
+    """
+    idx = []
+    for i, r in enumerate(rows):
+        v = r.get(key)
+        if v is None:
+            continue
+        if positive_only and not (v > 0):
+            continue
+        if upper is not None and not (v < upper):
+            continue
+        idx.append(i)
+    if len(idx) < 5:
+        return {}
+    z = _zscore([rows[i][key] for i in idx])
+    return {rows[idx[k]]["code"]: z[k] for k in range(len(idx))}
+
+
 def _score_quality(rows: list[dict]) -> dict:
     """质量 = (z(roe) + z(gross_margin)) / 2；需两者同时可得。"""
     idx = [i for i, r in enumerate(rows) if r["roe"] is not None and r["gm"] is not None]
@@ -137,7 +181,41 @@ def _score_size(rows: list[dict]) -> dict:
     return {rows[idx[k]]["code"]: z[k] for k in range(len(idx))}
 
 
-_SCORERS = {"Quality": _score_quality, "Value": _score_value, "Size": _score_size}
+# ── 单指标原子（2026-09-17 第三批）：与复合体对应腿同口径 ──────────────────
+
+def _score_roe(rows: list[dict]) -> dict:
+    """ROE 原子 = z(roe)（Quality 的 ROE 腿）。ROE 可正可负，不过滤。"""
+    return _single_metric_z(rows, "roe")
+
+
+def _score_gross_margin(rows: list[dict]) -> dict:
+    """毛利率原子 = z(gross_margin)（Quality 的毛利率腿）。"""
+    return _single_metric_z(rows, "gm")
+
+
+def _score_ep(rows: list[dict]) -> dict:
+    """EP 原子 = z(-PE)（Value 的 PE 腿，低 PE → 高分）。
+
+    刻意用 ``-PE`` 而非倒数 ``1/PE``：小分母离群值会主导 z 分，且复合体用的就是 -PE，
+    保持同形式才谈得上「复合体 vs 其原子」可比。
+    """
+    return _single_metric_z(rows, "pe", positive_only=True, upper=300)
+
+
+def _score_bp(rows: list[dict]) -> dict:
+    """BP 原子 = z(-PB)（Value 的 PB 腿，低 PB → 高分）。同上，用 -PB 而非 1/PB。"""
+    return _single_metric_z(rows, "pb", positive_only=True, upper=50)
+
+
+_SCORERS = {
+    "Quality": _score_quality,
+    "Value": _score_value,
+    "Size": _score_size,
+    "ROE": _score_roe,
+    "Gross_Margin": _score_gross_margin,
+    "EP": _score_ep,
+    "BP": _score_bp,
+}
 
 
 def build_factor(factor: str, top: int = 40, rows: list[dict] | None = None) -> list[dict]:
@@ -178,7 +256,7 @@ def _signal_days() -> list[str]:
 
 
 def main() -> int:
-    ap = argparse.ArgumentParser(description="基本面族（Quality/Value/Size）正交策略生成器")
+    ap = argparse.ArgumentParser(description="基本面族（复合体 3 + 单指标原子 4）生成器")
     ap.add_argument("--date", default=datetime.now().strftime("%Y%m%d"), help="信号日 YYYYMMDD")
     ap.add_argument("--top", type=int, default=40, help="每个因子输出候选数上限")
     ap.add_argument("--out-dir", default=str(DATA_DIR), help="CSV 输出目录")

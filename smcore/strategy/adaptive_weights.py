@@ -791,6 +791,52 @@ def _apply_factor_timing(weights: dict, signal_date: Optional[str] = None) -> di
         return weights
 
 
+def _integerize_weights(
+    weights: dict,
+    excluded: set,
+    prefer: set | None = None,
+) -> dict:
+    """最大余数法（Hamilton 配额）把任意权重字典整数化为**合计恒为 100** 的百分数。
+
+    单一实现，供 `_finalize_allocation_weights` 与冷启动等权回退共用——两处曾各自
+    实现「逐个 round 再把差额锚定到某个策略」，在策略菜单扩容后都会出问题：
+    - 逐个 ``round`` 的累计误差会超过锚点自身权重，clamp 到 0 后**合计不再等于 100**
+      （实测 60 策略合计 115）；
+    - 「差额全给锚点」会把大头随手送给一个任意策略（31 个策略冷启动时 ≈3.2% 的等权
+      被抬成 10%，且永远是字典序最靠前的那个）。
+
+    规则：
+    - 取整差额 d 只补给**非黑名单**策略（黑名单必须恒为 0），``prefer``（通常 = 有证据集）
+      优先，其余按小数部分从大到小、再按权重、最后按 id 定序；
+    - d < 0 的分支理论不可达（向下取整只会欠不会超），留作防御：按权重升序逐位 −1；
+    - 所有分数相同时（冷启动等权）退化为「字典序前 d 个各 +1」，偏差 ≤1pp。
+    """
+    total = sum(weights.get(s, 0.0) for s in weights)
+    if total > 0:
+        scaled = {s: weights.get(s, 0.0) / total * 100.0 for s in weights}
+    else:
+        scaled = {s: 0.0 for s in weights}
+    pct = {s: int(scaled[s]) for s in weights}
+    d = 100 - sum(pct.values())
+    pref = prefer or set()
+    if d > 0:
+        order = sorted(
+            (s for s in weights if s not in excluded),
+            key=lambda s: (s not in pref, -(scaled[s] - int(scaled[s])), -scaled[s], s),
+        )
+        for s in order[:d]:
+            pct[s] += 1
+    elif d < 0:
+        order = sorted(weights, key=lambda s: (pct[s], scaled[s], s))
+        for s in order:
+            if d == 0:
+                break
+            if pct[s] > 0:
+                pct[s] -= 1
+                d += 1
+    return pct
+
+
 def _finalize_allocation_weights(
     weights: dict,
     edge: dict,
@@ -872,37 +918,10 @@ def _finalize_allocation_weights(
                 else:
                     out[s] = 0.0
 
-    # 整数化：最大余数法（Hamilton 配额）分配，保证合计**恒为 100** 且无负权重。
-    # ⚠️ 原实现 = int(round(x)) 后把差额一股脑锚定到「有证据最大者」。策略数一多，
-    # 各策略 round 误差会累计超过锚点自身权重，clamp 到 0 后**合计不再等于 100**
-    # （实测 60 策略：合计 115）。最大余数法按小数部分从大到小逐位补差，
-    # 补差位数 d < 策略数，天然不会越界；策略少时结果与旧实现一致。
-    total_out = sum(out.get(s, 0.0) for s in weights)
-    if total_out > 0:
-        scaled = {s: out.get(s, 0.0) / total_out * 100.0 for s in weights}
-    else:
-        scaled = {s: 0.0 for s in weights}
-    pct = {s: int(scaled[s]) for s in weights}
-    d = 100 - sum(pct.values())
-    if d > 0:
-        # 候选限定「非黑名单」，且**有证据优先**——延续「取整差额绝不补给
-        # 无证据/黑名单策略」的既有契约（黑名单必须恒为 0，探索额度不得被放大）。
-        order = sorted(
-            (s for s in weights if s not in excluded),
-            key=lambda s: (s not in ev, -(scaled[s] - int(scaled[s])), -scaled[s], s),
-        )
-        for s in order[:d]:
-            pct[s] += 1
-    elif d < 0:
-        # 理论不可达（向下取整只会欠不会超），留作防御：按权重升序逐位 −1
-        order = sorted(weights, key=lambda s: (pct[s], scaled[s], s))
-        for s in order:
-            if d == 0:
-                break
-            if pct[s] > 0:
-                pct[s] -= 1
-                d += 1
-    return pct
+    # 整数化：最大余数法（Hamilton 配额），保证合计**恒为 100** 且无负权重；有证据优先。
+    # 见 `_integerize_weights` 的 docstring（原实现在策略数一多时会累计误差超锚点，
+    # 导致合计 ≠ 100；冷启动等权回退也共用同一实现）。
+    return _integerize_weights(out, excluded, prefer=ev)
 
 
 def compute_adaptive_allocation(
@@ -940,18 +959,17 @@ def compute_adaptive_allocation(
             )
         # ⚠️ 冷启动等权同样必须尊重黑名单：否则「结构性判死刑」的策略会在历史不足时
         # 复活拿到等权份额（黑名单契约是「不受任何路径影响」）。等权只在**非黑名单**
-        # 策略间分配，并把取整差额锚定到其中一个，保证恒为 100。
+        # 策略间分配。
+        # ⚠️ 取整也必须走 `_integerize_weights`：此前是「逐个 round(100/N) 后把差额全部
+        # 锚定到某个策略」，菜单扩容后该锚点会明显偏离等权（N=31 时 3.2% → 10%，
+        # 且永远落在字典序最靠前的策略上）。最大余数法把差额按 1pp 摊开。
         excluded_cold = {s.lower() for s in (CONFIG.get("excluded_strategies") or [])}
         live_cold = [s for s in ALL_STRATEGIES if s not in excluded_cold]
         if live_cold:
-            cold_w = {
-                s: (int(round(100.0 / len(live_cold))) if s not in excluded_cold else 0)
-                for s in ALL_STRATEGIES
-            }
-            d = 100 - sum(cold_w.values())
-            if d:
-                anchor = max(live_cold, key=lambda s: cold_w[s])
-                cold_w[anchor] = max(0, cold_w[anchor] + d)
+            cold_w = _integerize_weights(
+                {s: (1.0 if s not in excluded_cold else 0.0) for s in ALL_STRATEGIES},
+                excluded_cold,
+            )
         else:
             cold_w = {s: 0 for s in ALL_STRATEGIES}
         return edge, cold_w, 0, True
