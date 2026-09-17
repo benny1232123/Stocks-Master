@@ -25,6 +25,13 @@ A 批 12 因子全部 0 票（只写出表头空表）→ ``Daily-Action-List`` 
 ⚠️ 为什么不用「每只一个子进程」：4380 只 × 解释器启动开销 ≈ 1–2 小时，CI 跑不完；
 分块（默认 100 只/块 ≈ 44 个子进程）在隔离性与总耗时之间取平衡。
 
+⚠️ **写放大才是超时的真因**（2026-09-17 实测定位，见 ``.workbuddy/_bench_kline.txt``）：
+``k_data`` 只有 **7 个分桶**（最大 ``qfq_b00.parquet`` 91.8MB / 3.70M 行），而
+``write_kline_cache`` 每写**一只票**都要 ``read_parquet(整桶) → concat → sort →
+to_parquet(整桶, zstd)``，实测 **5.33s/只** → 4380 只 ≈ **6.5 小时**。
+相比之下网络取数只有 0.17–1.07s/只（≈36min）。故 ``_run_chunk`` 整块包在
+``kline_write_buffer()`` 里 —— 每块（100 只 ≈ 1 个桶）只重写一次桶。
+
 用法::
 
     python scripts/prepull_klines.py --date 20260917
@@ -36,6 +43,7 @@ from __future__ import annotations
 import argparse
 import subprocess
 import sys
+import time
 from datetime import datetime, timedelta
 from pathlib import Path
 
@@ -49,18 +57,25 @@ KDATA = ROOT / "stock_data" / "k_data"
 # ── 子进程 worker：跑一个分块 ─────────────────────────────────────────────
 
 def _run_chunk(codes: list[str], start: str, end: str) -> int:
-    """在**当前进程**内逐只刷新（由父进程以子进程方式调起）。"""
-    from smcore.data.kline import fetch_daily_k
+    """在**当前进程**内逐只刷新（由父进程以子进程方式调起）。
+
+    整块包在 ``kline_write_buffer()`` 里：退出时按**桶**一次性 upsert，而不是每只票
+    各自重写整桶（见模块 docstring 的「写放大」说明）。codes 已排序，同块通常落在
+    同一个桶 → 整块只需一次重写。异常时上下文也会 flush，不丢已取到的数据。
+    """
+    from smcore.data.kline import fetch_daily_k, kline_write_buffer
 
     ok = fail = 0
-    for c in codes:
-        try:
-            fetch_daily_k(c, start, end, adjust="qfq")
-            ok += 1
-        except Exception as exc:  # 单只失败不拖垮整块
-            fail += 1
-            print(f"  [chunk] {c} 失败（{type(exc).__name__}: {exc}）", file=sys.stderr)
-    print(f"[chunk] ok={ok} fail={fail}", flush=True)
+    t0 = time.time()
+    with kline_write_buffer():
+        for c in codes:
+            try:
+                fetch_daily_k(c, start, end, adjust="qfq")
+                ok += 1
+            except Exception as exc:  # 单只失败不拖垮整块
+                fail += 1
+                print(f"  [chunk] {c} 失败（{type(exc).__name__}: {exc}）", file=sys.stderr)
+    print(f"[chunk] ok={ok} fail={fail} 用时 {time.time() - t0:.1f}s", flush=True)
     return 0
 
 

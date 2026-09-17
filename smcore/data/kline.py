@@ -13,6 +13,7 @@ import os
 import sys
 import threading
 import time
+from contextlib import contextmanager
 from datetime import date, datetime, time as _time, timedelta, timezone
 from pathlib import Path
 
@@ -390,6 +391,74 @@ def read_kline_cache(code, adjust: str = DEFAULT_ADJUST, base_dir=None) -> pd.Da
     return _normalize(pd.concat(frames, ignore_index=True))
 
 
+# ══ 分桶写入缓冲（2026-09-17 修「写放大」）═══════════════════════════════════════
+# 问题（实测，见 .workbuddy/_bench_kline.txt）：k_data 只有 7 个分桶（最大
+# qfq_b00.parquet 91.8MB / 3.70M 行），而全宇宙 ~4380 只。write_kline_cache 每写
+# **一只票**都要 read_parquet(整桶 0.64s) → concat+sort(1.45s) → to_parquet(整桶, zstd 3.24s)
+# = 5.33s/只 → 4380 只 ≈ **6.5 小时**。这正是 CI「K 线缓存刷新」60min 超时的真因
+# （网络取数其次：hithink 实测 0.17–1.07s/只 ≈ 36min）。
+#
+# 修法：把一批代码的写入按**桶**聚合，退出时每桶只重写一次（重写次数 = 桶数，
+# 而非代码数）。默认行为**不变**（仍然即时写），只有 kline_write_buffer() 上下文内才
+# 缓冲——以免改变既有调用方与测试的「写完即可读」语义。
+_BUCKET_WRITE_LOCK = threading.Lock()
+_BUCKET_PENDING: dict[Path, pd.DataFrame] = {}
+_BUCKET_BUFFER_ENABLED = False
+
+
+@contextmanager
+def kline_write_buffer():
+    """上下文内 ``write_kline_cache`` 只做内存缓冲，退出时按桶一次性 upsert 落盘。
+
+    用法（批处理场景，如 ``scripts/prepull_klines.py`` 的每个分块）::
+
+        with kline_write_buffer():
+            for code in codes:
+                fetch_daily_k(code, start, end, adjust="qfq")
+
+    退出时**即使发生异常也会 flush**，避免已取到的数据白丢。
+    """
+    global _BUCKET_BUFFER_ENABLED
+    with _BUCKET_WRITE_LOCK:
+        _BUCKET_BUFFER_ENABLED = True
+    try:
+        yield
+    finally:
+        with _BUCKET_WRITE_LOCK:
+            _BUCKET_BUFFER_ENABLED = False
+        flush_kline_writes()
+
+
+def flush_kline_writes() -> int:
+    """把缓冲中的行按桶一次性 upsert 落盘；返回实际重写的桶数。
+
+    每桶只 read/sort/write 一次：先剔除缓冲涉及代码的旧行，再并入新行。
+    """
+    with _BUCKET_WRITE_LOCK:
+        pending = dict(_BUCKET_PENDING)
+        _BUCKET_PENDING.clear()
+    n_ok = 0
+    for pf, new_rows in pending.items():
+        try:
+            new_rows = new_rows.drop_duplicates(subset=["code", "date"], keep="last")
+            existing = pd.read_parquet(pf) if pf.exists() else None
+            if existing is not None and not existing.empty:
+                touched = set(new_rows["code"].astype(str))
+                existing = existing[~existing["code"].astype(str).isin(touched)]
+                merged = pd.concat([existing, new_rows], ignore_index=True)
+            else:
+                merged = new_rows
+            merged = merged.sort_values(["code", "date"]).reset_index(drop=True)
+            merged.to_parquet(pf, index=False, compression="zstd")
+            n_ok += 1
+        except Exception as exc:
+            # 桶级失败必须可见：静默吞掉会让「刷新报成功但数据没变」重演（缓存陈旧事故），
+            # 且覆盖度门控会因此拦下构建 —— 这是有意的 fail-loud。
+            print(f"[kline] ERROR: 桶写入失败 {pf}: {exc!r}"
+                  f"（该桶 {len(new_rows)} 行未落盘，覆盖度门控会拦下）", file=sys.stderr)
+    return n_ok
+
+
 def write_kline_cache(df: pd.DataFrame, code, adjust: str = DEFAULT_ADJUST, base_dir=None) -> None:
     """把单只股票的行 upsert 进分桶 parquet（删除该股旧行后并入新行，按 code,date 排序写回）。"""
     code6 = format_stock_code(code)
@@ -442,15 +511,22 @@ def write_kline_cache(df: pd.DataFrame, code, adjust: str = DEFAULT_ADJUST, base
                 file=sys.stderr,
             )
     pf = _write_bucket_file(code6, adjust, base)
-    existing = pd.read_parquet(pf) if pf.exists() else None
-    if existing is not None and not existing.empty:
-        existing = existing[existing["code"] != code6]
-        merged = pd.concat([existing, out], ignore_index=True)
-    else:
-        merged = out
-    merged = merged.sort_values(["code", "date"]).reset_index(drop=True)
-    # 与迁移落盘的 zstd 分桶保持一致，避免增量写入把分片重新压成 snappy 而膨胀越界（GH001 100MB 硬限）。
-    merged.to_parquet(pf, index=False, compression="zstd")
+    # 缓冲模式（kline_write_buffer 上下文内）：只登记待写行，退出时按桶一次重写。
+    with _BUCKET_WRITE_LOCK:
+        _buffered = _BUCKET_BUFFER_ENABLED
+        if _buffered:
+            _prev = _BUCKET_PENDING.get(pf)
+            _BUCKET_PENDING[pf] = out if _prev is None else pd.concat([_prev, out], ignore_index=True)
+    if not _buffered:
+        existing = pd.read_parquet(pf) if pf.exists() else None
+        if existing is not None and not existing.empty:
+            existing = existing[existing["code"] != code6]
+            merged = pd.concat([existing, out], ignore_index=True)
+        else:
+            merged = out
+        merged = merged.sort_values(["code", "date"]).reset_index(drop=True)
+        # 与迁移落盘的 zstd 分桶保持一致，避免增量写入把分片重新压成 snappy 而膨胀越界（GH001 100MB 硬限）。
+        merged.to_parquet(pf, index=False, compression="zstd")
     # 迁移完成后 legacy CSV 应被清掉；这里顺手删除避免双份数据分歧
     legacy = base / f"{code6}_{adjust}_full.csv"
     if legacy.exists():
