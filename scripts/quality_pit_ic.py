@@ -117,7 +117,10 @@ def _code_steps(data: dict, grid: pd.DatetimeIndex):
         roe_steps.append(float(r) if r is not None else np.nan)
         gm_steps.append(float(g) if g is not None else np.nan)
         pid_steps.append(best_pe)
-    pos = grid.searchsorted(pd.DatetimeIndex([pd.Timestamp(b) for b in breaks]), side="right") - 1
+    # ⚠️ 必须 side="left"（首个 grid 日 ≥ 可用日）。
+    # 用 side="right" - 1 会把「周六/节假日公告」错配到**前一个交易日** →
+    # 该报告提前 1–3 天生效 = 未来函数（2026-09-17 逐日等价校验实测 33/151 不符）。
+    pos = grid.searchsorted(pd.DatetimeIndex([pd.Timestamp(b) for b in breaks]), side="left")
     n = len(grid)
     roe = np.full(n, np.nan)
     gm = np.full(n, np.nan)
