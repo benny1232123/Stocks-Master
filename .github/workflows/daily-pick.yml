@@ -124,131 +124,30 @@ jobs:
         run: |
           python scripts/verify_data_freshness.py --signal-date ${{ steps.gate.outputs.today }}
 
-      - name: 策略1 Boll 扫描
-        id: boll
+      - name: 因子池 A 批选股（12 价格因子）
+        id: factors
         continue-on-error: true
         if: steps.gate.outputs.ok == 'true'
-        timeout-minutes: 25
-        env:
-          KLINE_BACKEND: hithink
-          ENABLE_VISUALIZATION: "0"
-          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
-          SUPABASE_KEY: ${{ secrets.SUPABASE_KEY }}
-        run: |
-          TODAY=${{ steps.gate.outputs.today }}
-          python scripts/strategy_cache.py pull boll $TODAY && echo "skip=true" >> $GITHUB_OUTPUT && exit 0
-          python -m smcore.strategies.boll $TODAY
-          python scripts/strategy_cache.py push boll $TODAY
-          # ── 策略产出摘要 ──
-          echo "### Boll 策略产出" >> $GITHUB_STEP_SUMMARY
-          F="stock_data/Stock-Selection-Boll-${TODAY}.csv"
-          if [ -f "$F" ]; then
-            N=$(tail -n +2 "$F" | wc -l)
-            echo "✅ ${F}: **${N}** 只候选" >> $GITHUB_STEP_SUMMARY
-          else
-            echo "::error::Boll 策略未生成输出文件 ${F}"
-            echo "❌ 文件不存在: ${F}" >> $GITHUB_STEP_SUMMARY
-          fi
-
-      - name: 策略2 题材热度
-        id: theme
-        continue-on-error: true
-        if: steps.gate.outputs.ok == 'true'
-        timeout-minutes: 20
+        timeout-minutes: 40
         env:
           KLINE_BACKEND: hithink
           SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
           SUPABASE_KEY: ${{ secrets.SUPABASE_KEY }}
         run: |
           TODAY=${{ steps.gate.outputs.today }}
-          python scripts/strategy_cache.py pull theme $TODAY && echo "skip=true" >> $GITHUB_OUTPUT && exit 0
-          # theme 内部 datetime.now() 硬编码，用 SIGNAL_DATE 包装脚本注入指定日期
-          SIGNAL_DATE=$TODAY python scripts/run_strategy_for_date.py theme
-          python scripts/strategy_cache.py push theme $TODAY
-          echo "### Theme 策略产出" >> $GITHUB_STEP_SUMMARY
-          F="stock_data/Stock-Selection-Ashare-Theme-Turnover-${TODAY}.csv"
-          if [ -f "$F" ]; then
-            N=$(tail -n +2 "$F" | wc -l)
-            echo "✅ ${F}: **${N}** 只候选" >> $GITHUB_STEP_SUMMARY
-          else
-            echo "::error::Theme 策略未生成输出文件 ${F}"
-            echo "❌ 文件不存在: ${F}" >> $GITHUB_STEP_SUMMARY
-          fi
-
-      - name: 策略3 CCTV 板块
-        id: cctv
-        continue-on-error: true
-        if: steps.gate.outputs.ok == 'true'
-        timeout-minutes: 25
-        env:
-          KLINE_BACKEND: hithink
-          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
-          SUPABASE_KEY: ${{ secrets.SUPABASE_KEY }}
-        run: |
-          TODAY=${{ steps.gate.outputs.today }}
-          python scripts/strategy_cache.py pull cctv $TODAY && echo "skip=true" >> $GITHUB_OUTPUT && exit 0
-          SIGNAL_DATE=$TODAY python scripts/run_strategy_for_date.py cctv
-          python scripts/strategy_cache.py push cctv $TODAY
-          echo "### CCTV 策略产出" >> $GITHUB_STEP_SUMMARY
-          F="stock_data/CCTV-Sector-Stock-Pool-${TODAY}.csv"
-          if [ -f "$F" ]; then
-            N=$(tail -n +2 "$F" | wc -l)
-            echo "✅ ${F}: **${N}** 只候选" >> $GITHUB_STEP_SUMMARY
-          else
-            echo "::warning::CCTV 策略未生成个股池（新闻稀薄/板块未匹配属正常现象）"
-            echo "⚪ 文件不存在（可能无新闻或板块匹配失败）: ${F}" >> $GITHUB_STEP_SUMMARY
-          fi
-
-      - name: 策略4 相对强弱
-        id: relativity
-        continue-on-error: true
-        if: steps.gate.outputs.ok == 'true'
-        timeout-minutes: 20
-        env:
-          KLINE_BACKEND: hithink
-          RELATIVITY_MAX_WORKERS: "1"
-          RELATIVITY_SLEEP_SECONDS: "0.3"
-          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
-          SUPABASE_KEY: ${{ secrets.SUPABASE_KEY }}
-        run: |
-          TODAY=${{ steps.gate.outputs.today }}
-          python scripts/strategy_cache.py pull relativity $TODAY && echo "skip=true" >> $GITHUB_OUTPUT && exit 0
-          # relativity --max-workers 1 仍可通过 env 注入信号日
-          SIGNAL_DATE=$TODAY python scripts/run_strategy_for_date.py relativity
-          python scripts/strategy_cache.py push relativity $TODAY
-          echo "### Relativity 策略产出" >> $GITHUB_STEP_SUMMARY
-          F="stock_data/Stock-Selection-Relativity-${TODAY}.csv"
-          if [ -f "$F" ]; then
-            N=$(tail -n +2 "$F" | wc -l)
-            echo "✅ ${F}: **${N}** 只候选" >> $GITHUB_STEP_SUMMARY
-          else
-            echo "::error::Relativity 策略未生成输出文件 ${F}"
-            echo "❌ 文件不存在: ${F}" >> $GITHUB_STEP_SUMMARY
-          fi
-
-      - name: 策略5 动量/相对强度
-        id: momentum
-        continue-on-error: true
-        if: steps.gate.outputs.ok == 'true'
-        timeout-minutes: 25
-        env:
-          KLINE_BACKEND: hithink
-          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
-          SUPABASE_KEY: ${{ secrets.SUPABASE_KEY }}
-        run: |
-          TODAY=${{ steps.gate.outputs.today }}
-          python scripts/strategy_cache.py pull momentum $TODAY && echo "skip=true" >> $GITHUB_OUTPUT && exit 0
-          SIGNAL_DATE=$TODAY python scripts/run_strategy_for_date.py momentum
-          python scripts/strategy_cache.py push momentum $TODAY
-          echo "### Momentum 策略产出" >> $GITHUB_STEP_SUMMARY
-          F="stock_data/Stock-Selection-Momentum-${TODAY}.csv"
-          if [ -f "$F" ]; then
-            N=$(tail -n +2 "$F" | wc -l)
-            echo "✅ ${F}: **${N}** 只候选" >> $GITHUB_STEP_SUMMARY
-          else
-            echo "::error::Momentum 策略未生成输出文件 ${F}"
-            echo "❌ 文件不存在: ${F}" >> $GITHUB_STEP_SUMMARY
-          fi
+          # A 批 12 因子：与 factor_zoo.TEMPLATES 逐字一致，1:1 复用 compute_factor
+          python scripts/zoo_factor_strategy.py --date $TODAY
+          echo "### 因子池 A 批产出" >> $GITHUB_STEP_SUMMARY
+          for L in PVCorr20 PVCorr60 CVAmt20 CVAmt60 Skew20 Skew60 VRatio20_120 VRatio10_60 DistLo10 DistLo60 Vol20 Illiq20; do
+            F="stock_data/Stock-Selection-${L}-${TODAY}.csv"
+            if [ -f "$F" ]; then
+              N=$(tail -n +2 "$F" | wc -l)
+              echo "✅ ${F}: **${N}** 只候选" >> $GITHUB_STEP_SUMMARY
+            else
+              echo "::error::因子 ${L} 未生成输出文件 ${F}"
+              echo "❌ 文件不存在: ${F}" >> $GITHUB_STEP_SUMMARY
+            fi
+          done
 
       - name: 生成操作清单 + 上传 COS
         if: steps.gate.outputs.ok == 'true'
@@ -288,11 +187,7 @@ jobs:
         with:
           name: stock-results-${{ github.run_number }}
           path: |
-            stock_data/Stock-Selection-Boll-*.csv
-            stock_data/Stock-Selection-Relativity-*.csv
-            stock_data/Stock-Selection-Ashare-Theme-Turnover-*.csv
-            stock_data/CCTV-Sector-Stock-Pool-*.csv
-            stock_data/Stock-Selection-Momentum-*.csv
+            stock_data/Stock-Selection-*.csv
             stock_data/Daily-Action-List-*.csv
             stock_data/backtest_status.txt
           retention-days: 30
@@ -354,7 +249,6 @@ jobs:
           ls stock_data/Daily-Action-List-*.csv >/dev/null 2>&1 && git add -f stock_data/Daily-Action-List-*.csv || true
           ls stock_data/Multi-Backtest-*.csv >/dev/null 2>&1 && git add -f stock_data/Multi-Backtest-*.csv || true
           ls stock_data/Stock-Selection-*.csv >/dev/null 2>&1 && git add -f stock_data/Stock-Selection-*.csv || true
-          ls stock_data/CCTV-Sector-Stock-Pool-*.csv >/dev/null 2>&1 && git add -f stock_data/CCTV-Sector-Stock-Pool-*.csv || true
           # 看板静态数据快照：Render 端点快照优先直读，网站首屏毫秒级
           [ -d stock_data/web_data/ ] && git add -f stock_data/web_data/ || true
           [ -f stock_data/backtest_status.txt ] && git add -f stock_data/backtest_status.txt || true
@@ -447,12 +341,11 @@ jobs:
           # 区分「真无信号」与「数据源/脚本挂了」：
           # - 有策略产出文件但 Daily-Action-List 为空 → 正常过滤，不告警
           # - 无任何策略产出文件且 Daily-Action-List 不存在/为空 → 疑似执行链路故障，开 issue
-          n_boll=$(ls stock_data/Stock-Selection-Boll-${TODAY}.csv 2>/dev/null | wc -l)
-          n_theme=$(ls stock_data/Stock-Selection-Ashare-Theme-Turnover-${TODAY}.csv 2>/dev/null | wc -l)
-          n_cctv=$(ls stock_data/CCTV-Sector-Stock-Pool-${TODAY}.csv 2>/dev/null | wc -l)
-          n_rel=$(ls stock_data/Stock-Selection-Relativity-${TODAY}.csv 2>/dev/null | wc -l)
-          n_mom=$(ls stock_data/Stock-Selection-Momentum-${TODAY}.csv 2>/dev/null | wc -l)
-          n_strat=$((n_boll + n_theme + n_cctv + n_rel + n_mom))
+          # A 批 12 因子是否产出（zoo_factor_strategy.py 生成）
+          n_strat=0
+          for L in PVCorr20 PVCorr60 CVAmt20 CVAmt60 Skew20 Skew60 VRatio20_120 VRatio10_60 DistLo10 DistLo60 Vol20 Illiq20; do
+            [ -f "stock_data/Stock-Selection-${L}-${TODAY}.csv" ] && n_strat=$((n_strat+1))
+          done
 
           action_file="stock_data/Daily-Action-List-${TODAY}.csv"
           if [ -f "$action_file" ]; then
