@@ -38,7 +38,7 @@ import pandas as pd
 from smcore.strategy import factor_engine as fe
 
 # ── 预注册常数 ──────────────────────────────────────────────────────────
-MAX_CANDIDATES = 200          # 候选上限（当前文法展开 100 个，未触顶）
+MAX_CANDIDATES = 200          # 候选上限（当前文法展开 123 个，未触顶）
 SPLIT_END = "2022-12-31"      # 发现集结束；之后为验证集
 MIN_OOS_EVAL_DAYS = 40        # 验证集非重叠样本下限（≈1.6 年，10 日一档）
 MIN_IC_ABS = 0.010            # 存活所需最小 |均值 IC|
@@ -60,6 +60,9 @@ FAMILY = {
     "volratio": "量能比", "amtratio": "量能比", "cvvol": "成交稳定性",
     "cvamt": "成交稳定性", "pvcorr": "量价相关", "pamtcorr": "量价相关",
     "gap": "跳空", "intraday": "日内收益",
+    # Alpha101 启发式算子族（2026-09-17 扩展；候选源，非 live 菜单）
+    "rklow": "Alpha101", "rkvol": "Alpha101", "rkcls": "Alpha101",
+    "chl": "Alpha101", "dcls": "Alpha101", "a": "Alpha101",
 }
 _NAME_PREFIX_RE = re.compile(r"^[a-z]+")
 
@@ -100,6 +103,16 @@ TEMPLATES: list[tuple[str, int, list, str]] = [
     ("tsrank", +1, [(5, 60), (5, 120), (20, 60), (20, 120), (20, 250), (60, 250)], "tsrank{w1}_{w2}"),
     ("gapmean", -1, [5, 20, 60], "gap{w}"),
     ("intraday", +1, [5, 20, 60], "intraday{w}"),
+    # Alpha101 启发式算子（候选源扩展，2026-09-17，纯 OHLCV；不直接进 live 菜单）
+    ("csrankl", -1, [20, 60], "rklow{w}"),
+    ("csrankv", +1, [20, 60], "rkvol{w}"),
+    ("csrank", -1, [20, 60], "rkcls{w}"),
+    ("corr_hl", -1, [20, 60], "chl{w}"),
+    ("delta_c", -1, [5, 20, 60], "dcls{w}"),
+    ("alpha4", -1, [20, 60], "a4_{w}"),
+    ("alpha6", -1, [20, 60], "a6_{w}"),
+    ("alpha12", -1, [5, 20, 60], "a12_{w}"),
+    ("alpha20", -1, [10, 20], "a20_{w}"),
 ]
 
 
@@ -168,7 +181,7 @@ def _roll_corr(x: pd.DataFrame, y: pd.DataFrame, w: int) -> pd.DataFrame:
 
 
 def _ts_rank(x: pd.DataFrame, w: int) -> pd.DataFrame:
-    """当前值在自身过去 w 期窗口内的百分位（0~1）。"""
+    """当前值在自身过去 w 期窗口内的 percentile（0~1）。"""
     mn = fe.roll_min(w)
     try:
         return x.rolling(w, min_periods=mn).rank(pct=True)
@@ -176,6 +189,11 @@ def _ts_rank(x: pd.DataFrame, w: int) -> pd.DataFrame:
         lo = x.rolling(w, min_periods=mn).min()
         hi = x.rolling(w, min_periods=mn).max()
         return (x - lo) / (hi - lo).replace(0.0, np.nan)
+
+
+def _cs_rank(x: pd.DataFrame) -> pd.DataFrame:
+    """当日横截面分位排名（0~1，逐行 rank pct）：值越低 = 该日在全市场越靠后。"""
+    return x.rank(pct=True, axis=1)
 
 
 # ── 因子计算 ────────────────────────────────────────────────────────────
@@ -261,6 +279,26 @@ def compute_factor(ctx: dict, cand: Candidate) -> pd.DataFrame:
         return (op / close.shift(1) - 1).rolling(w, min_periods=m1).mean()
     if kind == "intraday":
         return (close / op - 1).rolling(w, min_periods=m1).mean()
+    # ── Alpha101 启发式算子（候选源扩展，2026-09-17，纯 OHLCV）─────────────
+    if kind == "csrankl":
+        return _cs_rank(low)
+    if kind == "csrankv":
+        return _cs_rank(vol)
+    if kind == "csrank":
+        return _cs_rank(close)
+    if kind == "corr_hl":
+        return _roll_corr(high, low, w)
+    if kind == "delta_c":
+        return close - close.shift(w)
+    if kind == "alpha4":
+        return -_ts_rank(_cs_rank(low), w)
+    if kind == "alpha6":
+        return _roll_corr(op, vol, w)
+    if kind == "alpha12":
+        dv = vol.diff(1)
+        return np.sign(dv.where(dv.notna(), 0.0)) * (-(close - close.shift(w)))
+    if kind == "alpha20":
+        return -_cs_rank(op - high)
     raise KeyError(f"unknown factor kind: {kind}")
 
 

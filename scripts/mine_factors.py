@@ -3,7 +3,7 @@
 """因子自动挖掘 CLI：枚举预注册文法候选 → 验证集口径筛选 → 出报告。
 
 用法：
-    python scripts/mine_factors.py                       # 全量（~100 候选）
+    python scripts/mine_factors.py                       # 全量（~123 候选）
     python scripts/mine_factors.py --smoke               # 冒烟（短历史 + 前 6 候选）
     python scripts/mine_factors.py --only mom20,vol20,skew20
     python scripts/mine_factors.py --max-candidates 40 --split-end 2024-06-30
