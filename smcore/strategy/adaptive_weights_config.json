@@ -33,5 +33,6 @@
     "min_n": 5
   },
   "monotonicity_tol_pp": 2.5,
-  "sweep_edge_tol_pp": 2.5
+  "sweep_edge_tol_pp": 2.5,
+  "excluded_strategies": ["theme", "cctv", "momentum"]
 }

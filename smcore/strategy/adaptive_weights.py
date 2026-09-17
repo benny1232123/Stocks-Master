@@ -90,6 +90,14 @@ _BUILTIN_DEFAULTS = {
     #    （smcore.adaptive_weights.compute_adaptive_allocation / fusion）尚未接入本开关，
     #    故开启它暂不改变线上选股权重——需先完成生产接线（见 memory 2026-09-16）。
     "factor_timing": {"enabled": False, "window": 10, "min_n": 5},
+    # ── 硬编码策略黑名单（2026-09-17）：被证据判死刑的策略强制清零，不参与分配。
+    # 与 factor_timing 覆盖层互补：覆盖层是「数据驱动、可翻案」门控（theme/cctv 当前被其清零、
+    # 若信念 IC 转正则可恢复）；本黑名单是「结构性判死刑」的最终兜底（momentum 方向反转是设计缺陷、
+    # 且因 DAL 稀疏永远测不动 → 其权重纯属无证据默认保留）。名单内策略在
+    # compute_adaptive_allocation 末段强制置 0 并重新归一化，不受 FLOOR 地板影响、也不受覆盖层
+    # enabled 状态影响 → 即便覆盖层被 tripwire 回滚也能保证出局。默认空（不破坏现状）。
+    # ⚠️ 必须注册于此 _BUILTIN_DEFAULTS：否则 _load_config/save_config 会忽略/丢弃它。
+    "excluded_strategies": [],
     # 样本外单调性守卫容差（百分点）：见 test_walk_forward.test_out_of_sample_monotonicity。
     # 项目 OOS 结论（WALK_FORWARD_VALIDATION.md）已判定单调性「非跨 regime 稳健」
     # （3 regime 仅 1 跑赢等权，robust=False，edge 处噪声级 ±0.8pp）。故该守卫不再硬断言
@@ -799,6 +807,20 @@ def compute_adaptive_allocation(
     # 因子生效开关（默认关）：仅 CONFIG.enabled 时惰性套用（清零近期信念 IC 非显著为正的因子）
     if bool((CONFIG.get("factor_timing") or {}).get("enabled", False)):
         weights = _apply_factor_timing(weights, signal_date)
+    # 硬编码策略黑名单（最终兜底）：名单内策略强制清零并重新归一化，
+    # 不受 FLOOR 地板与覆盖层 enabled 状态影响。默认空 → 不改变现状。
+    excluded = {s.lower() for s in (CONFIG.get("excluded_strategies") or [])}
+    if excluded:
+        kept = {s: (w if s not in excluded else 0.0) for s, w in weights.items()}
+        tot = sum(kept.values())
+        if tot > 0:
+            renorm = {s: kept[s] / tot * 100.0 for s in weights}
+            pct = {s: int(round(renorm[s])) for s in renorm}
+            d = 100 - sum(pct.values())
+            if d != 0:
+                anchor = max(renorm, key=renorm.get)
+                pct[anchor] = max(0, pct[anchor] + d)
+            weights = pct
     return edge, weights, 0, False
 
 

@@ -165,3 +165,39 @@ def test_save_config_preserves_factor_timing(tmp_path, monkeypatch):
     assert written["factor_timing"]["enabled"] is True
     assert written["factor_timing"]["window"] == 10
     assert written["factor_timing"]["min_n"] == 5
+
+
+def test_excluded_strategies_registered():
+    """2026-09-17 回归：excluded_strategies 必须注册在 _BUILTIN_DEFAULTS。
+
+    否则 _load_config 忽略文件里的该键（黑名单静默失效），save_config 写回时整块丢弃。
+    缺省必须为空列表（不破坏现状默认行为）。
+    """
+    from smcore.strategy import adaptive_weights as aw
+
+    assert "excluded_strategies" in aw._BUILTIN_DEFAULTS
+    assert aw._BUILTIN_DEFAULTS["excluded_strategies"] == []
+    assert "excluded_strategies" in aw.CONFIG
+
+
+def test_excluded_strategies_zeroed_in_allocation(monkeypatch):
+    """compute_adaptive_allocation 必须把黑名单策略强制清零并重新归一化。"""
+    from smcore.strategy import adaptive_weights as aw
+
+    # 伪造 edge，避免碰真实 k 线/网络；各策略 edge 相等 ≈ 等权起点
+    fake_edge = {s: {"edge": 1.0, "n": 30, "win_rate": 50, "avg": 1.0} for s in ALL_STRATEGIES}
+    monkeypatch.setattr(aw, "compute_edge", lambda *a, **k: fake_edge)
+    # 关掉覆盖层，隔离排除逻辑；注入黑名单
+    monkeypatch.setattr(
+        aw, "CONFIG",
+        {**aw.CONFIG,
+         "factor_timing": {**aw.CONFIG.get("factor_timing", {}), "enabled": False},
+         "excluded_strategies": ["momentum", "theme"]},
+    )
+    _edge, w, _cash, cold = aw.compute_adaptive_allocation(min_n=1)
+    assert not cold
+    assert w["momentum"] == 0 and w["theme"] == 0, w
+    # 其余策略吸收权重、和为 100
+    assert sum(w.values()) == 100
+    for s in ("boll", "relativity", "cctv"):
+        assert w[s] > 0, (s, w)
