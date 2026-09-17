@@ -34,5 +34,7 @@
   },
   "monotonicity_tol_pp": 2.5,
   "sweep_edge_tol_pp": 2.5,
-  "excluded_strategies": ["theme", "cctv", "momentum"]
+  "excluded_strategies": ["theme", "cctv", "momentum"],
+  "exclude_no_evidence_strategies": true,
+  "min_evidence_for_allocation": 1
 }

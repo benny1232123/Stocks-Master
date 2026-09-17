@@ -201,3 +201,80 @@ def test_excluded_strategies_zeroed_in_allocation(monkeypatch):
     assert sum(w.values()) == 100
     for s in ("boll", "relativity", "cctv"):
         assert w[s] > 0, (s, w)
+
+
+def test_no_evidence_strategy_capped_to_floor(monkeypatch):
+    """无业绩历史(n=0)的新策略只拿 floor 探索权重，不凭空瓜分被清零策略的额度。
+
+    回归：fundamental 刚接入时 n=0，曾因黑名单把 theme/cctv/momentum 清零后 renormalize
+    到仅剩 [boll, relativity, fundamental] 三个幸存者，被均分拿到 ~32% 无证据权重。
+    门控开启后它只保留 eff_floor 的「探索权重」，释放额度全给有证据的策略。
+    """
+    from smcore.strategy import adaptive_weights as aw
+
+    fake_edge = {
+        "boll":       {"edge": 2.0, "n": 30, "win_rate": 55, "avg": 2.0},
+        "relativity": {"edge": 1.0, "n": 30, "win_rate": 52, "avg": 1.0},
+        # fundamental：刚接入，零归因历史
+        "fundamental": {"edge": 0.0, "n": 0, "win_rate": None, "avg": None},
+        "theme":      {"edge": 0.0, "n": 0, "win_rate": None, "avg": None},
+        "cctv":       {"edge": 0.0, "n": 0, "win_rate": None, "avg": None},
+        "momentum":   {"edge": 0.0, "n": 0, "win_rate": None, "avg": None},
+    }
+    monkeypatch.setattr(aw, "compute_edge", lambda *a, **k: fake_edge)
+    monkeypatch.setattr(
+        aw, "CONFIG",
+        {**aw.CONFIG,
+         "factor_timing": {**aw.CONFIG.get("factor_timing", {}), "enabled": False},
+         "excluded_strategies": ["theme", "cctv", "momentum"],
+         "exclude_no_evidence_strategies": True,
+         "min_evidence_for_allocation": 1,
+         "FLOOR": aw.CONFIG["FLOOR"]},
+    )
+    _edge, w, _cash, cold = aw.compute_adaptive_allocation(min_n=1)
+    assert not cold
+    # 黑名单清零
+    assert w["theme"] == 0 and w["cctv"] == 0 and w["momentum"] == 0
+    # fundamental 只拿 floor 探索权重（固定 ≈3%，不随幸存池放大）
+    FLOOR = aw.CONFIG["FLOOR"]
+    assert w["fundamental"] > 0, w
+    assert w["fundamental"] <= FLOOR + 1, w
+    assert w["fundamental"] >= 1, w
+    # 有证据的策略吃掉释放额度
+    assert w["boll"] > w["fundamental"] and w["relativity"] > w["fundamental"], w
+    assert sum(w.values()) == 100
+
+
+def test_no_evidence_gate_can_be_disabled(monkeypatch):
+    """exclude_no_evidence_strategies=false 时退化为原行为（新策略按初稿权重参与）。
+
+    这是用户的「即时稀释」开关：若愿承担无证据权重风险，可让刚接入的 fundamental
+    立即按 softmax 初稿参与分配，而非被压到 floor。本测试仅保证该开关可正常关闭、
+    不破坏求和与黑名单语义。
+    """
+    from smcore.strategy import adaptive_weights as aw
+
+    fake_edge = {
+        "boll":       {"edge": 2.0, "n": 30, "win_rate": 55, "avg": 2.0},
+        "relativity": {"edge": 1.0, "n": 30, "win_rate": 52, "avg": 1.0},
+        "fundamental": {"edge": 0.0, "n": 0, "win_rate": None, "avg": None},
+        "theme":      {"edge": 0.0, "n": 0, "win_rate": None, "avg": None},
+        "cctv":       {"edge": 0.0, "n": 0, "win_rate": None, "avg": None},
+        "momentum":   {"edge": 0.0, "n": 0, "win_rate": None, "avg": None},
+    }
+    monkeypatch.setattr(aw, "compute_edge", lambda *a, **k: fake_edge)
+    monkeypatch.setattr(
+        aw, "CONFIG",
+        {**aw.CONFIG,
+         "factor_timing": {**aw.CONFIG.get("factor_timing", {}), "enabled": False},
+         "excluded_strategies": ["theme", "cctv", "momentum"],
+         "exclude_no_evidence_strategies": False,
+         "min_evidence_for_allocation": 1,
+         "FLOOR": aw.CONFIG["FLOOR"]},
+    )
+    _edge, w, _cash, cold = aw.compute_adaptive_allocation(min_n=1)
+    assert not cold
+    assert w["theme"] == 0 and w["cctv"] == 0 and w["momentum"] == 0
+    assert sum(w.values()) == 100
+    # 关闭门控后 fundamental 仍有正权重（不被强制压到 floor 区间外），且仍 > 0
+    assert w["fundamental"] > 0, w

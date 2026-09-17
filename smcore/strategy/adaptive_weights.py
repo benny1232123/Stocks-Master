@@ -45,7 +45,7 @@ if __package__ in (None, ""):
 from smcore.config.defaults import STOCK_DATA_DIR
 from smcore.utils.code import format_stock_code
 
-ALL_STRATEGIES = ["boll", "theme", "relativity", "momentum", "cctv"]
+ALL_STRATEGIES = ["boll", "theme", "relativity", "momentum", "cctv", "fundamental"]
 
 # ── 可热更新的超参配置（月度 walk-forward 重验 CI 可改写本文件）──
 # 文件缺失 / 解析失败时回退到内置默认，保证「零配置也能跑」且行为不变。
@@ -98,6 +98,18 @@ _BUILTIN_DEFAULTS = {
     # enabled 状态影响 → 即便覆盖层被 tripwire 回滚也能保证出局。默认空（不破坏现状）。
     # ⚠️ 必须注册于此 _BUILTIN_DEFAULTS：否则 _load_config/save_config 会忽略/丢弃它。
     "excluded_strategies": [],
+    # ── 无证据策略门控（2026-09-17，与 excluded_strategies 互补）──
+    # excluded_strategies = 结构性「判死刑」（永久清零）；本开关 = 临时「冷启动门」：
+    # 任何「尚无任何已实现归因历史」(n < min_evidence_for_allocation) 的策略只保留
+    # eff_floor 的「探索权重」，不吸收被清零策略释放的额度。堵死「无证据默认均分」陷阱——
+    # 曾让 momentum 凭空拿 13%、fundamental（新接入、零业绩）凭空拿 32%。
+    # fundamental 的候选票仍照常进入 DAL 积累业绩；一旦 n 达标（默认 ≥1 个归因信号日）
+    # 即自动「毕业」、凭真实 edge 参与分配，无需改代码。关掉本开关
+    # (exclude_no_evidence_strategies=false) 即退化为原行为，让新策略立即按初稿权重参与
+    # 分配（若优先要即时稀释、愿承担无证据权重风险，可如此设置）。
+    # ⚠️ 必须注册于此 _BUILTIN_DEFAULTS：否则 _load_config/save_config 会忽略/丢弃它。
+    "exclude_no_evidence_strategies": True,
+    "min_evidence_for_allocation": 1,
     # 样本外单调性守卫容差（百分点）：见 test_walk_forward.test_out_of_sample_monotonicity。
     # 项目 OOS 结论（WALK_FORWARD_VALIDATION.md）已判定单调性「非跨 regime 稳健」
     # （3 regime 仅 1 跑赢等权，robust=False，edge 处噪声级 ±0.8pp）。故该守卫不再硬断言
@@ -765,6 +777,83 @@ def _apply_factor_timing(weights: dict, signal_date: Optional[str] = None) -> di
         return weights
 
 
+def _finalize_allocation_weights(
+    weights: dict,
+    edge: dict,
+    excluded: set,
+    *,
+    exclude_no_evidence: bool,
+    eff_floor: float,
+    min_ev_n: int,
+) -> dict:
+    """把 adaptive_weights 的初稿权重，套用黑名单 + 无证据门 → 最终 0-100 权重。
+
+    规则：
+    - 黑名单策略强制 0（不受 FLOOR 影响）。
+    - exclude_no_evidence=True 时：无任何已实现归因历史(n < min_ev_n)的策略只保留
+      eff_floor 的「探索权重」（用于让其候选票进入 DAL 积累业绩），不吸收被清零策略
+      释放的额度；释放额度全部分给「有证据」的幸存策略。这堵死「无证据默认均分」陷阱
+      （曾让 momentum 凭空拿 13%、fundamental 凭空拿 32%）。
+    - exclude_no_evidence=False（或阈值=0）：退化为原行为——所有非黑名单策略按初稿
+      权重归一化到 100（用户若想让新策略立即参与分配、愿承担无证据权重风险，可关此开关）。
+    返回值之和恒为 100（四舍五入误差锚定到「有证据」的最大者，绝不补给无证据策略）。
+    """
+    base = {s: float(weights.get(s, 0.0)) for s in weights}
+    for s in excluded:
+        base[s] = 0.0
+
+    # 分类：无证据（n 不足且开启门控）vs 有证据
+    no_ev: set = set()
+    ev: set = set()
+    for s in base:
+        if s in excluded:
+            continue
+        n = int((edge.get(s, {}) or {}).get("n", 0) or 0)
+        if exclude_no_evidence and n < min_ev_n:
+            no_ev.add(s)
+        else:
+            ev.add(s)
+
+    if not no_ev:
+        # 无证据门未生效（或没有无证据策略）→ 原行为：非黑名单按初稿归一化到 100
+        tot = sum(base[s] for s in base if s not in excluded)
+        if tot <= 0:
+            live = [s for s in base if s not in excluded]
+            eq = 100.0 / len(live) if live else 0.0
+            out = {s: (eq if s not in excluded else 0.0) for s in base}
+        else:
+            out = {s: (base[s] / tot * 100.0 if s not in excluded else 0.0) for s in base}
+    else:
+        # 无证据策略拿「固定」探索额度 = 各 eff_floor（不随幸存池大小放大），
+        # 有证据策略瓜分剩余 (100 - 探索额度) 并按各自权重比例分配。
+        # 这样即便 boll/relativity 在弱 regime 下也只拿地板权重，fundamental 仍固定 ≈3%，
+        # 不会被 renormalize 放大到 ~1/3（曾出现 32% 无证据权重）。
+        floor_alloc = eff_floor * len(no_ev)
+        rem = 100.0 - floor_alloc
+        ev_sum = sum(base[s] for s in ev)
+        if ev_sum <= 0:
+            # 退化（正常不应触发：到达此处时 total_n>=min_n 至少保证有证据策略非空）
+            out = {s: (eff_floor if s not in excluded else 0.0) for s in base}
+        else:
+            out = {}
+            for s in base:
+                if s in ev:
+                    out[s] = base[s] / ev_sum * rem
+                elif s in no_ev:
+                    out[s] = eff_floor
+                else:
+                    out[s] = 0.0
+
+    pct = {s: int(round(out.get(s, 0.0))) for s in weights}
+    d = 100 - sum(pct.values())
+    if d != 0:
+        # 修差值锚定到「有证据」的最大者，绝不补给无证据策略
+        anchor_src = [s for s in ev]
+        anchor = max(anchor_src, key=lambda s: pct.get(s, 0)) if anchor_src else max(pct, key=pct.get)
+        pct[anchor] = max(0, pct[anchor] + d)
+    return pct
+
+
 def compute_adaptive_allocation(
     edge_window: int = 20,
     min_n: int = 8,
@@ -807,20 +896,16 @@ def compute_adaptive_allocation(
     # 因子生效开关（默认关）：仅 CONFIG.enabled 时惰性套用（清零近期信念 IC 非显著为正的因子）
     if bool((CONFIG.get("factor_timing") or {}).get("enabled", False)):
         weights = _apply_factor_timing(weights, signal_date)
-    # 硬编码策略黑名单（最终兜底）：名单内策略强制清零并重新归一化，
-    # 不受 FLOOR 地板与覆盖层 enabled 状态影响。默认空 → 不改变现状。
+    # 黑名单 + 无证据门（最终兜底）：名单内强制清零；无业绩历史的策略只留 floor 探索权重，
+    # 不吸收被清零策略释放的额度。两者不受 FLOOR 地板与覆盖层 enabled 状态影响。
+    # 默认空黑名单 + 门控开启 → 不改变现状（仅剔掉零业绩的新策略，如刚接入的 fundamental）。
     excluded = {s.lower() for s in (CONFIG.get("excluded_strategies") or [])}
-    if excluded:
-        kept = {s: (w if s not in excluded else 0.0) for s, w in weights.items()}
-        tot = sum(kept.values())
-        if tot > 0:
-            renorm = {s: kept[s] / tot * 100.0 for s in weights}
-            pct = {s: int(round(renorm[s])) for s in renorm}
-            d = 100 - sum(pct.values())
-            if d != 0:
-                anchor = max(renorm, key=renorm.get)
-                pct[anchor] = max(0, pct[anchor] + d)
-            weights = pct
+    weights = _finalize_allocation_weights(
+        weights, edge, excluded,
+        exclude_no_evidence=bool(CONFIG.get("exclude_no_evidence_strategies", True)),
+        eff_floor=eff_floor,
+        min_ev_n=int(CONFIG.get("min_evidence_for_allocation", 1) or 1),
+    )
     return edge, weights, 0, False
 
 

@@ -110,6 +110,7 @@ from .picks_loader import (
     _find_strategy_csv,
     _load_boll_picks,
     _load_cctv_picks,
+    _load_fundamental_picks,
     _load_momentum_picks,
     _load_relativity_picks,
     _load_theme_picks,
@@ -164,6 +165,7 @@ __all__ = [
     "_load_theme_picks",
     "_load_cctv_picks",
     "_load_momentum_picks",
+    "_load_fundamental_picks",
     # boll_levels
     "_compute_boll_levels",
     # position_sizing
@@ -218,6 +220,7 @@ def fuse_signals(
     theme, theme_date = _load_theme_picks(date_yyyymmdd, max_stale_days=max_stale_days)
     cctv, cctv_date = _load_cctv_picks(date_yyyymmdd, max_stale_days=max_stale_days)
     momentum, mom_date = _load_momentum_picks(date_yyyymmdd, max_stale_days=max_stale_days)
+    fundamental, fund_date = _load_fundamental_picks(date_yyyymmdd, max_stale_days=max_stale_days)
 
     source_dates = {
         "Boll": boll_date,
@@ -225,10 +228,11 @@ def fuse_signals(
         "Theme": theme_date,
         "CCTV": cctv_date,
         "Momentum": mom_date,
+        "Fundamental": fund_date,
     }
 
     # 合并所有代码
-    all_codes = set(boll) | set(relativity) | set(theme) | set(cctv) | set(momentum)
+    all_codes = set(boll) | set(relativity) | set(theme) | set(cctv) | set(momentum) | set(fundamental)
     if not all_codes:
         return pd.DataFrame(), "今日无任何策略命中，无可操作清单。"
 
@@ -319,6 +323,10 @@ def fuse_signals(
             hit_strategies.append("Momentum")
             score += strategy_scores.get("momentum", 0)
             name = momentum[code]["name"] or name
+        if code in fundamental:
+            hit_strategies.append("Fundamental")
+            score += strategy_scores.get("fundamental", 0)
+            name = fundamental[code]["name"] or name
 
         # ── 买入价兜底：非 Boll 策略无建议买入价时用信号日收盘价 ─────────
         if buy_price is None and levels:
