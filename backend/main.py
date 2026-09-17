@@ -8,7 +8,7 @@ import threading
 import time
 import uuid
 from contextlib import asynccontextmanager
-from datetime import date, datetime, timedelta
+from datetime import date, datetime
 from pathlib import Path
 
 from dotenv import load_dotenv
@@ -730,83 +730,14 @@ def run_latest_backtest(payload: dict | None = None) -> dict:
     }
 
 
-@app.post("/api/backtests/run", dependencies=[Depends(_require_api_key)])
-def run_backtest(payload: dict) -> dict:
-    _lite_reject("回测触发")
-    codes = payload.get("codes") or []
-    signal_date = payload.get("date") or date.today().strftime("%Y%m%d")
-    if isinstance(codes, str):
-        codes = [c.strip() for c in codes.replace("\n", ",").split(",") if c.strip()]
-    if not codes:
-        return {"summary": {"error": "未提供股票代码"}}
-    codes = codes[:3000]
-
-    # 多策略 Backtrader 模式：传入 mode="multi" + start/end/strategies
-    mode = str(payload.get("mode", "signal")).lower()
-    if mode == "multi":
-        start = _parse_date(payload.get("start"), date.today() - timedelta(days=365))
-        end = _parse_date(payload.get("end"), date.today())
-        strategies = payload.get("strategies", ",".join(RETIRED_STRATEGY_NAMES))
-        task_id = _create_heavy_task("backtest")
-    if task_id is None:
-        raise HTTPException(status_code=429, detail=f"已有 {_MAX_HEAVY_TASKS} 个重任务在运行，请稍后再试")
-        _append_log(task_id, f"开始多策略回测({strategies})，共 {len(codes)} 只股票，区间 {start}~{end}")
-
-        def _run_multi():
-            try:
-                from smcore.backtest import run_multi_strategy_backtest  # 懒导入（重：backtrader）
-
-                _append_log(task_id, "正在拉取K线并运行多策略 Backtrader 引擎...")
-                result = run_multi_strategy_backtest(
-                    codes,
-                    start,
-                    end,
-                    initial_capital=float(payload.get("initial_capital", 100000)),
-                    strategies=strategies,
-                )
-                _append_log(task_id, f"回测完成：{result.summary.get('num_trades', 0)} 笔交易")
-                _finish_task(task_id, result={
-                    "summary": result.summary,
-                    "equity": result.equity.to_dict(orient="records"),
-                    "trades": result.trades.to_dict(orient="records"),
-                })
-            except Exception as e:
-                _finish_task(task_id, error=str(e))
-
-        threading.Thread(target=_run_multi, daemon=True).start()
-        return {"task_id": task_id}
-
-    import pandas as pd
-    signals = pd.DataFrame({"日期": [signal_date] * len(codes), "代码": codes})
-
-    task_id = _create_heavy_task("backtest")
-    if task_id is None:
-        raise HTTPException(status_code=429, detail=f"已有 {_MAX_HEAVY_TASKS} 个重任务在运行，请稍后再试")
-    _append_log(task_id, f"开始回测，共 {len(codes)} 只股票")
-
-    def _run():
-        try:
-            from smcore.backtest import run_signal_backtest  # 懒导入（重：backtrader）
-
-            _append_log(task_id, "正在拉取K线并模拟交易...")
-            result = run_signal_backtest(
-                signals,
-                hold_days=int(payload.get("hold_days", 5)),
-                initial_capital=float(payload.get("initial_capital", 100000)),
-                max_positions=int(payload.get("max_positions", 10)),
-                slippage=float(payload.get("slippage", 0.001)),
-            )
-            _append_log(task_id, f"回测完成：{result.summary.get('num_trades', 0)} 笔交易")
-            _finish_task(task_id, result={
-                "summary": result.summary,
-                "equity": result.equity.to_dict(orient="records"),
-                "trades": result.trades.to_dict(orient="records"),
-            })
-        except Exception as e:
-            _finish_task(task_id, error=str(e))
-
-    threading.Thread(target=_run, daemon=True).start()
-    return {"task_id": task_id}
+# 2026-09-17 退役：原 POST /api/backtests/run（回测触发）已整体移除。
+# 退役原因：① 该实现本身已损坏 —— `task_id` 只在 `mode == "multi"` 分支内赋值，默认
+#   mode="signal" 路径必然 UnboundLocalError；`mode="multi"` 分支又整体缩进在
+#   `if task_id is None:` 的 raise 之后（不可达），并引用从未导入本模块的
+#   RETIRED_STRATEGY_NAMES → NameError。② 唯一调用方（前端「扫描→融合→回测」链路）
+#   因起点未接线而恒不可达，且本端点在生产 RENDER_LITE=1 下提前 503。
+# 回测现在只由 CI 产出（daily-pick.yml 前向信号回测 → /api/backtests/daily-*）。
+# 保留：/api/backtests/run-latest（读最近批次）+ /api/backtests/daily-*。
 
 
 def _parse_date(value, default: date) -> date:
@@ -830,59 +761,21 @@ def analysis(code: str, window: int = 20, k: float = 1.645, days_back: int = 180
     return build_stock_analysis(code, window=window, k=k, days_back=days_back)
 
 
-@app.get("/api/selection/candidates")
-def selection_candidates(price_min: float = 5.0, price_max: float = 30.0) -> dict:
-    from smcore.selection import get_candidate_codes  # 懒导入：候选池缓存读取
-
-    codes, cache_date = get_candidate_codes(price_min, price_max)
-    return {"codes": codes, "count": len(codes), "cache_date": cache_date}
-
-
-@app.post("/api/selection/boll-scan", dependencies=[Depends(_require_api_key)])
-def selection_boll_scan(payload: dict) -> dict:
-    _lite_reject("全市场扫描")
-    codes = payload.get("codes") or []
-    if isinstance(codes, str):
-        codes = [item.strip() for item in codes.replace("\n", ",").replace(" ", ",").split(",") if item.strip()]
-    codes = codes[:3000]
-    window = int(payload.get("window", 20))
-    k = float(payload.get("k", 1.645))
-    near_ratio = float(payload.get("near_ratio", 1.015))
-    days_back = int(payload.get("days_back", 180))
-
-    task_id = _create_heavy_task("boll-scan")
-    if task_id is None:
-        raise HTTPException(status_code=429, detail=f"已有 {_MAX_HEAVY_TASKS} 个重任务在运行，请稍后再试")
-    _append_log(task_id, f"开始布林扫描，共 {len(codes)} 只股票")
-
-    def _run():
-        from smcore.selection import scan_boll_batch  # 懒导入（重：akshare/baostock 链）
-
-        def on_progress(idx, total, code, msg):
-            _append_log(task_id, f"[{idx}/{total}] {code} {msg}")
-        try:
-            result = scan_boll_batch(
-                codes, window=window, k=k, near_ratio=near_ratio,
-                days_back=days_back, on_progress=on_progress,
-                is_cancelled=lambda: _is_cancelled(task_id),
-            )
-            if _is_cancelled(task_id):
-                return
-            _append_log(task_id, f"扫描完成，命中 {len(result)} 只")
-            _finish_task(task_id, result={"count": int(len(result)), "rows": result.to_dict(orient="records")})
-        except Exception as e:
-            if not _is_cancelled(task_id):
-                _finish_task(task_id, error=str(e))
-
-    threading.Thread(target=_run, daemon=True).start()
-    return {"task_id": task_id}
+# 2026-09-17 退役：原 GET /api/selection/candidates（候选池）与
+# POST /api/selection/boll-scan（全市场布林扫描）。前者走 akshare 现货过滤、后者走
+# smcore.selection.scan_boll_batch，都是注册表（factor_types）/fusion 之外的
+# **第二套选股实现**，与当前框架口径分叉；且二者均无任何存活调用方（前端链路已退役，
+# boll-scan 更是全仓零调用）。故整体移除，避免「两套选股逻辑并存」继续误导。
+# 保留：/api/selection/fusion（注册表驱动、有测试覆盖）+ task-logs + cancel-task。
 
 
 @app.get("/api/selection/task-logs/{task_id}", dependencies=[Depends(_require_api_key)])
 def selection_task_logs(task_id: str) -> dict:
     """任务日志轮询端点：鉴权与写接口同一套规则（本机/同源浏览器放行，脚本需 key）。
 
-    前端 500ms 轮询它，此前无鉴权可被公网任意枚举读取任务日志与回测结果。
+    2026-09-17 起前端不再自带交互式选股链路（起点未接线 → 恒不可达；且相关端点在
+    生产 RENDER_LITE=1 下 503），本端点与 cancel-task 作为**接口留存**保留：
+    供带 API key 的脚本触发融合并观察进度。此前无鉴权可被公网任意枚举读取任务日志。
     """
     with _tasks_lock:
         t = _tasks.get(task_id)
@@ -918,7 +811,7 @@ def selection_fusion(payload: dict) -> dict:
         try:
             from smcore.selection import run_strategy_fusion  # 懒导入（重：akshare/baostock 链）
 
-            _append_log(task_id, "加载四策略 CSV ...")
+            _append_log(task_id, "加载因子池 CSV 并融合 ...")
             result = run_strategy_fusion(
                 date_yyyymmdd=payload.get("date"),
                 total_capital=float(payload.get("total_capital", 100000.0)),

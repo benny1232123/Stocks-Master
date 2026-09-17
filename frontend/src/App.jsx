@@ -36,7 +36,7 @@ const localDateStr = (d = new Date()) =>
 
 const TABS = [
   { id: 'overview', label: '概览', icon: LayoutDashboard },
-  { id: 'selection', label: '宏观经济', icon: Globe2 },
+  { id: 'macro', label: '宏观经济', icon: Globe2 },
   { id: 'analysis', label: '分析', icon: LineChart },
   { id: 'daily', label: '日报', icon: FileText },
   { id: 'portfolio', label: '持仓', icon: Briefcase },
@@ -280,6 +280,9 @@ function EquityChart({ equity, initialCapital }) {
 // 策略 id → 展示标签。id 集合必须与后端 factor_types.STRATEGY_ORDER 一致
 // （tests/test_frontend_registry_parity.py 守卫）；缺项时调用方有 `|| s` 兜底，
 // 但 top-tag 配色需要 styles.css 里对应的 .top-tag--<id> 规则。
+// ⚠️ 键是**小写策略 id**，而 DAL「来源策略」是后端 STRATEGY_LABEL（如 'PVCorr20'）——
+// 查表前必须先 .trim().toLowerCase()，否则恒 miss（只显示裸标签、丢掉中文类型后缀；
+// 这类静默降级 test_frontend_registry_parity.py 测不到）。
 const STRAT_LABEL = {
   // A 批：因子池存活价格因子（菜单当前全集）
   pvcorr20: 'PVCorr20 量价相关',
@@ -711,11 +714,9 @@ function App() {
   const [backtest, setBacktest] = useState(null)
   const [analysis, setAnalysis] = useState(null)
   const [analysisCode, setAnalysisCode] = useState('000001')
-  const [candidateCodes, setCandidateCodes] = useState([])
-  const [selectionParams, setSelectionParams] = useState({ priceMin: 5, priceMax: 30 })
-  const [selectionScan, setSelectionScan] = useState(null)
-  const [fusionResult, setFusionResult] = useState(null)
-  const [backtestRun, setBacktestRun] = useState(null)
+  // 2026-09-17：原「交互式选股」状态（candidateCodes / selectionParams / selectionScan /
+  // fusionResult / backtestRun）已整体退役——网站不再自带扫描/融合/回测链路，
+  // 选股结果一律读 CI 产出的融合清单（Daily-Action-List，见下方 dalRows）。
   const [dailyBacktests, setDailyBacktests] = useState([])
   const [dailySummary, setDailySummary] = useState(null)
   const [summaryLookback, setSummaryLookback] = useState(20)  // 总体总结聚合窗口：20 / 40 / 250(近一年)
@@ -731,28 +732,24 @@ function App() {
   const [adminHeight, setAdminHeight] = useState(1100) // 管理页 iframe 自适应高度（admin 页 postMessage 上报）
   const [diag, setDiag] = useState(null) // 连通性自诊断面板：null=关闭 {running, rows, build, deploy}
   const [adminStaticHost, setAdminStaticHost] = useState(false) // 静态托管（CF Pages）检测：/health 非 JSON 即静态
-  const [scanLogs, setScanLogs] = useState([])
   const [dbStatus, setDbStatus] = useState(null)
   const [fullDaily, setFullDaily] = useState(null)
   const [newsSurface, setNewsSurface] = useState(null)   // 消息面/市场舆情（/api/artifacts/news-surface）
   const [dailyDate, setDailyDate] = useState(null)        // 当前查看的日报日期(YYYYMMDD)，null=最新
   const [dailyDates, setDailyDates] = useState([])         // 可选日报日期列表
   const [dateOpen, setDateOpen] = useState(false)          // 日期下拉框是否展开
-  const logContainerRef = useRef(null)
 
-  // Phase: null | 'candidates' | 'boll' | 'backtest' | 'fusion'
-  const [scanPhase, setScanPhase] = useState(null)
-  const [bollTaskId, setBollTaskId] = useState(null)
-  const [fusionTaskId, setFusionTaskId] = useState(null)
-  const [btTaskId, setBtTaskId] = useState(null)
-  const [scanProgress, setScanProgress] = useState({ current: 0, total: 0 })
+  // 2026-09-17：原「交互式选股链路」已整体退役——scanPhase / bollTaskId / fusionTaskId /
+  // btTaskId / scanProgress / scanLogs / logContainerRef / isRunning，以及 startFusion /
+  // startBacktest / cancelTask 与三个 500ms 轮询 effect，全部移除。
+  // 退役理由：① 链路起点 setBollTaskId 从未被调用 → 整条 scan→fusion→backtest 恒不可达；
+  // ② /api/selection/boll-scan 是注册表之外的**第二套选股实现**，与 fusion 口径分叉；
+  // ③ 相关端点在生产 RENDER_LITE=1 下全部 503。
+  // 现在的选股逻辑 = CI：daily-pick.yml → 12 个因子池 CSV → fusion → Daily-Action-List，
+  // 网站只读这份清单（下方 dalRows），不参与任何计算。
+  // 回测同样只看 CI 的「每日自动回测 · 前向信号回测」批次。
 
-  // 「手动多策略回测」表单已于 2026-09-17 退役：其 4 个策略（boll/relativity/
-  // theme/cctv）已随菜单收缩为 A 批 12 价格因子而移除（STRAT_LABEL 无这些键会渲染空白），
-  // 且 /api/backtests/run 在生产 RENDER_LITE=1 下恒 503。回测请看上方
-  // 「每日自动回测 · 前向信号回测」（CI 对真实融合清单做的前向回测）。
-
-  // 信号日下拉：以全部 DAL 日期为基准，回测未完结的显示"持仓中"
+  // 信号日下拉：以全部 DAL 日期为基准，回测未完结的显示「持仓中」
   const btDateMap = useMemo(() => new Map((dailyBacktests || []).map((d) => [d.date, d])), [dailyBacktests])
   const selectedBtDate = dailyDates[selDaily]?.date
   const selectedBacktest = selectedBtDate ? btDateMap.get(selectedBtDate) : null
@@ -768,32 +765,6 @@ function App() {
     document.addEventListener('mousedown', handler)
     return () => document.removeEventListener('mousedown', handler)
   }, [dateOpen])
-
-  const isRunning = scanPhase !== null
-
-  async function cancelTask(taskId) {
-    if (!taskId) return
-    try {
-      const r = await fetch(`/api/selection/cancel-task/${taskId}`, { method: 'POST' })
-      if (!r.ok) setError('取消任务失败')
-    } catch { setError('取消请求失败') }
-  }
-
-  async function startBacktest(codes) {
-    if (!codes || codes.length === 0) return
-    setScanPhase('backtest')
-    setScanLogs((prev) => [...prev, `融合完成，开始自动回测 ${codes.length} 只股票...`])
-    try {
-      const resp = await fetch('/api/backtests/run', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ codes, hold_days: 5, initial_capital: 100000, max_positions: 10 }),
-      })
-      if (!resp.ok) { setScanPhase(null); setError('回测请求失败'); return }
-      const { task_id } = await resp.json()
-      setBtTaskId(task_id)
-    } catch { setScanPhase(null); setError('回测启动失败') }
-  }
 
   // 加载每日 CI 自动回测结果（全部历史信号日前向回测批次）
   async function loadDailyBacktest() {
@@ -832,21 +803,6 @@ function App() {
       }
     } catch { /* 忽略加载失败 */ }
     finally { setSummaryLoading(false) }
-  }
-
-  async function startFusion() {
-    setScanPhase('fusion')
-    setScanLogs((prev) => [...prev, '开始策略融合...'])
-    try {
-      const today = localDateStr().replace(/-/g, '')
-      const resp = await fetch('/api/selection/fusion', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ date: today, total_capital: 100000, max_picks: 15 }),
-      })
-      if (!resp.ok) { setScanPhase(null); setError('融合启动失败'); return }
-      setFusionTaskId((await resp.json()).task_id)
-    } catch { setScanPhase(null); setError('融合启动失败') }
   }
 
   async function reloadArtifacts(date) {
@@ -899,126 +855,6 @@ function App() {
       setAnalysisLoading(false)
     }
   }
-
-  // Poll boll-scan task
-  useEffect(() => {
-    if (!bollTaskId) return
-    let done = false
-    const controller = new AbortController()
-    const timer = setInterval(async () => {
-      if (done) return
-      try {
-        const resp = await fetch(`/api/selection/task-logs/${bollTaskId}`, { signal: controller.signal })
-        if (!resp.ok) return
-        const data = await resp.json()
-        setScanLogs(data.logs || [])
-        const last = (data.logs || []).slice(-1)[0] || ''
-        const m = last.match(/\[(\d+)\/(\d+)\]/)
-        if (m) setScanProgress({ current: Number(m[1]), total: Number(m[2]) })
-        if (data.status === 'done' || data.status === 'error' || data.status === 'cancelled') {
-          if (!done) {
-            done = true
-            if (data.status === 'done' && data.result?.rows) {
-              setSelectionScan(data.result)
-              startFusion()
-            } else {
-              setScanPhase(null)
-            }
-            clearInterval(timer)
-          }
-        }
-      } catch (e) {
-        if (!done && e.name !== 'AbortError') {
-          done = true
-          setScanPhase(null)
-          setError('策略扫描轮询失败')
-          clearInterval(timer)
-        }
-      }
-    }, 500)
-    return () => { done = true; controller.abort(); clearInterval(timer) }
-  }, [bollTaskId])
-
-  // Poll fusion task
-  useEffect(() => {
-    if (!fusionTaskId) return
-    let done = false
-    const controller = new AbortController()
-    const timer = setInterval(async () => {
-      if (done) return
-      try {
-        const resp = await fetch(`/api/selection/task-logs/${fusionTaskId}`, { signal: controller.signal })
-        if (!resp.ok) return
-        const data = await resp.json()
-        setScanLogs(data.logs || [])
-        if (data.status === 'done' || data.status === 'error' || data.status === 'cancelled') {
-          if (!done) {
-            done = true
-            if (data.status === 'done' && data.result) {
-              setFusionResult(data.result)
-              reloadArtifacts()
-              const codes = data.result.rows?.map((r) => r['股票代码']).filter(Boolean) ?? []
-              if (codes.length > 0) startBacktest(codes)
-              else setScanPhase(null)
-            } else {
-              setScanPhase(null)
-            }
-            clearInterval(timer)
-          }
-        }
-      } catch (e) {
-        if (!done && e.name !== 'AbortError') {
-          done = true
-          setScanPhase(null)
-          setError('融合轮询失败')
-          clearInterval(timer)
-        }
-      }
-    }, 500)
-    return () => { done = true; controller.abort(); clearInterval(timer) }
-  }, [fusionTaskId])
-
-  // Poll backtest task
-  useEffect(() => {
-    if (!btTaskId) return
-    let done = false
-    const controller = new AbortController()
-    const timer = setInterval(async () => {
-      if (done) return
-      try {
-        const resp = await fetch(`/api/selection/task-logs/${btTaskId}`, { signal: controller.signal })
-        if (!resp.ok) return
-        const data = await resp.json()
-        if (data.logs) {
-          setScanLogs((prev) => {
-            const newLogs = data.logs.slice(prev.length)
-            return newLogs.length > 0 ? [...prev, ...newLogs] : prev
-          })
-        }
-        if (data.status === 'done' || data.status === 'error' || data.status === 'cancelled') {
-          if (!done) {
-            done = true
-            if (data.result) { setBacktestRun(data.result); setScanLogs((prev) => [...prev, '回测完成，权益曲线已更新']) }
-            setScanPhase(null)
-            loadDailyBacktest() // ← 回测完成后刷新总体总结 / 历史信号日列表
-            clearInterval(timer)
-          }
-        }
-      } catch (e) {
-        if (!done && e.name !== 'AbortError') {
-          done = true
-          setScanPhase(null)
-          setError('回测轮询失败')
-          clearInterval(timer)
-        }
-      }
-    }, 500)
-    return () => { done = true; controller.abort(); clearInterval(timer) }
-  }, [btTaskId])
-
-  useEffect(() => {
-    if (logContainerRef.current) logContainerRef.current.scrollTop = logContainerRef.current.scrollHeight
-  }, [scanLogs])
 
   useEffect(() => {
     if (!error) return
@@ -1099,19 +935,11 @@ function App() {
       setBacktest(b)
       setBackendDown(false) // 主数据成功 = 后端在线；尾部辅助接口失败不再误报「后端未启动」
       if (degraded.length) setError(`静态快照模式（后端暂不可达）：${degraded.join('、')}——数据为每日快照`)
-      // 辅助数据（候选池/个股分析）失败只降级提示，不影响主数据已就绪的事实
+      // 辅助数据（个股分析）失败只降级提示，不影响主数据已就绪的事实
       try {
-        // 辅助请求各自独立短超时：Render 上候选池（后台生成中）与个股分析可能很慢，
-        // 不得吊住整个加载流程；超时静默跳过（软失败），主数据不受影响
+        // 个股分析请求独立短超时：Render 上可能很慢，不得吊住整个加载流程；
+        // 超时静默跳过（软失败），主数据不受影响
         let auxFail = ''
-        const cCtl = new AbortController()
-        const cTo = setTimeout(() => cCtl.abort(), 15000)
-        try {
-          const c = await fetch('/api/selection/candidates?price_min=5&price_max=30', { signal: cCtl.signal, cache: 'no-store' })
-          if (c.ok) setCandidateCodes((await c.json()).codes ?? [])
-          else auxFail = '候选池(HTTP ' + c.status + ')'
-        } catch (e) { if (e.name !== 'AbortError') auxFail = '候选池(网络)' }
-        finally { clearTimeout(cTo) }
         const aCtl = new AbortController()
         const aTo = setTimeout(() => aCtl.abort(), 30000)
         try {
@@ -1169,7 +997,7 @@ function App() {
       ['日报索引', '/api/artifacts/daily-action-list'],
       ['持仓 /api/portfolio', '/api/portfolio'],
       ['最新回测', '/api/backtests/latest'],
-      ['候选池(可能后台生成中)', '/api/selection/candidates?price_min=5&price_max=30'],
+      ['融合清单全量', '/api/artifacts/daily-action-list/full'],
     ]
     const rows = []
     for (const [label, url] of targets) {
@@ -1252,18 +1080,19 @@ function App() {
   const latestBacktest = backtest?.latest ?? null
   const analysisSignal = analysis?.signal ?? null
   const analysisLatest = analysis?.latest ?? null
-  const selectionRows = selectionScan?.rows ?? []
-  const fusionRows = fusionResult?.rows ?? []
+  // ── 选股结果唯一数据源：CI 融合清单（Daily-Action-List-<date>.csv）─────────────
+  // 由 daily-pick.yml 产出的 12 个因子池 CSV → fusion 融合得到；网站只读不计算。
+  // 优先用全量 rows（/api/artifacts/daily-action-list/full），回退到预览 rows。
+  const dalRows = (fullDaily?.rows?.length ? fullDaily.rows : actionPreview) ?? []
+  const dalDate = String(fullDaily?.latest?.name ?? '').match(/(\d{8})/)?.[1] ?? (dailyDate ?? '')
 
-  // 分析页主从列表数据源：优先融合结果（带名称+评分），否则用候选池代码
-  const analysisList = fusionRows.length
-    ? fusionRows.map((r) => ({ code: r['股票代码'], name: r['股票名称'] ?? '', score: Number(r['综合评分'] ?? 0) }))
-    : candidateCodes.map((code) => ({ code, name: code, score: null }))
-
-  // 概览页「候选榜」：按融合综合评分排名，点选跳分析页
-  const rankRows = fusionRows
-    .map((r) => ({ code: r['股票代码'], name: r['股票名称'] ?? '', score: Number(r['综合评分'] ?? 0) }))
+  // 分析页主从列表数据源：CI 清单（带名称 + 综合评分）
+  const analysisList = dalRows
+    .map((r) => ({ code: String(r['股票代码'] ?? '').trim(), name: r['股票名称'] ?? '', score: Number(r['综合评分'] ?? 0) }))
     .filter((r) => r.code)
+
+  // 概览页「候选榜」：CI 清单按融合综合评分降序（点选跳分析页）
+  const rankRows = analysisList.slice().sort((x, y) => y.score - x.score)
   const rankMax = Math.max(1, ...rankRows.map((r) => r.score))
 
   // 信号徽章配色（红涨绿跌语义）
@@ -1419,8 +1248,9 @@ function App() {
               </div>
               <div className="hero-side">
                 <div className="hero-stat">
-                  <div className="label">候选池</div>
-                  <div className="value">{candidateCodes.length}<span className="hero-stat-unit">只</span></div>
+                  <div className="label">今日选股</div>
+                  <div className="value">{rankRows.length}<span className="hero-stat-unit">只</span></div>
+                  <div className="hero-hint">{dalDate ? `清单日期 ${dalDate}` : '等待 CI 融合清单'}</div>
                 </div>
                 <div className="hero-stat">
                   <div className="label">涨 / 跌</div>
@@ -1486,8 +1316,8 @@ function App() {
               </SectionCard>
             </div>
 
-            {/* 榜单：候选榜 · 融合排序（抄 chengzuopeng 榜单页） */}
-            <SectionCard title="候选榜 · 融合排序" subtitle="点选跳转分析页" className="mt-4">
+            {/* 榜单：候选榜 · 融合排序（数据源 = CI 融合清单 Daily-Action-List） */}
+            <SectionCard title="候选榜 · 融合排序" subtitle={`来源：CI 融合清单${dalDate ? ' · ' + dalDate : ''} · 点选跳转分析页`} className="mt-4">
               {rankRows.length > 0 ? (
                 <div className="rank-list">
                   {rankRows.map((r, i) => (
@@ -1503,13 +1333,13 @@ function App() {
                   ))}
                 </div>
               ) : (
-                <div className="empty-state">运行「选股」中的融合排序后，这里会按综合评分生成榜单</div>
+                <div className="empty-state">尚未读到融合清单（Daily-Action-List）。CI 每个交易日产出后这里会自动按综合评分生成榜单；历史清单见「日报」页。</div>
               )}
             </SectionCard>
           </>
         ) : null}
 
-        {activeView === 'selection' ? (
+        {activeView === 'macro' ? (
           <>
             <div className="page-header macro-header">
               <div>
@@ -2266,9 +2096,14 @@ function App() {
                                     {/* 策略标签 */}
                                     {strategies.length > 0 && (
                                       <div className="top-tags">
-                                        {strategies.map((s) => (
-                                          <span key={s} className={`top-tag top-tag--${s.toLowerCase()}`}>{STRAT_LABEL[s] || s}</span>
-                                        ))}
+                                        {strategies.map((s) => {
+                                          // DAL「来源策略」是注册表标签（如 PVCorr20），STRAT_LABEL 的键是小写
+                                          // 策略 id（如 pvcorr20）→ 必须归一化再查表，否则恒 miss、只剩裸标签。
+                                          const sid = String(s).trim().toLowerCase()
+                                          return (
+                                            <span key={s} className={`top-tag top-tag--${sid}`}>{STRAT_LABEL[sid] || s}</span>
+                                          )
+                                        })}
                                       </div>
                                     )}
                                     {/* 因子类型标签（主分类，配色与清单/分布一致） */}
@@ -2367,7 +2202,7 @@ function App() {
                 <div style={{ fontSize: '0.84rem', color: 'hsl(var(--muted))', lineHeight: 1.7 }}>
                   {fullDaily === null
                     ? '首次加载可能需要几秒钟，请稍候'
-                    : '运行「选股」跑完融合流程后，这里会显示完整每日信号日报'
+                    : 'CI 产出融合清单（Daily-Action-List）后，这里会显示完整每日信号日报'
                   }
                 </div>
               </div>
@@ -2550,7 +2385,7 @@ function App() {
                 <div className="bt-empty">
                   <div className="bt-empty-icon">🌙</div>
                   <div className="bt-empty-title">暂无回测持仓数据</div>
-                  <div className="bt-empty-desc">运行一次「选股 → 回测」流程后将自动出现</div>
+                  <div className="bt-empty-desc">CI 前向回测批次产出后将自动出现（daily-pick.yml）</div>
                 </div>
               ))}
             </SectionCard>

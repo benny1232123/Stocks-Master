@@ -3,7 +3,6 @@ import { cn } from '../lib/utils'
 import {
   factorTypesOfSource,
   getFactorTypeColor,
-  hasTypeFamily,
   STRATEGY_FACTOR_TYPE,
 } from '../lib/factorTypes'
 
@@ -32,7 +31,7 @@ function DailyExpandableList({ rows, onCodeClick }) {
     return { label: 'D', cls: 'ds-d', bar: 20 }
   }
 
-  // 多维评分构成：用每行已有字段（买入价/止损/止盈/MA20/策略）推导 5 个可解释子维度 + 加权综合分。
+  // 多维评分构成：用每行已有字段（买入价/止损/止盈/MA20/策略）推导 4 个可解释子维度 + 加权综合分。
   // 相比后端单一「综合评分」数字，这里把评级拆开，让用户看到每个维度如何贡献，避免「黑箱一个数」。
   const scoreBreakdown = (row) => {
     const clamp = (v, lo = 0, hi = 100) => Math.max(lo, Math.min(hi, v))
@@ -43,10 +42,10 @@ function DailyExpandableList({ rows, onCodeClick }) {
     const ma20 = num(row, 'MA20')
     const stratStr = String(row['来源策略'] ?? '')
     const hit = Number(row['命中策略数'] ?? stratStr.split('/').filter(Boolean).length) || 1
-    // 相对强弱维度改按因子**家族**判定（与后端 factor_types.py / fusion 趋势闸门同口径）：
-    // 原实现精确匹配 '相对强度·资金流'，boll/relativity 拆出 Rel_Up/Rel_Down 后
-    // 原子来源的票会漏判 → 该维度静默失效。改用前缀归并覆盖整族。
-    const hasRS = hasTypeFamily(row['来源策略'] ?? '', '相对强度')
+    // 2026-09-17：原「相对强弱」子维度已移除。它按因子家族 '相对强度' 判定，而当前菜单
+    // （A 批 12 价格因子：量价相关/成交稳定/收益偏度/波动比/位置·距低点/波动/非流动性）
+    // 下**没有任何票属于该家族** → 该维度恒为 60，只把综合分整体压向中位、毫无区分度。
+    // 其 0.10 权重按比例并入超卖深度（.30→.35）与趋势强度（.20→.25）。
 
     // 1) 超卖深度：价格越贴近/跌破下轨，反弹赔率越好
     let oversold = 50
@@ -74,18 +73,14 @@ function DailyExpandableList({ rows, onCodeClick }) {
     }
     // 4) 策略共振：命中策略越多越可信
     const reso = hit >= 3 ? 96 : hit === 2 ? 85 : 50
-    // 5) 相对强弱：跑赢指数（Relativity）额外加分
-    const rs = hasRS ? 88 : 60
-
     const composite = Math.round(
-      oversold * 0.30 + rr * 0.25 + trend * 0.20 + reso * 0.15 + rs * 0.10
+      oversold * 0.35 + rr * 0.25 + trend * 0.25 + reso * 0.15
     )
     const rows = [
       { key: '超卖深度', val: Math.round(oversold), hint: '贴近下轨' },
       { key: '盈亏比', val: Math.round(rr), hint: '止盈/止损' },
       { key: '趋势强度', val: Math.round(trend), hint: '价 vs MA20' },
       { key: '策略共振', val: Math.round(reso), hint: `${hit} 策略命中` },
-      { key: '相对强弱', val: Math.round(rs), hint: hasRS ? '跑赢指数' : '仅价格信号' },
     ]
     return [rows, composite]
   }
