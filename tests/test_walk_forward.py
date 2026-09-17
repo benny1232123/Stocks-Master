@@ -265,11 +265,14 @@ def test_turnover_churning_mask():
     """换手率守卫：生效因子集合每日全翻转 → 平均翻转比例高、ok=False。"""
     from walk_forward_factor_timing import _turnover
     days = [f"2024010{i}" for i in range(1, 8)]
-    mask_a = {"boll": True, "theme": True, "cctv": False, "relativity": True, "momentum": False}
-    mask_b = {"boll": False, "theme": False, "cctv": True, "relativity": False, "momentum": True}
+    # ⚠️ 必须覆盖**全部**策略（勿硬编码 5 个名字）：_turnover 的分母是
+    # len(wf.ALL_STRATEGIES)，只写 5 个键会让其余策略靠 .get(s, True) 默认恒等
+    # → 翻转比例被稀释成 5/14，断言失效。偶数日全开 / 奇数日全关。
+    mask_a = {s: (i % 2 == 0) for i, s in enumerate(wf.ALL_STRATEGIES)}
+    mask_b = {s: (not v) for s, v in mask_a.items()}
     mask = {d: (mask_a if i % 2 == 0 else mask_b) for i, d in enumerate(days)}
     t = _turnover(mask)
-    assert t["avg_flip_fraction"] == 1.0  # 每天 5/5 翻转
+    assert t["avg_flip_fraction"] == 1.0  # 每天全策略翻转
     assert t["ok"] is False
 
 
@@ -278,8 +281,9 @@ def test_gate_turnover_gate_blocks_robust():
     from walk_forward_factor_timing import _gate
     diffs = [3.0] * 20 + [2.5] * 9
     days = [f"2024010{i}" for i in range(1, 8)]
-    mask_a = {"boll": True, "theme": True, "cctv": False, "relativity": True, "momentum": False}
-    mask_b = {"boll": False, "theme": False, "cctv": True, "relativity": False, "momentum": True}
+    # 同上：mask 须覆盖全部策略，否则翻转比例被稀释、换手门不触发。
+    mask_a = {s: (i % 2 == 0) for i, s in enumerate(wf.ALL_STRATEGIES)}
+    mask_b = {s: (not v) for s, v in mask_a.items()}
     mask_series = {d: (mask_a if i % 2 == 0 else mask_b) for i, d in enumerate(days)}
     g = _gate(_make_gate_res(diffs), mask_series=mask_series)
     assert g["turnover"]["ok"] is False

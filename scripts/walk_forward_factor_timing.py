@@ -73,7 +73,7 @@ def _turnover(mask_series: dict) -> dict:
     """因子开关换手率：相邻信号日间"生效集合"的翻转比例。
 
     平均翻转比例 = 总翻转数 / 转移次数 / 因子数。转移次数 = 有效信号日数 - 1。
-    因子数取 wf.ALL_STRATEGIES（恒定 5）。返回 {avg_flip_fraction, n_transitions, n_factors, ok}。
+    因子数取 wf.ALL_STRATEGIES（随策略菜单自适应，勿硬编码；缺键的因子按 True 兜底）。
     """
     days = sorted(mask_series.keys())
     n_factors = len(wf.ALL_STRATEGIES)
