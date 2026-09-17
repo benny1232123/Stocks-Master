@@ -2,6 +2,12 @@
 # -*- coding: utf-8 -*-
 """基本面族正交策略生成器（2026-09-17 由单一 fundamental 拆分而来）。
 
+⚠️ 2026-09-17 已挂起（DEPRECATED）：系统菜单收缩为 A 批 12 个价格因子
+（见 `factor_types.STRATEGY_ORDER`），Quality/Value/Size/ROE/Gross_Margin/EP/BP
+均不在菜单内，融合/权重/报告只遍历 ALL_STRATEGIES，本脚本产出无任何消费方。
+故 main() 不再生成 CSV，避免留下「看似在跑、实则未被消费」的孤儿选股文件。
+打分逻辑（_SCORERS / build_factor 等）保留，供后续「因子挖掘系统 / C 批重开」复用。
+
 定位：在价格/成交量策略（boll=反转·均值回归 / relativity=相对强度·资金流）之外，
 提供若干**彼此正交**的基本面维度，各自独立出选股 CSV、独立进分配器，便于横向对比
 谁的真实 edge 更高（这就是「因子驱动主导」的菜单）：
@@ -263,6 +269,14 @@ def main() -> int:
     ap.add_argument("--all-signal-days", action="store_true",
                     help="回填全部历史信号日（缓存快照相同 → 各日内容一致、仅文件名不同）")
     args = ap.parse_args()
+
+    # ⚠️ 2026-09-17 收缩：菜单已收缩为 A 批 12 个价格因子（factor_types.STRATEGY_ORDER），
+    # 本脚本生成的 Quality/Value/Size/ROE/Gross_Margin/EP/BP 均不在菜单内，没有任何消费方
+    # （融合/权重/报告只遍历 ALL_STRATEGIES）。暂挂起，保留打分逻辑供后续因子挖掘阶段复用，
+    # 不再生成孤儿 CSV。
+    print("[fundamental] DEPRECATED: 菜单已收缩为 A 批价格因子，本脚本不再生成 CSV；"
+          " 如需 C 批基本面因子，待后续因子挖掘阶段重新接入。")
+    return 0
 
     if args.all_signal_days:
         rows = _load_cache()  # 只读一次，供所有日期复用

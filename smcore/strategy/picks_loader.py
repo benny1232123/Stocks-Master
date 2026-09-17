@@ -1,7 +1,9 @@
 """各策略当日结果 CSV 的加载与回退逻辑。
 
-从 fusion.py 抽出「按日期找策略 CSV（限制回退窗口）+ 5 个策略各自解析」。
-缺失一律 fail-soft 返回空 dict。
+从 fusion.py 抽出「按日期找策略 CSV（限制回退窗口）+ 泛型解析」。
+所有策略统一产出「综合分」契约的 Stock-Selection-<Label>-*.csv，由 _load_scored_picks
+按 factor_types.STRATEGY_ORDER 泛型装载；缺失一律 fail-soft 返回空 dict。
+（历史上 boll/relativity/theme/cctv/momentum 各有专属格式与专属 loader，现已移除。）
 """
 from __future__ import annotations
 
@@ -18,7 +20,7 @@ from .name_lookup import _normalize_name
 
 
 def _extract_date_from_filename(path: Path) -> Optional[str]:
-    """从文件名末尾提取 YYYYMMDD，例如 Stock-Selection-Boll-20260704.csv。"""
+    """从文件名末尾提取 YYYYMMDD，例如 Stock-Selection-PVCorr20-20260704.csv。"""
     suffix = path.stem.rsplit("-", 1)[-1]
     if len(suffix) == 8 and suffix.isdigit():
         return suffix
@@ -65,112 +67,14 @@ def _find_strategy_csv(
     return best
 
 
-def _load_boll_picks(date_yyyymmdd: str, *, max_stale_days: int = 3) -> tuple[dict, Optional[str]]:
-    """读取 Boll 选股结果，返回 ({code: {...}}, 实际数据日期)。"""
-    found = _find_strategy_csv("Stock-Selection-Boll", date_yyyymmdd, max_stale_days=max_stale_days)
-    if not found:
-        return {}, None
-    path, actual_date = found
-    picks = {}
-    with path.open("r", encoding="utf-8-sig", newline="") as f:
-        for row in csv.DictReader(f):
-            code = format_stock_code(row.get("股票代码", ""))
-            if not code:
-                continue
-            picks[code] = {
-                "name": _normalize_name(row.get("股票名称", "")),
-                "buy_price": to_float(row.get("建议买入价")),
-            }
-    return picks, actual_date
-
-
-def _load_relativity_picks(date_yyyymmdd: str, *, max_stale_days: int = 3) -> tuple[dict, Optional[str]]:
-    """读取相对强弱结果，返回 ({code: {...}}, 实际数据日期)。"""
-    found = _find_strategy_csv("Stock-Selection-Relativity", date_yyyymmdd, max_stale_days=max_stale_days)
-    if not found:
-        return {}, None
-    path, actual_date = found
-    picks = {}
-    with path.open("r", encoding="utf-8-sig", newline="") as f:
-        for row in csv.DictReader(f):
-            code = format_stock_code(row.get("股票代码", ""))
-            if not code:
-                continue
-            picks[code] = {
-                "name": _normalize_name(row.get("股票名称", "")),
-                "up_ratio": to_float(row.get("上涨满足率")),
-                "down_ratio": to_float(row.get("抗跌满足率")),
-            }
-    return picks, actual_date
-
-
-def _load_theme_picks(date_yyyymmdd: str, *, max_stale_days: int = 3) -> tuple[dict, Optional[str]]:
-    """读取题材策略结果，返回 ({code: {...}}, 实际数据日期)。"""
-    found = _find_strategy_csv("Stock-Selection-Ashare-Theme-Turnover", date_yyyymmdd, max_stale_days=max_stale_days)
-    if not found:
-        return {}, None
-    path, actual_date = found
-    picks = {}
-    with path.open("r", encoding="utf-8-sig", newline="") as f:
-        for row in csv.DictReader(f):
-            code = format_stock_code(row.get("股票代码", ""))
-            if not code:
-                continue
-            picks[code] = {
-                "name": _normalize_name(row.get("股票名称", "")),
-                "score": to_float(row.get("综合分")),
-                "theme": (row.get("题材标签") or "").strip(),
-            }
-    return picks, actual_date
-
-
-def _load_cctv_picks(date_yyyymmdd: str, *, max_stale_days: int = 3) -> tuple[dict, Optional[str]]:
-    """读取 CCTV 股票池，返回 ({code: {...}}, 实际数据日期)。"""
-    found = _find_strategy_csv("CCTV-Sector-Stock-Pool", date_yyyymmdd, max_stale_days=max_stale_days)
-    if not found:
-        return {}, None
-    path, actual_date = found
-    picks = {}
-    with path.open("r", encoding="utf-8-sig", newline="") as f:
-        for row in csv.DictReader(f):
-            code = format_stock_code(row.get("股票代码", ""))
-            if not code:
-                continue
-            picks[code] = {
-                "name": _normalize_name(row.get("股票名称", "")),
-                "sector": (row.get("板块") or "").strip(),
-                "heat": to_float(row.get("热度分")),
-            }
-    return picks, actual_date
-
-
-def _load_momentum_picks(date_yyyymmdd: str, *, max_stale_days: int = 3) -> tuple[dict, Optional[str]]:
-    """读取动量策略结果，返回 ({code: {...}}, 实际数据日期)。缺失则空（fail-soft）。"""
-    found = _find_strategy_csv("Stock-Selection-Momentum", date_yyyymmdd, max_stale_days=max_stale_days)
-    if not found:
-        return {}, None
-    path, actual_date = found
-    picks = {}
-    with path.open("r", encoding="utf-8-sig", newline="") as f:
-        for row in csv.DictReader(f):
-            code = format_stock_code(row.get("股票代码", ""))
-            if not code:
-                continue
-            picks[code] = {
-                "name": _normalize_name(row.get("股票名称", "")),
-                "momentum": to_float(row.get("动量分")),
-            }
-    return picks, actual_date
-
-
 def _load_scored_picks(
     factor: str, date_yyyymmdd: str, *, max_stale_days: int = 3
 ) -> tuple[dict, Optional[str]]:
     """读取「综合分」型策略的选股结果，返回 ({code: {...}}, 实际数据日期)。
 
     消费 `Stock-Selection-<factor>-*.csv`（列：股票代码/股票名称/综合分）。
-    覆盖基本面族（Quality/Value/Size）与价格原子族（Boll_Oversold/…/Rel_Down）——
-    它们契约相同、都是「按综合分排序的候选清单」，故共用一个泛型加载器。
+    当前菜单全部策略（A 批 12 个因子池价格因子）均产出此契约的 CSV，
+    由 fusion 按 factor_types.STRATEGY_ORDER 泛型装载。
     缺失或空表时返回空 dict（fail-soft），对融合链路是 no-op。
     """
     found = _find_strategy_csv(f"Stock-Selection-{factor}", date_yyyymmdd, max_stale_days=max_stale_days)

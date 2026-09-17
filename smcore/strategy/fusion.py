@@ -1,16 +1,13 @@
-"""信号融合 —— 把四策略结果合并为"今日操作清单"。
+"""信号融合 —— 把多策略因子选股结果合并为"今日操作清单"。
 
-此前四策略各自出 CSV、各自推送，用户收到四份独立报告后还要人工合并判断"今天到底买什么"。
-本模块读取当日四策略结果，合并去重、打分、算止损止盈、分配仓位，输出一份操作清单。
+各策略（因子集 = factor_types.STRATEGY_ORDER）各自产出 Stock-Selection-<Label>-YYYYMMDD.csv
+（综合分契约），本模块读取当日结果、合并去重、打分、算止损止盈、分配仓位，输出一份操作清单。
+菜单当前为 A 批 12 个因子池存活价格因子（pvcorr20/60、cvamt20/60、skew20/60、
+vratio20_120、vratio10_60、distlo10/60、vol20、illiq20），全部走泛型 _load_scored_picks。
 
 输入（stock_data/ 下当日文件，缺失则回退最近）：
-- Stock-Selection-Boll-YYYYMMDD.csv          (股票代码, 股票名称, 建议买入价)
-- Stock-Selection-Relativity-YYYYMMDD.csv    (+ 上涨满足率, 抗跌满足率)
-- Stock-Selection-Ashare-Theme-Turnover-*.csv (+ 综合分, 题材标签)
-- CCTV-Sector-Stock-Pool-YYYYMMDD.csv        (股票代码, 股票名称, 板块, 热度分)
-- Stock-Selection-<因子>-YYYYMMDD.csv        (综合分型；因子集 = factor_types.STRATEGY_ORDER)
-  含基本面族 Quality/Value/Size 与价格原子族 Boll_Oversold/Boll_Near_Lower/
-  Boll_Mid_Pullback/Boll_Squeeze/Rel_Up/Rel_Down（均由 picks_loader._load_scored_picks 泛型装载）
+- Stock-Selection-<Label>-YYYYMMDD.csv   (股票代码, 股票名称, 综合分)；Label = factor_types.STRATEGY_LABEL
+  新增因子只需在 factor_types 注册 + 产出同名 CSV，本模块零改动（注册表驱动，无硬编码分支）。
 
 输出：
 - stock_data/Daily-Action-List-YYYYMMDD.csv
@@ -47,9 +44,8 @@ from smcore.strategy.risk_rules import (
     compute_factor_scoring_params,
 )
 
-# 融合层加权系数（原为函数内字面量 0.1 / 10，2026-09-09 迁入 risk_config.json）
-_FUSION_DEFAULTS = {"theme_score_weight": 0.1, "theme_score_cap": 10.0}
-_FUSION_CFG = {**_FUSION_DEFAULTS, **(CONFIG.get("fusion") or {})}
+# 注：Topic 策略的综合分加权系数（theme_score_weight / theme_score_cap）已迁入
+# risk_config.json 的 CONFIG["fusion"]（见 risk_rules.py），由风险层统一读取；融合层不再单独持有。
 from .factor_scoring import compute_factor_scores
 from smcore.utils.code import format_stock_code
 
@@ -112,12 +108,7 @@ from .regime_filter import (
 from .picks_loader import (
     _extract_date_from_filename,
     _find_strategy_csv,
-    _load_boll_picks,
-    _load_cctv_picks,
-    _load_momentum_picks,
-    _load_relativity_picks,
     _load_scored_picks,
-    _load_theme_picks,
 )
 from .boll_levels import _compute_boll_levels
 from .position_sizing import (
@@ -164,11 +155,6 @@ __all__ = [
     # picks_loader
     "_extract_date_from_filename",
     "_find_strategy_csv",
-    "_load_boll_picks",
-    "_load_relativity_picks",
-    "_load_theme_picks",
-    "_load_cctv_picks",
-    "_load_momentum_picks",
     "_load_scored_picks",
     # boll_levels
     "_compute_boll_levels",
@@ -219,31 +205,14 @@ def fuse_signals(
     Returns:
         (result_df, report_text)
     """
-    boll, boll_date = _load_boll_picks(date_yyyymmdd, max_stale_days=max_stale_days)
-    relativity, rel_date = _load_relativity_picks(date_yyyymmdd, max_stale_days=max_stale_days)
-    theme, theme_date = _load_theme_picks(date_yyyymmdd, max_stale_days=max_stale_days)
-    cctv, cctv_date = _load_cctv_picks(date_yyyymmdd, max_stale_days=max_stale_days)
-    momentum, mom_date = _load_momentum_picks(date_yyyymmdd, max_stale_days=max_stale_days)
-
-    # 「综合分」型策略（基本面族 Quality/Value/Size + 价格原子族 Boll_*/Rel_*）共用泛型
-    # 加载器，按注册表批量装载。单一真相源 = factor_types.STRATEGY_ORDER/STRATEGY_LABEL
-    # → 新增因子只需在 factor_types 注册 + 产出同名 CSV，本函数无需改动。
-    _SPECIAL_IDS = ("boll", "relativity", "theme", "cctv", "momentum")
-    picks_by_strat: dict[str, dict] = {
-        "boll": boll,
-        "relativity": relativity,
-        "theme": theme,
-        "cctv": cctv,
-        "momentum": momentum,
-    }
-    dates_by_strat: dict[str, Optional[str]] = {
-        "boll": boll_date,
-        "relativity": rel_date,
-        "theme": theme_date,
-        "cctv": cctv_date,
-        "momentum": mom_date,
-    }
-    for sid in [s for s in STRATEGY_ORDER if s not in _SPECIAL_IDS]:
+    # 全部策略统一走泛型「综合分」加载器（注册表驱动）：单一真相源 =
+    # factor_types.STRATEGY_ORDER / STRATEGY_LABEL。新增因子只需在 factor_types 注册 +
+    # 产出同名 Stock-Selection-<Label>-<date>.csv（综合分契约），本函数无需任何改动（无硬编码分支）。
+    # （历史上 boll/relativity/theme/cctv/momentum 各有专属 CSV 格式与专属 loader，现已全部移除；
+    # 当前菜单的 A 批 12 个因子池价格因子均产出「综合分」契约的 CSV。）
+    picks_by_strat: dict[str, dict] = {}
+    dates_by_strat: dict[str, Optional[str]] = {}
+    for sid in STRATEGY_ORDER:
         picks, actual = _load_scored_picks(
             STRATEGY_LABEL[sid], date_yyyymmdd, max_stale_days=max_stale_days
         )
@@ -331,15 +300,6 @@ def fuse_signals(
             hit_strategies.append(STRATEGY_LABEL[_sid])
             score += strategy_scores.get(_sid, 0)
             name = _picks[code].get("name") or name
-            if _sid == "boll":
-                buy_price = _picks[code].get("buy_price")
-            elif _sid == "theme":
-                # Theme 综合分作为额外加权（综合分 0-100；系数与上限来自 risk_config.json）
-                theme_score = _picks[code].get("score") or 0
-                score += min(
-                    theme_score * _FUSION_CFG["theme_score_weight"],
-                    _FUSION_CFG["theme_score_cap"],
-                )
 
         # ── 买入价兜底：非 Boll 策略无建议买入价时用信号日收盘价 ─────────
         if buy_price is None and levels:
@@ -353,10 +313,11 @@ def fuse_signals(
         if len(hit_strategies) > 1:
             score += (len(hit_strategies) - 1) * _adaptive_multi_hit_bonus(len(adaptive_pct) - list(adaptive_pct.values()).count(0))
 
-        # 趋势闸门：下行防御时不买纯均值回归/相对强度票（原仅 Boll/Relativity）。
+        # 趋势闸门：下行防御时不买纯均值回归/相对强度票。
         # 其「次日买、持有10日」在弱市必亏（实测 BASELINE 弱市 -5%~-9%），直接不出。
-        # ⚠️ 判定改为按**因子类型**归并（而非硬编码策略名）：这样 boll/relativity 沿价格轴
-        # 拆出的原子因子（反转·*、相对强度·*）**自动继承**同一保护，不会因拆分而静默失效。
+        # ⚠️ 判定按**因子类型**归并（而非硬编码策略名）：任何「反转·* / 相对强度·*」家族因子
+        # 都会触发同一保护。当前 A 批菜单不含此类因子 → 该闸门是保留的 no-op 守卫，
+        # 一旦后续因子挖掘系统引入均值回归类候选即自动生效，不会因菜单变动而静默失效。
         if market_gate and regime == "下行防御" and hit_strategies and all(
             factor_type_of(h).startswith(("反转", "相对强度")) for h in hit_strategies
         ):
@@ -555,7 +516,7 @@ def fuse_signals(
         report += f"\n- 🛡️ 趋势守卫剔除 {filtered_out} 只破位/下降通道股（价格低于 MA20 超 12%）"
     if market_gate:
         if regime == "下行防御" and gated_out:
-            report += f"\n- 🚦 趋势闸门触发（市场下行防御）：剔除 {gated_out} 只纯均值回归候选（Boll/Relativity），仅留顺势策略"
+            report += f"\n- 🚦 趋势闸门触发（市场下行防御）：剔除 {gated_out} 只纯均值回归候选（反转/相对强度家族），仅留顺势策略"
         else:
             cold_tag = "（冷启动等权）" if cold else "（自适应·按近期业绩）"
             # 权重逐策略动态渲染（策略集随 factor_types.STRATEGY_ORDER 自适应，勿硬编码名字）

@@ -572,7 +572,7 @@ def _day_returns(shrinkage, floor, zero_negative_edge, sd, exit_kwargs=None) -> 
     wvals = []
     for p in picks:
         s = p["sources"]
-        wv = max((weights[x] for x in s), default=min(weights.values()))
+        wv = max((weights[x] for x in s if x in weights), default=min(weights.values()))
         wvals.append(wv)
     tot = sum(wvals) or 1.0
     allocs = [w / tot for w in wvals]
@@ -715,7 +715,7 @@ def _run_impl(shrinkage: float, eff_floor: float, zero_negative_edge: bool,
         wvals = []
         for p in picks:
             s = p["sources"]
-            wv = max((weights[x] for x in s), default=min(weights.values()))
+            wv = max((weights[x] for x in s if x in weights), default=min(weights.values()))
             p["causal_weight"] = wv
             wvals.append(wv)
         tot = sum(wvals) or 1.0

@@ -1,6 +1,6 @@
 #!/usr/bin/env python
 # -*- coding: utf-8 -*-
-"""因子池存活价格因子 → 选股 CSV 生成器（2026-09-17，A 批 + 反向动量）。
+"""因子池存活价格因子 → 选股 CSV 生成器（2026-09-17，A 批 12 因子）。
 
 背景
 ----
@@ -9,8 +9,7 @@
 价格原子、把基本面拆成 质量/估值/规模。本脚本落第三批（A 批）：
 
 `stock_data/factor_ic_replay/factor_zoo.md`（预注册文法 v1，103 候选 → 存活 21）
-里**已验证存活**的纯价格因子，按「每族取 1–2 个代表窗口」挑出 12 个接入菜单，
-另加 1 个**反向动量**（mom20 的先验方向反转）。
+里**已验证存活**的纯价格因子，按「每族取 1–2 个代表窗口」挑出 12 个接入菜单（即 A 批）。
 
 ⚠️ **公式必须 1:1 复用 `smcore.strategy.factor_zoo.compute_factor`**——不改窗口、
 不改有效域口径、不改先验方向。一旦本脚本自己重写公式，「存活」结论就不再适用
@@ -78,7 +77,6 @@ DATA_DIR = ROOT / "stock_data"
 #
 # vratio20_120 → 文法 kind "volratio2" params (20,120)
 # distlo10/60  → 文法 kind "distlo"     params (10,) / (60,)
-# lowmom20     → 文法 kind "chg"        params (20,) 但 prior 取 −1（反向动量）
 _SPECS: list[tuple[str, fz.Candidate]] = [
     # 量价相关（corr(日收益, 成交额变化)）——先验多低
     ("pvcorr20", fz.Candidate(name="pvcorr20", kind="pvcorr", prior=-1, params=(20,))),
@@ -99,8 +97,6 @@ _SPECS: list[tuple[str, fz.Candidate]] = [
     ("vol20", fz.Candidate(name="vol20", kind="vol", prior=-1, params=(20,))),
     # 非流动性（Amihud）——先验多高
     ("illiq20", fz.Candidate(name="illiq20", kind="illiq", prior=+1, params=(20,))),
-    # 反向动量：mom20 的先验方向反转（因子池实测「做多高动量」被验证集证伪）
-    ("lowmom20", fz.Candidate(name="mom20", kind="chg", prior=-1, params=(20,))),
 ]
 
 ALL_IDS = [sid for sid, _ in _SPECS]

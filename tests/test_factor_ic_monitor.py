@@ -107,19 +107,19 @@ def test_window_uses_unified_signal_days_not_per_strategy_tail(monkeypatch):
 
     picks, weights = {}, {}
     for i, d in enumerate(early_days):
-        picks[d] = [_pick(float(i), 1.0, "boll")]
-        weights[d] = {"boll": float(i)}
+        picks[d] = [_pick(float(i), 1.0, "pvcorr20")]
+        weights[d] = {"pvcorr20": float(i)}
     for i, d in enumerate(late_days):
-        picks[d] = [_pick(float(i), 1.0, "theme")]
-        weights[d] = {"theme": float(i)}
+        picks[d] = [_pick(float(i), 1.0, "distlo10")]
+        weights[d] = {"distlo10": float(i)}
 
     _install(monkeypatch, days, picks, weights)
     res = mod.strategy_conviction_ic(window=win)
 
-    # 关键断言：boll 的样本全在窗外 → 窗口内样本数必须是 0（旧实现会给 5）
-    assert res["boll"]["n"] == 0
-    assert res["boll"]["span"] == ""
-    assert res["theme"]["n"] == win
+    # 关键断言：pvcorr20 的样本全在窗外 → 窗口内样本数必须是 0（旧实现会给 5）
+    assert res["pvcorr20"]["n"] == 0
+    assert res["pvcorr20"]["span"] == ""
+    assert res["distlo10"]["n"] == win
 
     # 任何策略的样本数都不可能超过窗口长度；跨度起点不得早于窗口首个信号日
     first_window_day = days[-win]
@@ -133,18 +133,18 @@ def test_relativity_absent_in_window_reports_zero(monkeypatch):
     """复刻真实故障：某策略窗口内无更新 → 必须如实报 0，而不是拿旧点冒充「近期」。"""
     days = _days(20)
     picks, weights = {}, {}
-    # relativity 只在最早 3 天出现；theme 覆盖全窗
+    # cvamt20 只在最早 3 天出现；distlo10 覆盖全窗
     for i, d in enumerate(days[:3]):
-        picks[d] = [_pick(float(i), 1.0, "relativity")]
-        weights[d] = {"relativity": float(i)}
+        picks[d] = [_pick(float(i), 1.0, "cvamt20")]
+        weights[d] = {"cvamt20": float(i)}
     for i, d in enumerate(days[-10:]):
-        picks.setdefault(d, []).append(_pick(float(i), 1.0, "theme"))
-        weights.setdefault(d, {})["theme"] = float(i)
+        picks.setdefault(d, []).append(_pick(float(i), 1.0, "distlo10"))
+        weights.setdefault(d, {})["distlo10"] = float(i)
 
     _install(monkeypatch, days, picks, weights)
     res = mod.strategy_conviction_ic(window=10)
-    assert res["relativity"]["n"] == 0
-    assert "样本不足" in res["relativity"]["note"]
+    assert res["cvamt20"]["n"] == 0
+    assert "样本不足" in res["cvamt20"]["note"]
 
 
 # ── ③ 半窗样本门槛（MIN_HALF_N）─────────────────────────────────────
@@ -155,11 +155,11 @@ def test_small_half_window_not_flagged_decayed(monkeypatch):
     late = days[-5:]                          # 窗口内只有 5 个点
     picks, weights = {}, {}
     for i, d in enumerate(late):
-        picks[d] = [_pick(float(i + 1), -float(i + 1), "momentum")]
-        weights[d] = {"momentum": float(i + 1)}
+        picks[d] = [_pick(float(i + 1), -float(i + 1), "skew20")]
+        weights[d] = {"skew20": float(i + 1)}
 
     _install(monkeypatch, days, picks, weights)
-    res = mod.strategy_conviction_ic(window=win)["momentum"]
+    res = mod.strategy_conviction_ic(window=win)["skew20"]
 
     assert res["n"] == 5
     assert res["conviction_ic"] == pytest.approx(-1.0)
@@ -175,11 +175,11 @@ def test_sufficient_half_window_flagged_and_significant(monkeypatch):
     late = days[-10:]
     picks, weights = {}, {}
     for i, d in enumerate(late):
-        picks[d] = [_pick(float(i + 1), -float(i + 1), "boll")]
-        weights[d] = {"boll": float(i + 1)}
+        picks[d] = [_pick(float(i + 1), -float(i + 1), "pvcorr20")]
+        weights[d] = {"pvcorr20": float(i + 1)}
 
     _install(monkeypatch, days, picks, weights)
-    res = mod.strategy_conviction_ic(window=win)["boll"]
+    res = mod.strategy_conviction_ic(window=win)["pvcorr20"]
 
     assert res["n"] == 10
     assert res["decayed"] is True
@@ -197,11 +197,11 @@ def test_significance_flag_consistent_with_crit(monkeypatch):
     picks, weights = {}, {}
     for i, d in enumerate(late):
         # 权重与收益同向但带噪声 → IC 为正、未达显著
-        picks[d] = [_pick(float(i + 1), float(i % 4), "theme")]
-        weights[d] = {"theme": float(i + 1)}
+        picks[d] = [_pick(float(i + 1), float(i % 4), "distlo10")]
+        weights[d] = {"distlo10": float(i + 1)}
 
     _install(monkeypatch, days, picks, weights)
-    res = mod.strategy_conviction_ic(window=15)["theme"]
+    res = mod.strategy_conviction_ic(window=15)["distlo10"]
 
     assert res["conviction_ic"] is not None
     assert res["significant"] is (abs(res["conviction_ic"]) >= res["crit"])
@@ -215,26 +215,26 @@ def test_analyze_decayed_confirmed_is_subset(monkeypatch):
     """decayed_confirmed ⊆ decayed_strategies，且每个都 significant。"""
     days = _days(24)
     picks, weights = {}, {}
-    # boll：窗口内 12 点单调反向 → decayed + significant
+    # pvcorr20：窗口内 12 点单调反向 → decayed + significant
     for i, d in enumerate(days[-12:]):
-        picks.setdefault(d, []).append(_pick(float(i + 1), -float(i + 1), "boll"))
-        weights.setdefault(d, {})["boll"] = float(i + 1)
-    # momentum：窗口内仅 4 点单调反向 → 低于 MIN_N_IC(5)，只报样本不足
+        picks.setdefault(d, []).append(_pick(float(i + 1), -float(i + 1), "pvcorr20"))
+        weights.setdefault(d, {})["pvcorr20"] = float(i + 1)
+    # skew20：窗口内仅 4 点单调反向 → 低于 MIN_N_IC(5)，只报样本不足
     for i, d in enumerate(days[-4:]):
-        picks.setdefault(d, []).append(_pick(float(i + 1), -float(i + 1), "momentum"))
-        weights.setdefault(d, {})["momentum"] = float(i + 1)
+        picks.setdefault(d, []).append(_pick(float(i + 1), -float(i + 1), "skew20"))
+        weights.setdefault(d, {})["skew20"] = float(i + 1)
 
     _install(monkeypatch, days, picks, weights)
     res = mod.analyze(window=15)
 
-    assert "boll" in res["decayed_strategies"]
+    assert "pvcorr20" in res["decayed_strategies"]
     assert set(res["decayed_confirmed"]) <= set(res["decayed_strategies"])
     for s in res["decayed_confirmed"]:
         assert res["strategies"][s]["significant"] is True
-    # momentum 样本不足 → 不参与衰减判定
-    assert res["strategies"]["momentum"]["n"] == 4
-    assert res["strategies"]["momentum"]["decayed"] is False
-    assert "样本不足" in res["strategies"]["momentum"]["note"]
+    # skew20 样本不足 → 不参与衰减判定
+    assert res["strategies"]["skew20"]["n"] == 4
+    assert res["strategies"]["skew20"]["decayed"] is False
+    assert "样本不足" in res["strategies"]["skew20"]["note"]
     # 汇总字段齐备
     assert res["min_half_n"] == mod.MIN_HALF_N
     assert res["window_days"] == min(15, len(days))
@@ -255,8 +255,8 @@ def test_alert_gated_on_significance(monkeypatch):
     rets = [10.0, 20.0, 30.0, 40.0, 50.0, 1.0, 2.0, 3.0, 4.0, 5.0]
     picks, weights = {}, {}
     for i, d in enumerate(days[-win:]):
-        picks[d] = [_pick(float(i + 1), rets[i], "boll")]
-        weights[d] = {"boll": float(i + 1)}
+        picks[d] = [_pick(float(i + 1), rets[i], "pvcorr20")]
+        weights[d] = {"pvcorr20": float(i + 1)}
 
     _install(monkeypatch, days, picks, weights)
     res = mod.analyze(window=win)
@@ -282,18 +282,18 @@ def test_alert_fires_on_confirmed_strategy_decay(monkeypatch):
     picks, weights = {}, {}
     for i, d in enumerate(late):
         # prod_weight 恒定 → 系统级 IC 无定义（不干扰本用例），只留策略信念维度
-        picks[d] = [_pick(1.0, -float(i + 1), "boll")]
-        weights[d] = {"boll": float(i + 1)}    # 分配器越来越看好 boll，boll 却越来越差
+        picks[d] = [_pick(1.0, -float(i + 1), "pvcorr20")]
+        weights[d] = {"pvcorr20": float(i + 1)}    # 分配器越来越看好 pvcorr20，pvcorr20 却越来越差
 
     _install(monkeypatch, days, picks, weights)
     res = mod.analyze(window=15)
 
     assert res["system"]["recent_ic"] is None
     assert res["system_degraded_significant"] is False
-    assert res["decayed_confirmed"] == ["boll"]
+    assert res["decayed_confirmed"] == ["pvcorr20"]
     assert res["alert"] is True
     assert res["alert_reason"].startswith("策略信念衰减")
-    assert "boll" in res["alert_reason"]
+    assert "pvcorr20" in res["alert_reason"]
 
 
 def test_issue_body_states_alert_gate_and_required_n(monkeypatch):
@@ -303,8 +303,8 @@ def test_issue_body_states_alert_gate_and_required_n(monkeypatch):
     rets = [10.0, 20.0, 30.0, 40.0, 50.0, 1.0, 2.0, 3.0, 4.0, 5.0]
     picks, weights = {}, {}
     for i, d in enumerate(days[-win:]):
-        picks[d] = [_pick(float(i + 1), rets[i], "boll")]
-        weights[d] = {"boll": float(i + 1)}
+        picks[d] = [_pick(float(i + 1), rets[i], "pvcorr20")]
+        weights[d] = {"pvcorr20": float(i + 1)}
 
     _install(monkeypatch, days, picks, weights)
     res = mod.analyze(window=win)
@@ -324,15 +324,15 @@ def test_issue_body_marks_insignificance(monkeypatch):
     days = _days(24)
     picks, weights = {}, {}
     for i, d in enumerate(days[-12:]):
-        picks[d] = [_pick(float(i + 1), -float(i + 1), "boll")]
-        weights[d] = {"boll": float(i + 1)}
+        picks[d] = [_pick(float(i + 1), -float(i + 1), "pvcorr20")]
+        weights[d] = {"pvcorr20": float(i + 1)}
 
     _install(monkeypatch, days, picks, weights)
     body = mod._format_issue_body(mod.analyze(window=15))
 
     assert "显著性(α=0.05)" in body
     assert "达显著的衰减策略" in body
-    assert "**boll**" in body
+    assert "**pvcorr20**" in body
     assert "统一信号日" in body
 
 
@@ -342,8 +342,8 @@ def test_system_ic_reports_span_and_significance(monkeypatch):
     win = 10
     picks, weights = {}, {}
     for i, d in enumerate(days[-10:]):
-        picks[d] = [_pick(float(i + 1), -float(i + 1), "boll")]
-        weights[d] = {"boll": float(i + 1)}
+        picks[d] = [_pick(float(i + 1), -float(i + 1), "pvcorr20")]
+        weights[d] = {"pvcorr20": float(i + 1)}
 
     _install(monkeypatch, days, picks, weights)
     s = mod.system_ic(window=win)
@@ -365,8 +365,8 @@ def test_format_issue_body_survives_missing_baseline(monkeypatch):
     picks, weights = {}, {}
     # 只在最后 10 天有票 → 基线窗口（days[-30:-15]）完全没样本 → baseline_ic=None
     for i, d in enumerate(days[-10:]):
-        picks[d] = [_pick(float(i + 1), -float(i + 1), "boll")]
-        weights[d] = {"boll": float(i + 1)}
+        picks[d] = [_pick(float(i + 1), -float(i + 1), "pvcorr20")]
+        weights[d] = {"pvcorr20": float(i + 1)}
 
     _install(monkeypatch, days, picks, weights)
     res = mod.analyze(window=15)

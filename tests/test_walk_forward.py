@@ -181,9 +181,9 @@ def test_factor_timing_mask_switches_off_decayed():
     """因子生效开关：信念 IC 显著为正的因子生效、显著为负的关闭；不触发全量 conviction 计算。"""
     synth = {
         # 权重与收益严格同单调 → 信念 IC≈+1（显著为正）→ 生效
-        "boll": [("2024010%d" % i, 0.4 + i * 0.1, 0.04 + i * 0.01) for i in range(1, 7)],
+        "pvcorr20": [("2024010%d" % i, 0.4 + i * 0.1, 0.04 + i * 0.01) for i in range(1, 7)],
         # 权重升、收益降 → 信念 IC≈-1（显著为负）→ 关闭
-        "momentum": [("2024010%d" % i, 0.4 + i * 0.1, -0.04 - i * 0.01) for i in range(1, 7)],
+        "skew20": [("2024010%d" % i, 0.4 + i * 0.1, -0.04 - i * 0.01) for i in range(1, 7)],
     }
     for s in wf.ALL_STRATEGIES:
         synth.setdefault(s, [])
@@ -196,8 +196,8 @@ def test_factor_timing_mask_switches_off_decayed():
     try:
         mask = wf._factor_timing_mask("20240107")  # past = 前 6 天（< sd）
         assert set(mask) == set(wf.ALL_STRATEGIES)
-        assert mask["boll"] is True
-        assert mask["momentum"] is False
+        assert mask["pvcorr20"] is True
+        assert mask["skew20"] is False
     finally:
         wf._FACTOR_TIMING_POINTS = {}
         wf._ensure_factor_timing_points = orig_ensure

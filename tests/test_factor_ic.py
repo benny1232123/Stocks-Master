@@ -83,20 +83,20 @@ def test_strategy_conviction_decay(monkeypatch):
     def fake_weights(sd):
         idx = int(sd) - 20260000  # 1..12
         w = {s: 1.0 for s in fim.ALL_STRATEGIES}
-        w["relativity"] = float(idx)  # 权重逐日递增
+        w["cvamt20"] = float(idx)  # 权重逐日递增
         return w, False
 
     monkeypatch.setattr(fim, "_weights_for_day", fake_weights)
 
     def fake_picks(sd):
         idx = int(sd) - 20260000
-        # relativity 选中票收益随其权重递增而递减 -> 信念 IC 应显著为负
-        return [{"code": "X", "sources": {"relativity"},
+        # cvamt20 选中票收益随其权重递增而递减 -> 信念 IC 应显著为负
+        return [{"code": "X", "sources": {"cvamt20"},
                  "return_pct": float(-idx), "prod_weight": 1.0}]
 
     monkeypatch.setattr(fim, "_load_day_picks", fake_picks)
     res = fim.strategy_conviction_ic(window=10)
-    rel = res["relativity"]
+    rel = res["cvamt20"]
     assert rel["conviction_ic"] is not None
     assert rel["conviction_ic"] < 0
     assert rel["decayed"] is True

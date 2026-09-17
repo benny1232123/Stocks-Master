@@ -122,9 +122,10 @@ def simulate_position(
         否则 walk-forward 的 edge/单调性统计会被伪零收益污染。
     """
     # 均值回归家族判定：按**因子类型**归并（反转·*/相对强度·*），与 fusion 趋势闸门同口径。
-    # ⚠️ 原实现硬编码 ("boll", "relativity")。boll/relativity 沿价格轴拆出原子因子后，
-    # 原子来源的持仓（Boll_Oversold / Rel_Up …）会被误判为「非均值回归」→ 错误启用
-    # MA60 趋势破位退出（本函数 docstring 明确 MR 不启用该规则），行为静默漂移。
+    # 当前 A 批菜单（pvcorr20/60、cvamt20/60、skew20/60、vratio20_120、vratio10_60、
+    # distlo10/60、vol20、illiq20）均非均值回归家族 → is_mr 恒为 False → MA60 趋势破位退出
+    # 对全部持仓生效（对非均值回归的价格因子这是正确的：不在下行破位通道里死扛）。
+    # 一旦后续因子挖掘系统引入均值回归类候选，本判定自动继承保护，无需改动。
     is_mr = any(
         factor_type_of(s.strip()).startswith(("反转", "相对强度"))
         for s in strategy.replace("/", ",").split(",")

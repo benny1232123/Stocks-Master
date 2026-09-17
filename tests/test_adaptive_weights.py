@@ -36,11 +36,11 @@ def test_adaptive_weights_floor_keeps_no_strategy_zero():
     """负 edge + 低样本的策略不应被归零（历史坑：CCTV 归零导致单票爆雷）。"""
     edge = _edge_map(
         {
-            "boll": (-2.0, 1),
-            "theme": (3.0, 30),
-            "relativity": (-5.0, 2),
-            "momentum": (0.5, 20),
-            "cctv": (-3.0, 1),
+            "pvcorr20": (-2.0, 1),
+            "cvamt20": (3.0, 30),
+            "skew20": (-5.0, 2),
+            "vol20": (0.5, 20),
+            "illiq20": (-3.0, 1),
         }
     )
     w = adaptive_weights(edge)
@@ -51,10 +51,10 @@ def test_adaptive_weights_floor_keeps_no_strategy_zero():
 
 def test_bayesian_shrinkage_low_sample_not_dominant():
     """1 笔 +7% 的低样本 edge 不应碾压 50 笔 +1% 的高样本 edge。"""
-    edge = _edge_map({"boll": (7.0, 1), "theme": (1.0, 50)})
+    edge = _edge_map({"pvcorr20": (7.0, 1), "cvamt20": (1.0, 50)})
     w = adaptive_weights(edge)
-    assert w["boll"] < 70
-    assert w["theme"] > w["boll"]
+    assert w["pvcorr20"] < 70
+    assert w["cvamt20"] > w["pvcorr20"]
 
 
 def test_cash_from_volatility_bounds_and_monotonic():
@@ -192,14 +192,14 @@ def test_excluded_strategies_zeroed_in_allocation(monkeypatch):
         aw, "CONFIG",
         {**aw.CONFIG,
          "factor_timing": {**aw.CONFIG.get("factor_timing", {}), "enabled": False},
-         "excluded_strategies": ["momentum", "theme"]},
+         "excluded_strategies": ["pvcorr20", "cvamt20"]},
     )
     _edge, w, _cash, cold = aw.compute_adaptive_allocation(min_n=1)
     assert not cold
-    assert w["momentum"] == 0 and w["theme"] == 0, w
+    assert w["pvcorr20"] == 0 and w["cvamt20"] == 0, w
     # 其余策略吸收权重、和为 100
     assert sum(w.values()) == 100
-    for s in ("boll", "relativity", "cctv"):
+    for s in ("skew20", "vol20", "illiq20"):
         assert w[s] > 0, (s, w)
 
 
@@ -213,20 +213,20 @@ def test_no_evidence_strategy_capped_to_floor(monkeypatch):
     from smcore.strategy import adaptive_weights as aw
 
     fake_edge = {
-        "boll":       {"edge": 2.0, "n": 30, "win_rate": 55, "avg": 2.0},
-        "relativity": {"edge": 1.0, "n": 30, "win_rate": 52, "avg": 1.0},
-        # fundamental：刚接入，零归因历史
-        "quality": {"edge": 0.0, "n": 0, "win_rate": None, "avg": None},
-        "theme":      {"edge": 0.0, "n": 0, "win_rate": None, "avg": None},
-        "cctv":       {"edge": 0.0, "n": 0, "win_rate": None, "avg": None},
-        "momentum":   {"edge": 0.0, "n": 0, "win_rate": None, "avg": None},
+        "pvcorr20": {"edge": 2.0, "n": 30, "win_rate": 55, "avg": 2.0},
+        "cvamt20":  {"edge": 1.0, "n": 30, "win_rate": 52, "avg": 1.0},
+        # 新因子刚接入，零归因历史（类比原 fundamental）
+        "skew20":   {"edge": 0.0, "n": 0, "win_rate": None, "avg": None},
+        "vol20":    {"edge": 0.0, "n": 0, "win_rate": None, "avg": None},
+        "illiq20":  {"edge": 0.0, "n": 0, "win_rate": None, "avg": None},
+        "distlo10": {"edge": 0.0, "n": 0, "win_rate": None, "avg": None},
     }
     monkeypatch.setattr(aw, "compute_edge", lambda *a, **k: fake_edge)
     monkeypatch.setattr(
         aw, "CONFIG",
         {**aw.CONFIG,
          "factor_timing": {**aw.CONFIG.get("factor_timing", {}), "enabled": False},
-         "excluded_strategies": ["theme", "cctv", "momentum"],
+         "excluded_strategies": ["vol20", "illiq20", "distlo10"],
          "exclude_no_evidence_strategies": True,
          "min_evidence_for_allocation": 1,
          "FLOOR": aw.CONFIG["FLOOR"]},
@@ -234,14 +234,14 @@ def test_no_evidence_strategy_capped_to_floor(monkeypatch):
     _edge, w, _cash, cold = aw.compute_adaptive_allocation(min_n=1)
     assert not cold
     # 黑名单清零
-    assert w["theme"] == 0 and w["cctv"] == 0 and w["momentum"] == 0
-    # fundamental 只拿 floor 探索权重（固定 ≈3%，不随幸存池放大）
+    assert w["vol20"] == 0 and w["illiq20"] == 0 and w["distlo10"] == 0
+    # 新因子只拿 floor 探索权重（固定 ≈3%，不随幸存池放大）
     FLOOR = aw.CONFIG["FLOOR"]
-    assert w["quality"] > 0, w
-    assert w["quality"] <= FLOOR + 1, w
-    assert w["quality"] >= 1, w
+    assert w["skew20"] > 0, w
+    assert w["skew20"] <= FLOOR + 1, w
+    assert w["skew20"] >= 1, w
     # 有证据的策略吃掉释放额度
-    assert w["boll"] > w["quality"] and w["relativity"] > w["quality"], w
+    assert w["pvcorr20"] > w["skew20"] and w["cvamt20"] > w["skew20"], w
     assert sum(w.values()) == 100
 
 
@@ -255,29 +255,30 @@ def test_no_evidence_gate_can_be_disabled(monkeypatch):
     from smcore.strategy import adaptive_weights as aw
 
     fake_edge = {
-        "boll":       {"edge": 2.0, "n": 30, "win_rate": 55, "avg": 2.0},
-        "relativity": {"edge": 1.0, "n": 30, "win_rate": 52, "avg": 1.0},
-        "quality": {"edge": 0.0, "n": 0, "win_rate": None, "avg": None},
-        "theme":      {"edge": 0.0, "n": 0, "win_rate": None, "avg": None},
-        "cctv":       {"edge": 0.0, "n": 0, "win_rate": None, "avg": None},
-        "momentum":   {"edge": 0.0, "n": 0, "win_rate": None, "avg": None},
+        "pvcorr20": {"edge": 2.0, "n": 30, "win_rate": 55, "avg": 2.0},
+        "cvamt20":  {"edge": 1.0, "n": 30, "win_rate": 52, "avg": 1.0},
+        # 新因子刚接入，零归因历史（类比原 fundamental）
+        "skew20":   {"edge": 0.0, "n": 0, "win_rate": None, "avg": None},
+        "vol20":    {"edge": 0.0, "n": 0, "win_rate": None, "avg": None},
+        "illiq20":  {"edge": 0.0, "n": 0, "win_rate": None, "avg": None},
+        "distlo10": {"edge": 0.0, "n": 0, "win_rate": None, "avg": None},
     }
     monkeypatch.setattr(aw, "compute_edge", lambda *a, **k: fake_edge)
     monkeypatch.setattr(
         aw, "CONFIG",
         {**aw.CONFIG,
          "factor_timing": {**aw.CONFIG.get("factor_timing", {}), "enabled": False},
-         "excluded_strategies": ["theme", "cctv", "momentum"],
+         "excluded_strategies": ["vol20", "illiq20", "distlo10"],
          "exclude_no_evidence_strategies": False,
          "min_evidence_for_allocation": 1,
          "FLOOR": aw.CONFIG["FLOOR"]},
     )
     _edge, w, _cash, cold = aw.compute_adaptive_allocation(min_n=1)
     assert not cold
-    assert w["theme"] == 0 and w["cctv"] == 0 and w["momentum"] == 0
+    assert w["vol20"] == 0 and w["illiq20"] == 0 and w["distlo10"] == 0
     assert sum(w.values()) == 100
-    # 关闭门控后 fundamental 仍有正权重（不被强制压到 floor 区间外），且仍 > 0
-    assert w["quality"] > 0, w
+    # 关闭门控后新因子仍有正权重（不被强制压到 floor 区间外），且仍 > 0
+    assert w["skew20"] > 0, w
 
 
 def test_cold_start_equal_weight_respects_blacklist(monkeypatch):
@@ -295,12 +296,12 @@ def test_cold_start_equal_weight_respects_blacklist(monkeypatch):
     )
     monkeypatch.setattr(
         aw, "CONFIG",
-        {**aw.CONFIG, "excluded_strategies": ["boll", "theme"]},
+        {**aw.CONFIG, "excluded_strategies": ["pvcorr20", "cvamt20"]},
     )
     _edge, w, _cash, cold = aw.compute_adaptive_allocation(min_n=8)
     assert cold, "样本为 0 应走冷启动路径"
-    assert w["boll"] == 0 and w["theme"] == 0, w
-    live = [s for s in ALL_STRATEGIES if s not in ("boll", "theme")]
+    assert w["pvcorr20"] == 0 and w["cvamt20"] == 0, w
+    live = [s for s in ALL_STRATEGIES if s not in ("pvcorr20", "cvamt20")]
     assert all(w[s] > 0 for s in live), w
     assert sum(w.values()) == 100
 
@@ -317,20 +318,20 @@ def test_all_no_evidence_never_hands_sway_to_one_strategy(monkeypatch):
 
     fake = {s: {"edge": 0.0, "n": 0, "win_rate": None, "avg": None} for s in ALL_STRATEGIES}
     # 已退役的复合体仍带着厚历史（所以不会走冷启动早退）——正是真实场景
-    fake["boll"] = {"edge": 3.0, "n": 100, "win_rate": 55, "avg": 3.0}
-    fake["relativity"] = {"edge": 2.0, "n": 100, "win_rate": 54, "avg": 2.0}
+    fake["pvcorr20"] = {"edge": 3.0, "n": 100, "win_rate": 55, "avg": 3.0}
+    fake["cvamt20"] = {"edge": 2.0, "n": 100, "win_rate": 54, "avg": 2.0}
     monkeypatch.setattr(aw, "compute_edge", lambda *a, **k: fake)
     monkeypatch.setattr(
         aw, "CONFIG",
         {**aw.CONFIG,
          "factor_timing": {**aw.CONFIG.get("factor_timing", {}), "enabled": False},
-         "excluded_strategies": ["theme", "cctv", "momentum", "boll", "relativity"],
+         "excluded_strategies": ["vol20", "illiq20", "distlo10", "pvcorr20", "cvamt20"],
          "exclude_no_evidence_strategies": True,
          "min_evidence_for_allocation": 1},
     )
     _edge, w, _cash, cold = aw.compute_adaptive_allocation(min_n=1)
     assert not cold
-    assert w["boll"] == 0 and w["relativity"] == 0, w
+    assert w["pvcorr20"] == 0 and w["cvamt20"] == 0, w
     assert sum(w.values()) == 100
     live = [s for s in ALL_STRATEGIES if w.get(s, 0) > 0]
     assert live, w

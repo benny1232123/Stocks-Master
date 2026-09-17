@@ -37,19 +37,19 @@ def test_spearman_ic_bounds():
 
 def test_mask_from_points_switches_off_negative_ic():
     pts = _pts({
-        "boll": [(0.4 + 0.1 * i, 0.1 * i) for i in range(6)],      # +IC → 生效
-        "momentum": [(0.4 + 0.1 * i, -0.1 * i) for i in range(6)],  # -IC → 关闭
+        "pvcorr20": [(0.4 + 0.1 * i, 0.1 * i) for i in range(6)],      # +IC → 生效
+        "cvamt20": [(0.4 + 0.1 * i, -0.1 * i) for i in range(6)],  # -IC → 关闭
     })
     mask = ft.factor_timing_mask_from_points(pts, _DAYS6, min_n=5, z=1.96)
     assert set(mask) == set(ALL_STRATEGIES)
-    assert mask["boll"] is True
-    assert mask["momentum"] is False
+    assert mask["pvcorr20"] is True
+    assert mask["cvamt20"] is False
 
 
 def test_mask_keeps_factor_when_insufficient_points():
-    pts = _pts({"boll": [(0.1, 0.1), (0.2, 0.2)]})  # 仅 2 点 < min_n
+    pts = _pts({"pvcorr20": [(0.1, 0.1), (0.2, 0.2)]})  # 仅 2 点 < min_n
     mask = ft.factor_timing_mask_from_points(pts, _DAYS6, min_n=5, z=1.96)
-    assert mask["boll"] is True  # 无证据不判失效
+    assert mask["pvcorr20"] is True  # 无证据不判失效
 
 
 def test_shared_core_matches_validator(monkeypatch):
@@ -59,8 +59,8 @@ def test_shared_core_matches_validator(monkeypatch):
     wf = importlib.import_module("walk_forward_validator")
     days = [f"202401{i:02d}" for i in range(1, 8)]  # 7 天
     pts = {s: [] for s in ALL_STRATEGIES}
-    pts["boll"] = [(days[i], 0.4 + 0.1 * i, 0.1 * i) for i in range(7)]
-    pts["momentum"] = [(days[i], 0.4 + 0.1 * i, -0.1 * i) for i in range(7)]
+    pts["pvcorr20"] = [(days[i], 0.4 + 0.1 * i, 0.1 * i) for i in range(7)]
+    pts["cvamt20"] = [(days[i], 0.4 + 0.1 * i, -0.1 * i) for i in range(7)]
     monkeypatch.setattr(wf, "_ensure_factor_timing_points", lambda: pts)
     monkeypatch.setattr(wf, "_all_signal_days", lambda: days)
     vmask = wf._factor_timing_mask(days[-1])
@@ -72,20 +72,20 @@ def test_shared_core_matches_validator(monkeypatch):
 
 def test_apply_mask_renormalizes(monkeypatch):
     pts = _pts({
-        "boll": [(0.4 + 0.1 * i, 0.1 * i) for i in range(6)],
-        "momentum": [(0.4 + 0.1 * i, -0.1 * i) for i in range(6)],
+        "pvcorr20": [(0.4 + 0.1 * i, 0.1 * i) for i in range(6)],
+        "cvamt20": [(0.4 + 0.1 * i, -0.1 * i) for i in range(6)],
     })
     monkeypatch.setattr(ft, "_signal_days", lambda: _DAYS6 + ["20240107"])
     weights = {s: 20.0 for s in ALL_STRATEGIES}
     out = ft.apply_mask(weights, signal_date="20240107", points=pts)
-    assert out["momentum"] == 0.0
+    assert out["cvamt20"] == 0.0
     assert abs(sum(out.values()) - 100.0) < 1e-6
-    # 除 momentum 外全部保留（含无数据的新策略）→ 等分 100/(n-1)
+    # 除 cvamt20 外全部保留（含无数据的新策略）→ 等分 100/(n-1)
     # （勿硬编码策略数：策略集随 factor_types.STRATEGY_ORDER 增长）
-    n_kept = len([s for s in ALL_STRATEGIES if s != "momentum"])
+    n_kept = len([s for s in ALL_STRATEGIES if s != "cvamt20"])
     share = 100.0 / n_kept
     for s in ALL_STRATEGIES:
-        if s != "momentum":
+        if s != "cvamt20":
             assert abs(out[s] - share) < 1e-6
 
 

@@ -281,21 +281,7 @@ function EquityChart({ equity, initialCapital }) {
 // （tests/test_frontend_registry_parity.py 守卫）；缺项时调用方有 `|| s` 兜底，
 // 但 top-tag 配色需要 styles.css 里对应的 .top-tag--<id> 规则。
 const STRAT_LABEL = {
-  boll: 'Boll 低吸',
-  relativity: 'Relativity 相对强弱',
-  theme: 'Theme 题材动量',
-  cctv: 'CCTV 舆情',
-  momentum: 'Momentum 动量',
-  quality: 'Quality 质量',
-  value: 'Value 估值',
-  size: 'Size 规模',
-  boll_oversold: 'Boll 超卖',
-  boll_near_lower: 'Boll 近下轨',
-  boll_mid_pullback: 'Boll 中轨回踩',
-  boll_squeeze: 'Boll 带宽收口',
-  rel_up: 'Rel 上涨满足',
-  rel_down: 'Rel 抗跌满足',
-  // A 批：因子池存活价格因子
+  // A 批：因子池存活价格因子（菜单当前全集）
   pvcorr20: 'PVCorr20 量价相关',
   pvcorr60: 'PVCorr60 量价相关',
   cvamt20: 'CVAmt20 成交稳定',
@@ -308,12 +294,6 @@ const STRAT_LABEL = {
   distlo60: 'DistLo60 距低点',
   vol20: 'Vol20 波动',
   illiq20: 'Illiq20 非流动性',
-  // C 批：基本面单指标原子 + 反向动量
-  roe: 'ROE 质量',
-  gross_margin: 'Gross_Margin 毛利率',
-  ep: 'EP 估值',
-  bp: 'BP 估值',
-  lowmom20: 'LowMom20 前期弱势',
 }
 
 // 回测持仓的退出原因 → 中文标签（说明仓位按市场信号平仓，非固定持有）

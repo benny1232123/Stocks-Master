@@ -70,8 +70,8 @@ class _ExplodingDatetime:
 
 
 def _fake_dal(tmp_path, n_days=40, per_day=8):
-    """造 n_days 个信号日，每天 per_day 条候选，策略轮换。"""
-    strats = ["Boll", "Theme", "CCTV", "Momentum", "Relativity"]
+    """造 n_days 个信号日，每天 per_day 条候选，策略轮换（A 批标签）。"""
+    strats = ["PVCorr20", "CVAmt20", "Skew20", "Vol20", "Illiq20"]
     dates = pd.bdate_range("2026-06-01", periods=n_days + 15).strftime("%Y%m%d")
     for d in dates[:n_days]:
         rows = [
@@ -141,7 +141,7 @@ def test_edge_source_switch(monkeypatch):
         out = compute_edge()
         assert set(calls) == {"backtest", "universe"}, "blend 应同时取两种口径"
         # blend 后 edge 应为加权值 (0.5*0.5 + 0.5*1.0) = 0.75
-        assert abs(out["boll"]["edge"] - 0.75) < 1e-9
+        assert abs(out["pvcorr20"]["edge"] - 0.75) < 1e-9
     finally:
         aw.CONFIG.clear()
         aw.CONFIG.update(base)
@@ -153,16 +153,16 @@ def test_edge_source_switch(monkeypatch):
 def test_thin_sample_cannot_dominate_weight(monkeypatch):
     """小样本高胜率不得把权重顶到 50%+。"""
     edge = {
-        "boll": {"n": 6, "edge": 5.58, "avg_return": 5.58, "win_rate": 100.0},
-        "theme": {"n": 53, "edge": -0.31, "avg_return": -0.31, "win_rate": 47.2},
-        "relativity": {"n": 17, "edge": -0.38, "avg_return": -0.38, "win_rate": 29.4},
-        "momentum": {"n": 58, "edge": 0.84, "avg_return": 0.84, "win_rate": 32.8},
-        "cctv": {"n": 82, "edge": -1.08, "avg_return": -1.08, "win_rate": 48.8},
+        "pvcorr20": {"n": 6, "edge": 5.58, "avg_return": 5.58, "win_rate": 100.0},
+        "cvamt20": {"n": 53, "edge": -0.31, "avg_return": -0.31, "win_rate": 47.2},
+        "skew20": {"n": 17, "edge": -0.38, "avg_return": -0.38, "win_rate": 29.4},
+        "vol20": {"n": 58, "edge": 0.84, "avg_return": 0.84, "win_rate": 32.8},
+        "illiq20": {"n": 82, "edge": -1.08, "avg_return": -1.08, "win_rate": 48.8},
     }
     w = aw.adaptive_weights(edge)
     top = max(w.values())
     assert top < 50, f"小样本策略权重过高: {w}"
-    assert max(w.values()) == w["boll"], "boll edge 最高，应仍是第一但不可独大"
+    assert max(w.values()) == w["pvcorr20"], "pvcorr20 edge 最高，应仍是第一但不可独大"
 
 
 def test_confidence_discount_monotonic_in_n():
@@ -172,8 +172,8 @@ def test_confidence_discount_monotonic_in_n():
 
     def _w_for(n):
         e = {s: dict(v) for s, v in edge_tpl.items()}
-        e["boll"] = {"n": n, "edge": 5.0, "avg_return": 5.0, "win_rate": 100.0}
-        return aw.adaptive_weights(e)["boll"]
+        e["pvcorr20"] = {"n": n, "edge": 5.0, "avg_return": 5.0, "win_rate": 100.0}
+        return aw.adaptive_weights(e)["pvcorr20"]
 
     w_small = _w_for(5)
     w_mid = _w_for(15)
