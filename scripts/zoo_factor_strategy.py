@@ -235,10 +235,25 @@ def main() -> int:
     print(f"[zoo_factor] grid {close.shape[0]} days x {close.shape[1]} codes", flush=True)
 
     day_ts = {d: pd.Timestamp(f"{d[:4]}-{d[4:6]}-{d[6:]}") for d in days}
-    missing_days = [d for d, ts in day_ts.items() if ts not in close.index]
-    if missing_days:
-        print(f"[zoo_factor] WARN: {len(missing_days)} 个信号日不在 K 线索引内"
-              f"（如 {missing_days[:3]}），这些日将只写空表", flush=True)
+    # ── 覆盖度门控（防御性双保险）────────────────────────────────────────
+    # 信号日有效截面必须达到横截面下限，否则所有因子必然全空表 → 当日清单缺失却
+    # 仍报 success（2026-09-17 A 批空产出事故真因：截面 4363→1，旧告警只数文件存在
+    # 把空表当正常）。上游 scripts/prepull_klines.py 已做权威门控（信号日截面<1000
+    # 直接失败），这里再兜一层：即便 prepull 被绕过/跳过，也 fail-loud 而非静默产空表
+    # 污染当日 DAL。本门控只在「截面真塌了」时触发——健康交易日截面 4300+ ≫ 下限，
+    # 不会误伤。
+    min_cov = max(2, int(args.min_xsec))
+    thin_days = []
+    for d in days:
+        non_na, total = fe.signal_day_coverage(close, d)
+        if non_na < min_cov:
+            thin_days.append((d, non_na, total))
+    if thin_days:
+        for d, non_na, total in thin_days:
+            print(f"[zoo_factor] ERROR: 信号日 {d} 有效截面仅 {non_na}/{total}"
+                  f"（低于下限 {min_cov}），数据未刷新或截断，A 批将全部产空表 → 中止",
+                  file=sys.stderr)
+        return 1
 
     out_dir = Path(args.out_dir)
     out_dir.mkdir(parents=True, exist_ok=True)
