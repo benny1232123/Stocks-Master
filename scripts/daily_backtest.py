@@ -50,7 +50,7 @@ from smcore.strategy.fusion import (
 )
 # 动态阈值 + 趋势守卫 + 市场闸门：内联过滤与生产 fusion 完全同源
 from smcore.strategy.regime_filter import _dynamic_thresholds, _passes_trend_guard
-from smcore.strategy.factor_types import RETIRED_STRATEGY_NAMES, factor_type_of
+from smcore.strategy.factor_types import factor_type_of, STRATEGY_LABEL
 # 多维市场仪表盘：波动率自适应风控的共同输入
 from smcore.strategy.market import compute_market_profile
 # 自适应现金：波动率分位 S 型曲线 + 趋势 regime 调整（替代硬编码 _VOL_POS_SCALE_MAP）
@@ -60,9 +60,32 @@ from smcore.strategy.risk_rules import compute_adaptive_exit_params
 # 动态风险引擎：统一输出 现金/仓位规模/出场参数（含双信号防御下线钳制）
 from smcore.strategy.dynamic_risk import compute_dynamic_risk
 
-# 遗留策略名 → 自身（保留 map 形态以兼容 derive_strategies 的查找语义）。
-# 集中派生自 RETIRED_STRATEGY_NAMES，避免散落硬编码漏掉 momentum。
-STRAT_MAP = {s: s for s in RETIRED_STRATEGY_NAMES}
+# 来源策略 token → 展示标签。需同时覆盖两套命名，避免回测归因错配：
+#  - 活跃 A 批因子 id（pvcorr20 → "PVCorr20"，见 factor_types.STRATEGY_LABEL，
+#    其 key 即小写 id）。
+#  - 已退役遗留名（boll/relativity/theme/cctv/momentum → 原展示名），兼容
+#    2026-09-17 重构前生成的历史 DAL（其「来源策略」列仍是旧名字）。
+# ⚠️ 旧实现 STRAT_MAP 只认 RETIRED 名，导致 A 批 DAL 经 derive_strategies 时
+# 全部 token 落空 → 退化成「全部退役策略」标签，回测面板把 A 批票错归到死策略。
+_LEGACY_ALIAS = {
+    "boll": "Boll",
+    "relativity": "Relativity",
+    "theme": "Theme",
+    "cctv": "CCTV",
+    "momentum": "Momentum",
+}
+
+
+def _label_of_token(tok: str) -> str | None:
+    """单个来源策略 token → 展示标签；A 批 id 与遗留名都识别，未知返回 None。"""
+    t = (tok or "").strip().lower()
+    if not t:
+        return None
+    if t in STRATEGY_LABEL:  # 活跃 A 批因子 id（小写 == id）
+        return STRATEGY_LABEL[t]
+    if t in _LEGACY_ALIAS:  # 历史 DAL 的遗留名
+        return _LEGACY_ALIAS[t]
+    return None
 
 # 回测只取综合评分最高的前 TOP_N 只，避免信号过多把资金摊成数百个迷你仓位、
 # 导致权益曲线近乎水平（「曲线不动」）。TOP_N 个等权仓位每只约 initial/TOP_N，曲线才能看出涨跌。
@@ -149,17 +172,17 @@ def _parse_signal_date(name: str) -> date | None:
 
 
 def derive_strategies(source_series: pd.Series) -> str:
-    """从来源策略列（如 'Boll/Relativity/Theme'）解析启用的策略集合。"""
+    """从来源策略列解析启用的策略集合（A 批因子 id 与遗留名皆可识别）。
+
+    返回逗号分隔的展示标签（如 "CVAmt20,PVCorr20"），按标签字典序排序。
+    不再退化成「全部退役策略」——无命中即为空串，由调用方决定是否兜底。
+    """
     enabled = set()
     for raw in source_series.dropna():
         for part in str(raw).split("/"):
-            key = part.strip().lower()
-            if key in STRAT_MAP:
-                enabled.add(STRAT_MAP[key])
-    if not enabled:
-        # 无来源策略命中时退回全部遗留策略（集中派生自 RETIRED_STRATEGY_NAMES，
-        # 不再硬编码 3 个导致漏掉 cctv/momentum）。
-        enabled = set(RETIRED_STRATEGY_NAMES)
+            lab = _label_of_token(part)
+            if lab:
+                enabled.add(lab)
     return ",".join(sorted(enabled))
 
 
@@ -405,7 +428,7 @@ def _backtest_one(path: Path, sd: date, hold_days: int, portfolio_curve=None, dd
                 print(f"  [波动率自适应] 市场波动={_prof.volatility_level} 总仓位缩放={capital_scale} "
                       f"逐只止损: {sum(1 for s in _stops if s)}/{len(_stops)} 只已定")
 
-    strategies = derive_strategies(df["来源策略"]) if "来源策略" in df.columns else ",".join(RETIRED_STRATEGY_NAMES)
+    strategies = derive_strategies(df["来源策略"]) if "来源策略" in df.columns else ",".join(sorted(STRATEGY_LABEL.values()))
 
     size_by = os.environ.get("BACKTEST_SIZE_BY", "权重" if "权重" in df.columns else "综合评分") or None
 
