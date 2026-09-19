@@ -227,6 +227,21 @@ jobs:
           SUPABASE_KEY: ${{ secrets.SUPABASE_KEY }}
         run: python scripts/export_web_data.py
 
+      - name: 重对齐-清除目标日旧回测产物（强制重算）
+        # 仅手动补跑信号日（workflow_dispatch 带 signal_date）时生效；
+        # 日常 schedule 跑批保持原 skip 语义（已有完整回测则跳过，不重算）。
+        # 历史重对齐时，旧的 Multi-Backtest-{date} 来自退役前的遗留框架
+        # （strategies=cctv,theme），daily_backtest 的 _skip_completed 见文件
+        # 已存在就跳过 → 永远不会用新 A 批 DAL 重算。这里手动清掉目标日旧产物，
+        # 让回测步骤重新生成，确保回测面板真正反映 A 批框架。
+        if: steps.gate.outputs.ok == 'true' && github.event.inputs.signal_date != ''
+        run: |
+          TODAY=${{ steps.gate.outputs.today }}
+          echo "重对齐模式：删除 ${TODAY} 的旧回测产物，强制从 A 批 DAL 重新生成"
+          rm -f "stock_data/Multi-Backtest-${TODAY}-summary.csv" \
+                "stock_data/Multi-Backtest-${TODAY}-equity.csv" \
+                "stock_data/Multi-Backtest-${TODAY}-trades.csv" || true
+
       - name: 每日清单前向信号回测
         continue-on-error: true
         if: steps.gate.outputs.ok == 'true'
