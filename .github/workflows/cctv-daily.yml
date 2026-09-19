@@ -115,7 +115,9 @@ jobs:
         if: steps.gate.outputs.ok == 'true'
         timeout-minutes: 20
         run: |
-          python smcore/strategies/cctv.py --date ${{ steps.gate.outputs.today }}
+          # PYTHONPATH=. 必须加：以文件路径直跑 cctv.py 时 sys.path[0] 是 smcore/strategies/，
+          # 仓库根不在搜索路径上 → `No module named 'smcore'`（2026-09-19 冒烟实测）。
+          PYTHONPATH=. python smcore/strategies/cctv.py --date ${{ steps.gate.outputs.today }}
           # 新闻源整体不可用时 fetch_cctv_news 返回空 date_str=None → 只会写
           # CCTV-Sector-Stock-Pool-None.csv 而没有任何带日期的面板文件。此时绝不能
           # 静默绿（与 2026-09-17 回测空表事故同类）：必须红出来触发告警。
