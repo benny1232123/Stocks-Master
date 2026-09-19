@@ -1,0 +1,197 @@
+name: CCTV 舆情每日采集
+
+# 背景：看板「CCTV 舆情数据日期」由 news_surface.py 实时读 stock_data/ 下最新的
+# CCTV-Hot-Sectors / CCTV-Sector-News-Matched / CCTV-Sector-Stock-Pool CSV（取文件名日期）。
+# 此前 run_cctv() 不在任何 CI 中，只能本地手动跑+推送，面板日期反复卡死
+# （2026-09-19 发现卡在 20260911，手动补跑了 09-14~09-18）。本 workflow 每晚自动采集。
+#
+# 设计：独立 workflow 而非挂进 daily-pick——采集失败不影响选股链路，反之亦然（fail-soft）；
+# 且 CCTV 新闻每天（含周末）都有，不受 daily-pick 的工作日窗口限制。
+# 回滚方式：删除本文件即可。
+
+on:
+  schedule:
+    # 北京 23:30（UTC 15:30）：新闻联播 19:00 档播完 + akshare 收录约 3h 余量；
+    # 避开 daily-pick 的北京 16:00~21:40 推送窗口（末槽 13:40 UTC 启动的 run 可能拖到
+    # 15:00+ 才推完）。两边提交文件集不相交（CCTV-* vs DAL/Backtest/web_data），
+    # 即便推送撞车，rebase 也能干净合并。schedule 排队延迟只影响空转（有防重门）。
+    - cron: "30 15 * * *"
+  workflow_dispatch:
+    inputs:
+      date:
+        description: '采集日期 YYYYMMDD（留空 = 今天；新闻源无该日数据时自动回退前一日）'
+        required: false
+        default: ''
+        type: string
+
+concurrency:
+  group: cctv-daily
+  cancel-in-progress: false
+
+permissions:
+  contents: write
+
+jobs:
+  cctv:
+    runs-on: ubuntu-latest
+    # run_cctv 内部对 akshare/申万接口都有硬超时（AK_API_TIMEOUT=30s / SW_API_TIMEOUT=10s），
+    # 不存在无限挂起；全流程（装依赖 + 新闻抓取 + 个股池前收涨跌）为分钟级，30min 足够。
+    timeout-minutes: 30
+    env:
+      # runner 是 UTC；显式北京时间，保证 date.today() 语义与本地一致
+      TZ: "Asia/Shanghai"
+      # GitHub 海外 Runner 连不上国内券商 Tdx 服务器，关闭直连（与 daily-pick 同款）
+      TDX_ENABLED: "0"
+      # 个股池需补前收涨跌（enrich_with_prev_change → fetch_daily_k）：
+      # 有 Key 走 hithink 最快；缺失时 kline.py 回退链自动降级 akshare/baostock
+      KLINE_BACKEND: hithink
+      HITHINK_FINANCE_API_KEY: ${{ secrets.HITHINK_FINANCE_API_KEY }}
+    steps:
+      - name: 防重自检（当日面板数据已落库则空转跳过）
+        id: gate
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          DATE_INPUT: ${{ github.event.inputs.date }}
+        run: |
+          if [ -n "$DATE_INPUT" ]; then
+            # 手动触发：跳过防重，任意时刻可跑（输入经 env 中转 + 白名单校验，防注入）
+            case "$DATE_INPUT" in
+              [0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9]) ;;
+              *) echo "::error::非法日期: $DATE_INPUT（须为 YYYYMMDD）"; exit 1 ;;
+            esac
+            TODAY="$DATE_INPUT"
+            echo "手动采集日期: $TODAY"
+          else
+            TODAY=$(TZ=Asia/Shanghai date +%Y%m%d)
+            # 防重：当日个股池已落库 = 今天已采集过（schedule 排队延迟只导致空转，不重复提交）
+            N=$(curl -s -H "Authorization: Bearer $GH_TOKEN" \
+                "https://api.github.com/repos/${{ github.repository }}/commits?path=stock_data/CCTV-Sector-Stock-Pool-${TODAY}.csv&per_page=1" \
+                | grep -c '"sha"' || true)
+            if [ "$N" -gt 0 ]; then
+              echo "当日 CCTV 数据已落库（Stock-Pool-$TODAY），跳过"
+              echo "ok=false" >> $GITHUB_OUTPUT
+              exit 0
+            fi
+            echo "进入采集，日期: $TODAY"
+          fi
+          echo "ok=true" >> $GITHUB_OUTPUT
+          echo "today=$TODAY" >> $GITHUB_OUTPUT
+
+      - uses: actions/checkout@v4
+        if: steps.gate.outputs.ok == 'true'
+
+      - name: 确保告警 label 存在（幂等自举）
+        if: steps.gate.outputs.ok == 'true'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh label create automated --color BFD4F2 --description "CI 自动化产物" --force
+          gh label create cctv-failure --color D93F0B --description "CCTV 舆情采集失败告警" --force
+
+      - uses: actions/setup-python@v5
+        if: steps.gate.outputs.ok == 'true'
+        with:
+          python-version: "3.11"
+
+      - name: pip 缓存
+        if: steps.gate.outputs.ok == 'true'
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/pip
+          key: pip-${{ runner.os }}-${{ hashFiles('requirements.txt') }}
+          restore-keys: pip-${{ runner.os }}-
+
+      - name: 安装依赖
+        if: steps.gate.outputs.ok == 'true'
+        run: |
+          pip install --upgrade pip
+          # 统一走 requirements.txt（pandas/akshare/jieba 齐全，NLP 不会静默降级）
+          pip install --retries 3 -r requirements.txt
+
+      - name: 运行 CCTV 舆情采集（run_cctv）
+        if: steps.gate.outputs.ok == 'true'
+        timeout-minutes: 20
+        run: |
+          python smcore/strategies/cctv.py --date ${{ steps.gate.outputs.today }}
+          # 新闻源整体不可用时 fetch_cctv_news 返回空 date_str=None → 只会写
+          # CCTV-Sector-Stock-Pool-None.csv 而没有任何带日期的面板文件。此时绝不能
+          # 静默绿（与 2026-09-17 回测空表事故同类）：必须红出来触发告警。
+          LATEST=$(ls -1t stock_data/CCTV-Hot-Sectors-2*.csv 2>/dev/null | head -1 || true)
+          if [ -z "$LATEST" ]; then
+            echo "::error::未产出任何 CCTV-Hot-Sectors 面板文件（CCTV 新闻源可能整体不可用）"
+            exit 1
+          fi
+          echo "### CCTV 舆情采集" >> $GITHUB_STEP_SUMMARY
+          echo "面板文件: \`${LATEST}\`" >> $GITHUB_STEP_SUMMARY
+          N=$(tail -n +2 "$LATEST" | wc -l | tr -d ' ')
+          echo "热门板块数: **${N}**" >> $GITHUB_STEP_SUMMARY
+
+      - name: 提交 CCTV 数据到仓库
+        if: steps.gate.outputs.ok == 'true'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          # 只提交带日期标签的 CCTV 产物；排除 date_str=None 产生的怪文件。
+          # 新闻原文缓存（{ds}_news.csv）不匹配 CCTV-* 前缀，天然不在提交范围。
+          add_cctv() {
+            for f in stock_data/CCTV-*.csv stock_data/CCTV-*.md; do
+              [ -e "$f" ] || continue
+              case "$f" in *None*) continue ;; esac
+              git add -f "$f"
+            done
+          }
+          add_cctv
+          if git diff --cached --quiet; then
+            echo "无变更（当日数据已存在，或回退命中已采集日期），跳过提交"
+            exit 0
+          fi
+          git commit -m "cctv: 每日舆情面板数据 $(TZ=Asia/Shanghai date +%Y%m%d)"
+          PUSH_OK=0
+          # ── 三层推送（与 daily-pick 同款容错；CCTV 文件集与 daily-pick 不相交）──
+          # 第1层：rebase 干净线性合并后直推
+          if git pull --rebase --autostash origin master 2>/dev/null; then
+            if git push origin master 2>/dev/null; then PUSH_OK=1; fi
+          fi
+          # 第2层：rebase 冲突 → merge 用 ours 保留本地最新采集数据
+          if [ "$PUSH_OK" -eq 0 ]; then
+            git rebase --abort 2>/dev/null || true
+            git reset HEAD~ 2>/dev/null || true
+            git checkout master 2>/dev/null || true
+            add_cctv
+            if git diff --cached --quiet; then
+              echo "无变更（冲突回退后为空），跳过推送"
+            else
+              git commit -m "cctv: 每日舆情面板数据 $(TZ=Asia/Shanghai date +%Y%m%d)"
+              if git pull --no-rebase -Xours origin master 2>/dev/null; then
+                if git push origin master 2>/dev/null; then PUSH_OK=1; fi
+              fi
+            fi
+          fi
+          # 第3层：force-with-lease 兜底（远程自上次 fetch 未变才生效，不会误覆盖他人提交）
+          if [ "$PUSH_OK" -eq 0 ]; then
+            if git push --force-with-lease origin master 2>/dev/null; then PUSH_OK=1; fi
+          fi
+          echo "PUSH_OK=$PUSH_OK"
+          if [ "$PUSH_OK" -eq 0 ]; then
+            echo "::warning::CCTV 数据三层推送均未成功，面板日期将停留在上一成功日"
+            exit 1
+          fi
+
+      - name: 失败告警
+        if: failure() && steps.gate.outputs.ok == 'true'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TODAY: ${{ steps.gate.outputs.today }}
+        run: |
+          TODAY="${TODAY:-$(TZ=Asia/Shanghai date +%Y%m%d)}"
+          title="cctv-daily 故障：${TODAY} 舆情采集失败"
+          if gh issue list --repo "${{ github.repository }}" --state open --search "$title" --json title | grep -qF "$title"; then
+            echo "[alert] 已存在未关闭告警 issue，跳过创建"
+            exit 0
+          fi
+          gh issue create --repo "${{ github.repository }}" \
+            --title "$title" \
+            --body "日期 **${TODAY}** 的 CCTV 舆情采集失败（新闻源不可用 / 依赖安装失败 / 推送失败）。\n\n面板日期将停留在上一成功日，请检查 [Actions 运行日志](https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }})。\n\n_本 issue 由 GitHub Actions 自动创建。_" \
+            --label "automated,cctv-failure"
