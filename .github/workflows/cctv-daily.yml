@@ -29,7 +29,10 @@ concurrency:
   cancel-in-progress: false
 
 permissions:
+  # contents: 提交/推送 CCTV 数据；issues: 告警 label 自举 + 失败开 issue
+  # （缺 issues:write 会让 label create / issue create 全部 403，2026-09-19 冒烟实测）
   contents: write
+  issues: write
 
 jobs:
   cctv:
