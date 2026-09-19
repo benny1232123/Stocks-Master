@@ -79,18 +79,18 @@ jobs:
             echo "=== 因子选股 $D ==="
             python scripts/zoo_factor_strategy.py --date $D
             echo "=== 融合生成 DAL $D ==="
-            SIGNAL_DATE=$D python -c "
-            import os, sys; sys.path.insert(0, '.')
-            from smcore.strategy import fuse_signals, save_action_list
-            today = os.environ.get('SIGNAL_DATE')
-            df, report = fuse_signals(today, total_capital=100000, max_picks=15, fetch_levels=True)
-            print(f'操作清单: {len(df)} 只候选 @ {today}')
-            if not df.empty:
-                path = save_action_list(df, today)
-                print(f'已保存: {path}')
-            else:
-                print('无候选，跳过保存')
-            "
+            SIGNAL_DATE=$D python - <<'PY'
+          import os, sys; sys.path.insert(0, '.')
+          from smcore.strategy import fuse_signals, save_action_list
+          today = os.environ.get('SIGNAL_DATE')
+          df, report = fuse_signals(today, total_capital=100000, max_picks=15, fetch_levels=True)
+          print(f'操作清单: {len(df)} 只候选 @ {today}')
+          if not df.empty:
+              path = save_action_list(df, today)
+              print(f'已保存: {path}')
+          else:
+              print('无候选，跳过保存')
+          PY
           done
 
       - name: 清除 12 天陈旧回测（强制重算）
