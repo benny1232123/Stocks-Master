@@ -48,6 +48,9 @@ stock_data/*.csv
 !stock_data/CCTV-Sector-Stock-Pool-*.csv
 !stock_data/CCTV-Sector-News-Matched-*.csv
 !stock_data/CCTV-Hot-Sectors-*.csv
+# CCTV 个股池底表（A 股代码/名称，~5.5k 行静态表）：cctv-daily CI 构建个股池必需，
+# 设计上只读本地不联网；不入库则 CI 上「本地数据不可用」→ 个股池恒空（2026-09-19 实测）
+!stock_data/stock_info_a_code_name.csv
 
 # walk-forward 重验产物（CI 产出，不入库）
 stock_data/walk_forward_recommendation.json
