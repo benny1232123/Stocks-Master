@@ -73,7 +73,6 @@ jobs:
       - name: A 批因子选股 + 融合生成 DAL（12 天循环）
         id: gen
         timeout-minutes: 90
-        continue-on-error: true
         run: |
           for D in ${{ github.event.inputs.dates }}; do
             echo "=== 因子选股 $D ==="
@@ -103,7 +102,6 @@ jobs:
 
       - name: 批量前向信号回测（一次性重算全部 eligible）
         timeout-minutes: 55
-        continue-on-error: true
         env:
           KLINE_BACKEND: hithink
           HOLD_DAYS: "12"
