@@ -1058,6 +1058,27 @@ def _read_local_table(file_path):
                     continue
         except Exception:
             pass
+        # 3) CSV 兜底：DB 无对应表时（如 CI 全新 checkout 无 stocks_data.db，该库是
+        #    gitignore 的二进制文件不入库），回退读同名 CSV 文件。底表以
+        #    stock_data/stock_info_a_code_name.csv 形式入库，必须在此被读到，否则 CI 上
+        #    个股池恒空（2026-09-19 实测：run 报「本地数据不可用」，Stock-Pool 仅表头）。
+        #    优先 DATA_DIR 下同名文件（与 cwd 无关），其次按入参 file_path 原样解析。
+        _csv_name = _Path(file_path).name
+        _csv_cands = []
+        try:
+            _csv_cands.append(str(DATA_DIR / _csv_name))
+        except Exception:
+            pass
+        if not _Path(file_path).is_absolute():
+            _csv_cands.append(str(_Path(file_path)))
+        for _cp in dict.fromkeys(_csv_cands):
+            try:
+                _df = pd.read_csv(_cp, dtype=str, keep_default_na=False)
+                if not _df.empty and {"code", "name"}.issubset(_df.columns):
+                    print(f"[cctv] 本地 DB 无表，已回退读取 CSV: {_cp}")
+                    return _df
+            except Exception:
+                continue
         return pd.DataFrame()
     finally:
         conn.close()
