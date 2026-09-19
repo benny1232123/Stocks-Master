@@ -1,0 +1,142 @@
+name: 重对齐-批量 A 批回测（单轮）
+
+# 单轮批量重对齐：把多个信号日一次性用 A 批因子流水线重算（DAL + 回测），
+# 取代原 daily-pick 每日期一轮的串行做法。瓶颈 K 线刷新只跑一次，12 天共享。
+# 默认处理 08-27 之外的重对齐窗口（08-27 由在飞 run 单独处理）。
+on:
+  workflow_dispatch:
+    inputs:
+      dates:
+        description: '空格分隔的信号日 YYYYMMDD（默认重对齐窗口除 08-27 外）'
+        required: false
+        default: '20260828 20260831 20260901 20260902 20260903 20260904 20260907 20260908 20260909 20260910 20260911 20260915'
+
+permissions:
+  contents: write
+
+jobs:
+  realign:
+    runs-on: ubuntu-latest
+    timeout-minutes: 300
+    env:
+      KLINE_BACKEND: hithink
+      HITHINK_FINANCE_API_KEY: ${{ secrets.HITHINK_FINANCE_API_KEY }}
+      SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+      SUPABASE_KEY: ${{ secrets.SUPABASE_KEY }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: 确保告警 label 存在（幂等自举）
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh label create automated --color BFD4F2 --description "CI 自动化产物" --force || true
+          gh label create daily-pick-failure --color D93F0B --description "每日选股链路失败告警" --force || true
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: pip 缓存
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/pip
+          key: pip-${{ runner.os }}-${{ hashFiles('requirements.txt') }}
+          restore-keys: pip-${{ runner.os }}-
+
+      - name: 安装依赖
+        run: |
+          pip install --upgrade pip
+          pip install --retries 3 -r requirements.txt
+
+      - name: K 线缓存刷新（全宇宙补齐到今日，供 A 批因子使用，仅一次）
+        timeout-minutes: 90
+        run: |
+          python scripts/prepull_klines.py --date $(TZ=Asia/Shanghai date +%Y%m%d)
+
+      - name: A 批因子选股 + 融合生成 DAL（12 天循环）
+        id: gen
+        timeout-minutes: 90
+        continue-on-error: true
+        run: |
+          for D in ${{ github.event.inputs.dates }}; do
+            echo "=== 因子选股 $D ==="
+            python scripts/zoo_factor_strategy.py --date $D
+            echo "=== 融合生成 DAL $D ==="
+            SIGNAL_DATE=$D python -c "
+            import os, sys; sys.path.insert(0, '.')
+            from smcore.strategy import fuse_signals, save_action_list
+            today = os.environ.get('SIGNAL_DATE')
+            df, report = fuse_signals(today, total_capital=100000, max_picks=15, fetch_levels=True)
+            print(f'操作清单: {len(df)} 只候选 @ {today}')
+            if not df.empty:
+                path = save_action_list(df, today)
+                print(f'已保存: {path}')
+            else:
+                print('无候选，跳过保存')
+            "
+          done
+
+      - name: 清除 12 天陈旧回测（强制重算）
+        run: |
+          for D in ${{ github.event.inputs.dates }}; do
+            rm -f "stock_data/Multi-Backtest-${D}-summary.csv" \
+                  "stock_data/Multi-Backtest-${D}-equity.csv" \
+                  "stock_data/Multi-Backtest-${D}-trades.csv" || true
+          done
+
+      - name: 批量前向信号回测（一次性重算全部 eligible）
+        timeout-minutes: 55
+        continue-on-error: true
+        env:
+          KLINE_BACKEND: hithink
+          HOLD_DAYS: "12"
+          LOOKBACK_DAYS: "30"
+          PREPULL_INTERVAL: "0.3"
+        run: |
+          python scripts/daily_backtest.py
+
+      - name: 提交缓存与数据到仓库
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          [ -d stock_data/daily_cache/ ] && git add -f stock_data/daily_cache/ || true
+          [ -d stock_data/k_data/ ] && find stock_data/k_data -name '*.parquet' -size -90M -print0 | xargs -0 -r git add -f || true
+          ls stock_data/Daily-Action-List-*.csv >/dev/null 2>&1 && git add -f stock_data/Daily-Action-List-*.csv || true
+          ls stock_data/Multi-Backtest-*.csv >/dev/null 2>&1 && git add -f stock_data/Multi-Backtest-*.csv || true
+          ls stock_data/Stock-Selection-*.csv >/dev/null 2>&1 && git add -f stock_data/Stock-Selection-*.csv || true
+          [ -d stock_data/web_data/ ] && git add -f stock_data/web_data/ || true
+          [ -f stock_data/backtest_status.txt ] && git add -f stock_data/backtest_status.txt || true
+          if git diff --cached --quiet; then
+            echo "无变更，跳过提交"
+            exit 0
+          fi
+          git commit -m "realign: 批量重对齐 12 天 A 批 DAL+回测 $(TZ=Asia/Shanghai date +%Y%m%d)"
+          PUSH_OK=0
+          if git pull --rebase --autostash origin master 2>/dev/null; then
+            if git push origin master 2>/dev/null; then PUSH_OK=1; fi
+          fi
+          if [ "$PUSH_OK" -eq 0 ]; then
+            git rebase --abort 2>/dev/null || true
+            git reset HEAD~ 2>/dev/null || true
+            [ -d stock_data/daily_cache/ ] && git add -f stock_data/daily_cache/ || true
+            [ -d stock_data/k_data/ ] && git add -f stock_data/k_data/ || true
+            ls stock_data/Daily-Action-List-*.csv >/dev/null 2>&1 && git add -f stock_data/Daily-Action-List-*.csv || true
+            ls stock_data/Multi-Backtest-*.csv >/dev/null 2>&1 && git add -f stock_data/Multi-Backtest-*.csv || true
+            ls stock_data/Stock-Selection-*.csv >/dev/null 2>&1 && git add -f stock_data/Stock-Selection-*.csv || true
+            [ -f stock_data/backtest_status.txt ] && git add -f stock_data/backtest_status.txt || true
+            if ! git diff --cached --quiet; then
+              git commit -m "realign: 批量重对齐 12 天 A 批 DAL+回测 $(TZ=Asia/Shanghai date +%Y%m%d)"
+              if git pull --no-rebase -Xours origin master 2>/dev/null; then
+                if git push origin master 2>/dev/null; then PUSH_OK=1; fi
+              fi
+            fi
+          fi
+          if [ "$PUSH_OK" -eq 0 ]; then
+            git push --force-with-lease origin master 2>/dev/null && PUSH_OK=1 || true
+          fi
+          echo "PUSH_OK=$PUSH_OK"
