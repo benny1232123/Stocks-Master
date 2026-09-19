@@ -1,0 +1,94 @@
+name: 清理 pre-0827 旧框架数据
+
+# 删除 2026-08-27 之前（退役框架 boll/cctv/theme/momentum/relativity）的全部回测与 DAL。
+# 这些文件由 daily-pick 历史产物生成，当前 A 批价格因子框架已不再使用。
+# 必须由 workflow_dispatch 触发，且 confirm 输入必须填 "DELETE" 才真正删除；
+# 留空/其他值只做预览列出，不改动仓库。
+on:
+  workflow_dispatch:
+    inputs:
+      confirm:
+        description: '填 DELETE 才真正删除；否则只预览列出'
+        required: false
+        default: 'PREVIEW'
+
+permissions:
+  contents: write
+
+jobs:
+  cleanup:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: 列出 pre-0827 旧框架文件（预览/统计）
+        id: list
+        run: |
+          python3 - <<'PY'
+          import subprocess, re
+          out = subprocess.run(["git","ls-tree","-r","--name-only","HEAD","stock_data/"],
+                               capture_output=True, text=True).stdout.splitlines()
+          def date_of(p):
+              m = re.search(r"(\d{8})", p)
+              return m.group(1) if m else "00000000"
+          CUT = "20260827"
+          dels = [p for p in out
+                  if (p.startswith("stock_data/Multi-Backtest-") or p.startswith("stock_data/Daily-Action-List-"))
+                  and date_of(p) < CUT]
+          open("/tmp/del.txt","w").write("\n".join(dels))
+          print("PREVIEW 将删除:", len(dels), "个文件")
+          for p in dels[:15]:
+              print("   ", p)
+          if len(dels) > 15:
+              print("   ... 其余", len(dels)-15, "个")
+          ss = [p for p in out if "Stock-Selection" in p and date_of(p) < CUT]
+          print("INFO pre-0827 Stock-Selection(本次不删):", len(ss))
+          PY
+
+      - name: 实际删除并推送
+        if: ${{ github.event.inputs.confirm == 'DELETE' }}
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          mapfile -t FILES < /tmp/del.txt
+          if [ ${#FILES[@]} -eq 0 ]; then echo "无文件，跳过"; exit 0; fi
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git rm -q --ignore-unmatch "${FILES[@]}"
+          N=$(wc -l < /tmp/del.txt | tr -d ' ')
+          git commit -m "chore: 删除 pre-0827 旧框架回测与 DAL (${N} 文件)"
+          PUSH_OK=0
+          if git pull --rebase --autostash origin master 2>/dev/null; then
+            if git push origin master 2>/dev/null; then PUSH_OK=1; fi
+          fi
+          if [ "$PUSH_OK" -eq 0 ]; then
+            git rebase --abort 2>/dev/null || true
+            git reset HEAD~ 2>/dev/null || true
+            git rm -q --ignore-unmatch "${FILES[@]}" 2>/dev/null || true
+            git commit -m "chore: 删除 pre-0827 旧框架回测与 DAL (${N} 文件)" 2>/dev/null || true
+            if git pull --no-rebase -Xours origin master 2>/dev/null; then
+              if git push origin master 2>/dev/null; then PUSH_OK=1; fi
+            fi
+          fi
+          if [ "$PUSH_OK" -eq 0 ]; then
+            git push --force-with-lease origin master 2>/dev/null && PUSH_OK=1 || true
+          fi
+          echo "PUSH_OK=$PUSH_OK"
+          # 验证：删除后 pre-0827 残留文件数应为 0
+          python3 - <<'PY'
+          import subprocess, re
+          out = subprocess.run(["git","ls-tree","-r","--name-only","HEAD","stock_data/"],
+                               capture_output=True, text=True).stdout.splitlines()
+          def date_of(p):
+              m = re.search(r"(\d{8})", p)
+              return m.group(1) if m else "00000000"
+          left = [p for p in out
+                  if (p.startswith("stock_data/Multi-Backtest-") or p.startswith("stock_data/Daily-Action-List-"))
+                  and date_of(p) < "20260827"]
+          print("删除后 pre-0827 残留文件数:", len(left))
+          for p in left[:20]:
+              print("  残留:", p)
+          PY

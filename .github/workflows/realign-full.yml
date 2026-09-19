@@ -51,10 +51,24 @@ jobs:
           pip install --upgrade pip
           pip install --retries 3 -r requirements.txt
 
-      - name: K 线缓存刷新（全宇宙补齐到今日，供 A 批因子使用，仅一次）
-        timeout-minutes: 90
+      - name: 计算信号日（回退到最近交易日，避免周末/非交易日导致有效截面为 0）
+        id: sig
         run: |
-          python scripts/prepull_klines.py --date $(TZ=Asia/Shanghai date +%Y%m%d)
+          SIGNAL_DATE=$(python3 <<'PY'
+          import datetime
+          d = datetime.datetime.now(datetime.timezone(datetime.timedelta(hours=8))).date()
+          while d.weekday() >= 5:  # 5=Sat, 6=Sun -> 回退到周五
+              d -= datetime.timedelta(days=1)
+          print(d.strftime('%Y%m%d'))
+          PY
+          )
+          echo "SIGNAL_DATE=$SIGNAL_DATE" >> "$GITHUB_OUTPUT"
+          echo "使用信号日(最近交易日): $SIGNAL_DATE"
+
+      - name: K 线缓存刷新（全宇宙补齐到信号日，供 A 批因子使用，仅一次）
+        timeout-minutes: 120
+        run: |
+          python scripts/prepull_klines.py --date ${{ steps.sig.outputs.SIGNAL_DATE }}
 
       - name: A 批因子选股 + 融合生成 DAL（12 天循环）
         id: gen
