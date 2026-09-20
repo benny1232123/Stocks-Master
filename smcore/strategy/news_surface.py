@@ -47,6 +47,25 @@ def _latest_file(prefix: str) -> Path | None:
     return files[0] if files else None
 
 
+def _resolve_file(prefix: str, as_of: str | None) -> Path | None:
+    """返回指定日期的 CCTV 文件（若存在），否则回退到「不晚于 as_of 的最新文件」。
+
+    护栏核心：新闻日期永远 ≤ 选股日（as_of），绝不展示领先选股日的新闻；
+    同时若 as_of 当天文件缺失，回退到最近一个 ≤ as_of 的文件，避免面板空白。
+    """
+    if as_of:
+        cand = STOCK_DATA_DIR / f"{prefix}-{as_of}.csv"
+        if cand.exists():
+            return cand
+        # 回退到不晚于 as_of 的最新文件（按日期降序扫描，命中首个 ≤ as_of 的）
+        for p in sorted(STOCK_DATA_DIR.glob(f"{prefix}-*.csv"), reverse=True):
+            m = re.search(r"(\d{8})", p.name)
+            if m and m.group(1) <= as_of:
+                return p
+        return None
+    return _latest_file(prefix)
+
+
 def _read_csv(path: Path | None):
     if path is None:
         return pd.DataFrame()
@@ -67,9 +86,9 @@ def _sentiment_label(score: float | None) -> str:
     return "neutral"
 
 
-def _read_hot_sectors(max_sectors: int = 12) -> tuple[list[dict], str]:
-    """返回 (热门板块列表, 数据日期)。"""
-    path = _latest_file("CCTV-Hot-Sectors")
+def _read_hot_sectors(max_sectors: int = 12, as_of: str | None = None) -> tuple[list[dict], str]:
+    """返回 (热门板块列表, 数据日期)。as_of 给定时优先读该日 CCTV 文件。"""
+    path = _resolve_file("CCTV-Hot-Sectors", as_of)
     if path is None:
         return [], ""
     df = _read_csv(path)
@@ -87,11 +106,11 @@ def _read_hot_sectors(max_sectors: int = 12) -> tuple[list[dict], str]:
     return out, (m.group(1) if m else "")
 
 
-def _stock_sectors(code: str) -> list[str]:
-    """由最新个股池反查该股票所属热门板块。"""
+def _stock_sectors(code: str, as_of: str | None = None) -> list[str]:
+    """由最新个股池反查该股票所属热门板块。as_of 给定时优先读该日个股池。"""
     if not code:
         return []
-    path = _latest_file("CCTV-Sector-Stock-Pool")
+    path = _resolve_file("CCTV-Sector-Stock-Pool", as_of)
     df = _read_csv(path)
     if df.empty or "股票代码" not in df.columns or "板块" not in df.columns:
         return []
@@ -100,12 +119,13 @@ def _stock_sectors(code: str) -> list[str]:
     return sorted({str(s).strip() for s in sub["板块"].tolist() if str(s).strip()})
 
 
-def _read_news_items(sectors: list[str] | None, max_news: int = 12) -> tuple[list[dict], str]:
+def _read_news_items(sectors: list[str] | None, max_news: int = 12, as_of: str | None = None) -> tuple[list[dict], str]:
     """返回 (新闻条目列表, 数据日期)。
 
     sectors 不为空时只取命中这些板块的新闻（个股视角）；否则返回全市场最新新闻流。
+    as_of 给定时优先读该日新闻文件。
     """
-    path = _latest_file("CCTV-Sector-News-Matched")
+    path = _resolve_file("CCTV-Sector-News-Matched", as_of)
     if path is None:
         return [], ""
     df = _read_csv(path)
@@ -145,20 +165,37 @@ def _read_news_items(sectors: list[str] | None, max_news: int = 12) -> tuple[lis
     return recs[:max_news], date_tag
 
 
-def build_news_surface(code: str | None = None, max_news: int = 12, max_sectors: int = 12) -> dict:
+def _latest_selection_date() -> str | None:
+    """最新选股日（Daily-Action-List 最新文件日期），作为新闻面板的对齐基准。"""
+    try:
+        from smcore.artifacts import find_latest_file
+    except Exception:
+        return None
+    latest = find_latest_file("Daily-Action-List-*.csv")
+    if latest is None:
+        return None
+    m = re.search(r"(\d{8})", latest.name)
+    return m.group(1) if m else None
+
+
+def build_news_surface(code: str | None = None, max_news: int = 12, max_sectors: int = 12, as_of_date: str | None = None) -> dict:
     """构建消息面载荷。
 
     - code=None: 全市场舆情（热门板块 + 全量新闻流）
     - code 给定: 额外反查该股票所属热门板块，并据板块过滤相关新闻
+    - as_of_date: 强制对齐到指定选股日；缺省时自动取最新选股日
+      （护栏：新闻日期始终与选股面板一致，避免周末/补跑导致两面板日期漂移）。
     """
-    hot, hot_date = _read_hot_sectors(max_sectors)
-    stock_sectors = _stock_sectors(code) if code else []
+    if as_of_date is None:
+        as_of_date = _latest_selection_date()
+    hot, hot_date = _read_hot_sectors(max_sectors, as_of_date)
+    stock_sectors = _stock_sectors(code, as_of_date) if code else []
     # 个股视角：仅当其确实出现在热门板块池时才过滤相关新闻；
     # 否则不展示无关的全市场新闻（前端改用市场热点板块兜底）。
     if code and not stock_sectors:
         items, item_date = [], ""
     else:
-        items, item_date = _read_news_items(stock_sectors or None, max_news)
+        items, item_date = _read_news_items(stock_sectors or None, max_news, as_of_date)
 
     # 个股关联板块的热度分（从热门板块表中取，带情绪/变化）
     rel_sectors = []
