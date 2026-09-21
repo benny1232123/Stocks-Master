@@ -163,6 +163,17 @@ def build_stock_analysis(
     return payload
 
 
+def fundamentals_available(analysis: dict | None) -> bool:
+    """该票是否取到可用的基本面快照 —— 与 recommendation_from_analysis 内部 hasF **同判据**。
+
+    为 False 时综合分会退化为纯技术面（``total = techScore``，三维权重
+    0.40/0.35/0.25 整体失效），持仓日报据此在报告里显式标注「纯技术面」，
+    避免把纯动量信号误读成三维综合研判。集中在此处判定，防止两处判据漂移。
+    """
+    fund = (analysis or {}).get("fundamentals")
+    return isinstance(fund, dict) and not fund.get("error")
+
+
 def recommendation_from_analysis(
     analysis: dict, cfg: dict | None = None
 ) -> dict[str, object]:
@@ -207,7 +218,7 @@ def recommendation_from_analysis(
     latest = analysis.get("latest", {}) or {}
     metrics = analysis.get("metrics", {}) or {}
     fund = analysis.get("fundamentals")
-    hasF = isinstance(fund, dict) and not fund.get("error")
+    hasF = fundamentals_available(analysis)
     fund = fund if hasF else {}
 
     w_t = cfg.get("technical", {}) or {}

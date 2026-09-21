@@ -37,6 +37,7 @@ to_parquet(整桶, zstd)``，实测 **5.33s/只** → 4380 只 ≈ **6.5 小时*
     python scripts/prepull_klines.py --date 20260917
     python scripts/prepull_klines.py --date 20260917 --min-codes 1000 --lookback-days 400
     python scripts/prepull_klines.py --date 20260917 --codes 600000,000001   # 调试：只跑指定代码
+    python scripts/prepull_klines.py --date 20260921 --from-holdings         # 持仓日报：只刷当前持仓
 """
 from __future__ import annotations
 
@@ -52,6 +53,54 @@ if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
 KDATA = ROOT / "stock_data" / "k_data"
+
+
+def _held_codes() -> list[str]:
+    """当前 FIFO 开仓持仓的代码（去重保序）。读取失败返回 []（不抛）。
+
+    持仓日报（daily-holdings.yml）用它做**定向刷新**：只补当前持仓那几只票的 K 线，
+    而不是全宇宙 4380 只（后者 ~50min，持仓通常 <20 只 → 秒级）。
+    """
+    try:
+        from smcore.holdings import compute_fifo_positions, load_trades
+
+        pos_df, _closed = compute_fifo_positions(load_trades())
+        if pos_df is None or pos_df.empty or "代码" not in pos_df.columns:
+            return []
+        return list(
+            dict.fromkeys(str(c).strip() for c in pos_df["代码"].tolist() if str(c).strip())
+        )
+    except Exception as exc:
+        print(f"[prepull] 读取持仓失败（{type(exc).__name__}: {exc}）", file=sys.stderr)
+        return []
+
+
+def _stale_codes(codes: list[str], date_str: str) -> list[str]:
+    """返回缓存尾部 bar **早于** date_str 的代码（含完全无数据者）。
+
+    这是持仓日报的「新鲜度门控」：定向刷新后逐只复核，确保报告用的不是 D-1 旧价
+    （旧实现无此校验，抓到旧 bar 时 RSI/MACD/布林/现价全部失真且无声）。
+    """
+    import pandas as pd
+
+    from smcore.data.kline import fetch_daily_k
+
+    sig = datetime.strptime(date_str, "%Y%m%d").date()
+    start = (sig - timedelta(days=30)).strftime("%Y-%m-%d")
+    end = sig.strftime("%Y-%m-%d")
+    stale: list[str] = []
+    for c in codes:
+        try:
+            df = fetch_daily_k(c, start, end)
+            if df is None or df.empty or "date" not in df.columns:
+                stale.append(c)
+                continue
+            mx = pd.to_datetime(df["date"], errors="coerce").dropna()
+            if mx.empty or mx.max().date() < sig:
+                stale.append(c)
+        except Exception:
+            stale.append(c)
+    return stale
 
 
 # ── 子进程 worker：跑一个分块 ─────────────────────────────────────────────
@@ -98,6 +147,8 @@ def main() -> int:
     ap.add_argument("--min-codes", type=int, default=1000,
                     help="信号日有效截面下限；低于此值报错退出（默认 1000，远高于引擎 MIN_N_DAY=300）")
     ap.add_argument("--codes", default="", help="调试：逗号分隔，只刷新这些代码（跳过门控）")
+    ap.add_argument("--from-holdings", action="store_true",
+                    help="持仓日报：只刷新当前 FIFO 持仓，并逐只复核信号日 bar（不跑全宇宙覆盖度门控）")
     ap.add_argument("--_chunk", default="", help=argparse.SUPPRESS)   # 内部：子进程分块
     args = ap.parse_args()
 
@@ -119,6 +170,31 @@ def main() -> int:
         _run_chunk(codes, start, end)
         n, total = _coverage(args.date, start)
         print(f"[prepull] 覆盖度 {n}/{total}（调试模式不做门控）")
+        return 0
+
+    # ── 持仓日报定向模式（daily-holdings.yml）──────────────────────────────
+    # 只刷当前持仓（通常 <20 只，秒级），不做全宇宙覆盖度门控（那不是本场景的判据）；
+    # 改为**逐只**复核信号日 bar，把「抓到旧 bar 却照常出信号」变成显式失败/告警。
+    if args.from_holdings:
+        codes = _held_codes()
+        if not codes:
+            print("[prepull] 当前无持仓 → 无需刷新 K 线")
+            return 0
+        print(f"[prepull] 持仓定向刷新：{len(codes)} 只，窗口 {start} ~ {end}", flush=True)
+        _run_chunk(codes, start, end)
+        stale = _stale_codes(codes, args.date)
+        if not stale:
+            print(f"[prepull] ✅ {len(codes)} 只持仓均含信号日 {args.date} 的 bar，可供报告使用。")
+            return 0
+        print(f"[prepull] 信号日 {args.date} 缓存仍缺当日 bar 的持仓：{', '.join(stale)}")
+        if len(stale) == len(codes):
+            print("::error::[prepull] 全部持仓都缺信号日 bar —— 数据源未更新或刷新链失效；"
+                  "继续出报告会用 D-1 旧价（RSI/MACD/布林/现价全失真）故直接失败。")
+            print("::error::排查：① KLINE_BACKEND/密钥是否可用；② 数据源当日 bar 是否已发布；"
+                  "③ 若非交易日（周末/节假日）可设 ALLOW_STALE_DATA=1 或跳过本步。")
+            return 1
+        print(f"::warning::[prepull] {len(stale)}/{len(codes)} 只持仓缺信号日 bar"
+              f"（停牌/退市/次新等），报告对这几只将使用最新可得 bar。")
         return 0
 
     from smcore.data.kline import list_kline_codes

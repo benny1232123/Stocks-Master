@@ -29,7 +29,12 @@ if ROOT not in sys.path:
 
 from smcore.storage.trades_repo import get_trade_repository
 from smcore.holdings import compute_fifo_positions, load_trades
-from smcore.analysis import build_stock_analysis, recommendation_from_analysis, position_sizing_recommendation
+from smcore.analysis import (
+    build_stock_analysis,
+    recommendation_from_analysis,
+    position_sizing_recommendation,
+    fundamentals_available,
+)
 from smcore.config.defaults import STOCK_DATA_DIR, POSITION_SIZING_CONFIG
 from smcore.notify.email import send_email
 from smcore.stock_names import resolve as _resolve_name
@@ -172,6 +177,41 @@ def _rec_cls(action: str) -> str:
         "减仓": "bear", "减仓偏空": "bear",
         "持有观望": "neutral", "未知": "neutral",
     }.get(action, "neutral")
+
+
+def _account_cash(holdings_value: float, cfg: dict | None = None) -> float:
+    """账户现金（元）——「仓位调整」分母的现金部分。
+
+    优先级：环境变量 ``ACCOUNT_CASH`` > ``cfg.account_cash`` > ``cfg.account_cash_pct``。
+
+    ⚠️ 为什么需要它：报告原先的分母只有 Σ(现价×数量)，各票权重之和≈100%。若账户实际
+    留了现金（或目标权重之和 <100%，本就隐含现金），每只票都会被算成"超配"→ 全表
+    "减仓"，delta 金额系统性偏空。计入现金后 current_weight 才是真实占比。
+
+    ``account_cash_pct`` 语义 = 现金 / **总资产**（含现金），故现金额 = 持仓市值 × pct/(1-pct)
+    （pct=0.2 → 持仓80%/现金20% → 现金 = 持仓 × 0.25）。
+    """
+    env = (os.getenv("ACCOUNT_CASH") or "").strip()
+    if env:
+        try:
+            return max(0.0, float(env))
+        except ValueError:
+            print(f"[WARN] ACCOUNT_CASH={env!r} 不是数字，忽略")
+    cfg = cfg or {}
+    try:
+        cash = float(cfg.get("account_cash") or 0.0)
+    except (TypeError, ValueError):
+        cash = 0.0
+    if cash > 0:
+        return cash
+    try:
+        pct = cfg.get("account_cash_pct")
+        pct = float(pct) if pct not in (None, "") else 0.0
+    except (TypeError, ValueError):
+        pct = 0.0
+    if 0.0 < pct < 1.0 and holdings_value > 0:
+        return holdings_value * pct / (1.0 - pct)
+    return 0.0
 
 
 def _news_cls(score) -> str:
@@ -368,13 +408,25 @@ def render_stock(analysis: dict, pos: dict | None = None, sizing: dict | None = 
         _v = _faces_md.get(_key)
         _face_parts.append(f"{_lbl} {_v:.0f}" if _v is not None else f"{_lbl} —")
     _faces_line = " ｜ ".join(_face_parts)
+    # ⚠️ 缺基本面缓存时 recommendation_from_analysis 的 total 退化为 techScore
+    #    （0.40/0.35/0.25 三维权重塌成 100% 技术面）。必须在报告里显式标注，
+    #    否则用户会把「纯动量信号」误读成三维综合研判。
+    _tech_only = not fundamentals_available(analysis)
+    _score_line = (
+        f"- **三维打分**：{_faces_line}（各面 0-100，与网站评分一致；≥65 偏多/优质/活跃，<45 偏空/偏弱/清淡）"
+    )
+    if _tech_only:
+        _score_line += (
+            "\n  - ⚠️ **纯技术面**：该票缺基本面缓存（基本面分=None），综合分实际仅由技术面决定。"
+            "需三维综合研判请先回填基本面缓存。"
+        )
     lines = [
         title,
         "",
         f"- **Boll 信号**：{sig}",
         f"- **现价**：{fmt_num(close)} ｜ **趋势**：{trend}",
         f"- **持仓建议**：{rec.get('action')}（{rec.get('reason')}）",
-        f"- **三维打分**：{_faces_line}（各面 0-100，与网站评分一致；≥65 偏多/优质/活跃，<45 偏空/偏弱/清淡）",
+        _score_line,
     ]
     # ── 仓位调整（与「股票研判」正交：target − current 的 delta，才是加减仓依据）──
     if sizing and sizing.get("action") not in (None, "未知"):
@@ -894,6 +946,11 @@ def render_stock_html(analysis: dict, pos: dict | None = None, sizing: dict | No
         + _face_html("技术面", "technical")
         + _face_html("基本面", "fundamental")
         + _face_html("资金面", "capital")
+        + (
+            '<span class="face down">⚠️ 纯技术面（缺基本面，综合分=技术面单维）</span>'
+            if not fundamentals_available(analysis)
+            else ""
+        )
         + "</div>"
     )
     # 理由可能含 '<'（如"空头排列(价<MA20<MA60)"），必须 HTML 转义，否则被浏览器当标签吞掉后半段
@@ -971,8 +1028,8 @@ def build_html_report(today: str, backend: str, summary_line: str, sections_html
 </div></body></html>"""
 
 
-def render_summary_html(summary: dict, count: int) -> str:
-    """顶部组合汇总卡片。"""
+def render_summary_html(summary: dict, count: int, cash: float = 0.0) -> str:
+    """顶部组合汇总卡片。cash>0 时额外展示账户现金与总资产（仓位调整分母口径）。"""
     if not summary:
         return ""
     tv = summary.get("total_value") or 0.0
@@ -989,6 +1046,9 @@ def render_summary_html(summary: dict, count: int) -> str:
         )
 
     cells = [_cell("持仓市值", fmt_money(tv))]
+    if cash > 0:
+        cells.append(_cell("账户现金", fmt_money(cash)))
+        cells.append(_cell("总资产", fmt_money(tv + cash)))
     if tc is not None:
         cells.append(_cell("持仓成本", fmt_money(tc)))
     if pnl is not None:
@@ -1009,7 +1069,7 @@ def render_summary_html(summary: dict, count: int) -> str:
     )
 
 
-def render_summary_md(summary: dict, count: int) -> str:
+def render_summary_md(summary: dict, count: int, cash: float = 0.0) -> str:
     if not summary:
         return ""
     tv = summary.get("total_value") or 0.0
@@ -1019,6 +1079,9 @@ def render_summary_md(summary: dict, count: int) -> str:
     today_pnl = summary.get("today_pnl")
     today_pct = summary.get("today_pnl_pct")
     lines = [f"## 💼 组合概览（{count} 只持仓）", f"- **持仓市值**：{fmt_money(tv)}"]
+    if cash > 0:
+        lines.append(f"- **账户现金**：{fmt_money(cash)}")
+        lines.append(f"- **总资产**：{fmt_money(tv + cash)}（= 仓位调整所用分母）")
     if tc is not None:
         lines.append(f"- **持仓成本**：{fmt_money(tc)}")
     if pnl is not None:
@@ -1246,45 +1309,82 @@ def main() -> int:
         codes = list(dict.fromkeys(str(c) for c in pos_df["代码"].tolist()))
         log_lines.append(f"当前持仓 {len(codes)} 只: {', '.join(codes)}")
 
-        sections: list[str] = []
-        sections_html: list[str] = []
+        # ── 两段式：① 先逐只分析 → ② 汇总求组合分母 → ③ 再统一渲染 ──
+        # ⚠️ 必须两段：仓位调整的分母 = 组合总资产，只有把全部持仓分析完才知道。
+        #    旧实现把 sizing 调用写在「边分析边渲染」的同一循环里、而 portfolio_value
+        #    在循环**之后**才赋值 → 首只票即 UnboundLocalError，整份报告直接崩（2026-09-21 修）。
+        entries: list[dict] = []          # 按原始顺序保存，保证渲染顺序不变
         stock_list: list[tuple] = []
         holdings_meta: list[dict] = []
         ok, failed = 0, 0
         for code in codes:
             pos = pos_map.get(code)
+            err_text = None
             try:
                 analysis = build_stock_analysis(
                     code, as_of=as_of_date, fundamentals_offline=not FUND_REPORT_ONLINE
                 )
             except Exception as exc:
-                failed += 1
+                analysis, err_text = {}, f"分析异常：{exc}"
                 log_lines.append(f"分析 {code} 异常: {exc}")
-                sections.append(f"### {code} {(pos or {}).get('name', '')}\n\n⚠️ 分析异常：{exc}\n")
-                sections_html.append(
-                    f'<div class="card"><div class="card-head"><span class="code">{code}</span>'
-                    f'</div><div class="err">⚠️ 分析异常：{exc}</div></div>'
-                )
-                continue
-            if analysis.get("error"):
+            if err_text is None and analysis.get("error"):
+                err_text = f"分析失败：{analysis['error']}"
+            if err_text:
                 failed += 1
             else:
                 ok += 1
-            stock_list.append((analysis, pos))
-            holdings_meta.append({"code": code, "name": (pos or {}).get("name", ""), "analysis": analysis})
-            # 仓位调整：用组合市值分母算 (target − current) 的 delta
-            sizing = position_sizing_recommendation(analysis, pos, portfolio_value, cfg=POSITION_SIZING_CONFIG)
-            sections.append(render_stock(analysis, pos, sizing))
-            sections_html.append(render_stock_html(analysis, pos, sizing))
+                stock_list.append((analysis, pos))
+                holdings_meta.append(
+                    {"code": code, "name": (pos or {}).get("name", ""), "analysis": analysis}
+                )
+            entries.append({"code": code, "pos": pos, "analysis": analysis, "err": err_text})
 
         summary = build_portfolio_summary(stock_list)
-        # 组合市值分母：用于「仓位调整」的 current_weight 计算（= Σ close×qty）。
-        # 注：本报告不含现金，故各票权重之和≈100%（若账户有现金则实际占比更低，
-        # 用户可通过 POSITION_SIZING_CONFIG.target_weight_pct 下调以预留现金）。
-        portfolio_value = summary.get("total_value") or 0.0
+        # 组合分母 = 持仓市值 + 账户现金（见 _account_cash 的「为什么需要现金」说明）。
+        holdings_value = summary.get("total_value") or 0.0
+        cash = _account_cash(holdings_value, POSITION_SIZING_CONFIG)
+        portfolio_value = holdings_value + cash
+        log_lines.append(
+            f"组合分母：持仓市值 {holdings_value:,.0f} + 现金 {cash:,.0f} = {portfolio_value:,.0f} 元"
+            + ("" if cash > 0 else "（未配置现金 → 各票权重之和≈100%，设 ACCOUNT_CASH 可修正）")
+        )
+
+        sections: list[str] = []
+        sections_html: list[str] = []
+        tech_only = 0
+        for e in entries:
+            code, pos, analysis = e["code"], e["pos"], e["analysis"]
+            if e["err"]:
+                sections.append(f"### {code} {(pos or {}).get('name', '')}\n\n⚠️ {e['err']}\n")
+                sections_html.append(
+                    f'<div class="card"><div class="card-head"><span class="code">{code}</span>'
+                    f'</div><div class="err">⚠️ {e["err"]}</div></div>'
+                )
+                continue
+            # 仓位调整：用组合总资产分母算 (target − current) 的 delta
+            sizing = position_sizing_recommendation(
+                analysis, pos, portfolio_value, cfg=POSITION_SIZING_CONFIG
+            )
+            if not fundamentals_available(analysis):
+                tech_only += 1
+            sections.append(render_stock(analysis, pos, sizing))
+            sections_html.append(render_stock_html(analysis, pos, sizing))
+        if tech_only:
+            log_lines.append(
+                f"⚠️ {tech_only}/{ok} 只缺基本面数据 → 综合分退化为纯技术面（报告内已标注「纯技术面」）"
+            )
         summary_line = f"成功 {ok} 只 / 失败 {failed} 只 / 共 {len(codes)} 只"
-        summary_md = render_summary_md(summary, len(codes))
-        summary_html = render_summary_html(summary, len(codes))
+        summary_md = render_summary_md(summary, len(codes), cash=cash)
+        summary_html = render_summary_html(summary, len(codes), cash=cash)
+        # 未配置现金时显式说明权重口径，避免把「各票权重和≈100%」误读为真实占比
+        cash_note_md = ""
+        if cash <= 0:
+            cash_note_md = (
+                "> ⚖️ 仓位口径：分母 = 持仓市值（未配置账户现金）→ 各票权重之和≈100%，"
+                "「仓位调整」的 current_weight 会系统性偏高。如需真实占比，"
+                "请设环境变量 `ACCOUNT_CASH=<账户可用现金元>`"
+                "（或 `POSITION_SIZING_CONFIG.account_cash` / `account_cash_pct`）后重跑。\n\n"
+            )
         # 基本面缓存覆盖预检（cache-only 路径：缺缓存 = 报告显示「暂无基本面数据」）
         missing_cache = [c for c in codes if not fund_cache_exists(c)]
         if missing_cache:
@@ -1309,13 +1409,21 @@ def main() -> int:
             sections_html.insert(0, (
                 f'<div class="card"><div class="sig">⚠️ 基本面缓存缺失 {len(missing_cache)} 只：'
                 f'{"、".join(missing_cache)} —— 本报告基本面走本地缓存（离线确定），'
-                f'缺失持仓显示「暂无基本面数据」。请在有网环境运行 '
-                f'<code>python scripts/refresh_fundamentals.py</code> 回填缓存后重跑。</div></div>'
+                f'缺失持仓显示「暂无基本面数据」。CI 已加持仓定向刷新步骤'
+                f'（<code>refresh_fundamentals.py --from-holdings</code>）；'
+                f'本地缺失可在联网环境运行该命令回填后重跑。</div></div>'
+            ))
+        if cash_note_md:
+            sections_html.insert(0, (
+                '<div class="card"><div class="sig">⚖️ 仓位口径：分母 = 持仓市值（未配置账户现金）'
+                '→ 各票权重之和≈100%，「仓位调整」的 current_weight 系统性偏高。'
+                '如需真实占比，设 <code>ACCOUNT_CASH=&lt;账户可用现金元&gt;</code> 后重跑。</div></div>'
             ))
         md = (
             f"# 持仓个股分析日报 · {today}\n\n"
             f"> 数据源：{backend} ｜ {summary_line}\n\n"
             + cache_warn_md
+            + cash_note_md
             + (summary_md + "\n" if summary_md else "")
             + (news_md + "\n" if news_md else "")
             + "\n".join(sections)
