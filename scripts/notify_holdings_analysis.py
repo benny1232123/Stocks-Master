@@ -13,7 +13,9 @@
 - TRADES_BACKEND      : json | supabase | auto（默认 auto）
 - SMTP_HOST/PORT/USER/PASS/TO : 邮件推送（缺任意 → 跳过邮件）
 - HOLDINGS_FUND_REFRESH : 1/0（默认 1）报告前回填**缺失**的持仓基本面缓存
-- ACCOUNT_CASH        : 账户可用现金（元），计入「仓位调整」组合分母；不设则纯持仓口径
+- ACCOUNT_TOTAL       : 账户总资产（元，= 持仓市值 + 现金）→ 直接作「仓位调整」分母
+- ACCOUNT_CASH        : 或只给可用现金（元）→ 分母 = 持仓市值 + 现金（env 优先于配置）
+- ACCOUNT_BASIS       : 设 holdings = 强制纯持仓口径（忽略账户总资产/现金配置）
 - ALLOW_STALE_DATA    : 1 = 跳过 K 线定向刷新与新鲜度复核（补跑历史日 / 非交易日）
 - RECENT_DAYS         : 「近 N 天持仓建议对比」的 N（默认 5）
 
@@ -274,39 +276,82 @@ def _refresh_fundamentals(codes: list[str]) -> None:
         print(f"[WARN] 基本面回填失败（报告将对缺失票标注「纯技术面」）：{type(exc).__name__}: {exc}")
 
 
-def _account_cash(holdings_value: float, cfg: dict | None = None) -> float:
-    """账户现金（元）——「仓位调整」分母的现金部分。
+def _env_num(name: str) -> float | None:
+    """读环境变量为 float；**未设置/空**返回 None（区别于「显式设了 0」）。"""
+    raw = os.environ.get(name)
+    if raw is None or not raw.strip():
+        return None
+    try:
+        return float(raw.strip())
+    except ValueError:
+        print(f"[WARN] {name}={raw!r} 不是数字，忽略")
+        return None
 
-    优先级：环境变量 ``ACCOUNT_CASH`` > ``cfg.account_cash`` > ``cfg.account_cash_pct``。
 
-    ⚠️ 为什么需要它：报告原先的分母只有 Σ(现价×数量)，各票权重之和≈100%。若账户实际
-    留了现金（或目标权重之和 <100%，本就隐含现金），每只票都会被算成"超配"→ 全表
-    "减仓"，delta 金额系统性偏空。计入现金后 current_weight 才是真实占比。
+def _resolve_denominator(holdings_value: float, cfg: dict | None = None) -> tuple[float, float, str]:
+    """解析「仓位调整」分母，返回 ``(分母, 现金, 口径来源)``。
 
-    ``account_cash_pct`` 语义 = 现金 / **总资产**（含现金），故现金额 = 持仓市值 × pct/(1-pct)
-    （pct=0.2 → 持仓80%/现金20% → 现金 = 持仓 × 0.25）。
+    口径来源 ∈ ``account_total`` / ``account_cash`` / ``account_cash_pct`` / ``holdings_only``。
+
+    优先级（第一个「正数」者胜出）：
+      1. env ``ACCOUNT_TOTAL``  —— 账户总资产（= 持仓市值 + 现金），**直接作分母**
+      2. env ``ACCOUNT_CASH``   —— 可用现金 → 分母 = 持仓市值 + 现金
+      3. 配置 ``account_total``
+      4. 配置 ``account_cash``
+      5. 配置 ``account_cash_pct``（现金/总资产 比例）
+      6. 都没有 → 纯持仓口径（分母 = 持仓市值，报告会提示如何修正）
+
+    ★ **env 一律优先于配置项**（哪怕配置里已设了 ``account_total``）：env 是本次运行的
+      人工指定，配置是全项目默认值。想让报告忽略配置里的账户口径（补跑 / 口径对照），
+      设 ``ACCOUNT_BASIS=holdings`` 强制退回纯持仓口径。
+
+    第 1 档的现金 = 总资产 − 持仓市值（随行情自动反推，为负则夹到 0）——对应用户
+    「我账户一共就 N 万」的说法；第 2 档对应「我手里还有 N 万现金」。
+
+    ⚠️ 为什么分母必须含账户层面的金额：只用持仓市值时各票权重之和≈100%，每只都会显示
+    「超配」→ 全表减仓、delta 金额系统性偏空（与「账户里还留着现金」的事实矛盾）。
     """
-    env = (os.getenv("ACCOUNT_CASH") or "").strip()
-    if env:
-        try:
-            return max(0.0, float(env))
-        except ValueError:
-            print(f"[WARN] ACCOUNT_CASH={env!r} 不是数字，忽略")
     cfg = cfg or {}
     try:
-        cash = float(cfg.get("account_cash") or 0.0)
+        hv = float(holdings_value or 0.0)
     except (TypeError, ValueError):
-        cash = 0.0
-    if cash > 0:
-        return cash
+        hv = 0.0
+
+    basis_force = (os.environ.get("ACCOUNT_BASIS") or "").strip().lower()
+    if basis_force in ("holdings", "holdings_only", "off", "none"):
+        return hv, 0.0, "holdings_only"
+
+    def _pos(v) -> float:
+        try:
+            f = float(v)
+        except (TypeError, ValueError):
+            return 0.0
+        return f if f > 0 else 0.0
+
+    env_total = _env_num("ACCOUNT_TOTAL")
+    env_cash = _env_num("ACCOUNT_CASH")
+    cfg_total = _pos(cfg.get("account_total"))
+    cfg_cash = _pos(cfg.get("account_cash"))
+
+    if env_total and env_total > 0:
+        return env_total, max(0.0, env_total - hv), "account_total"
+    if env_cash and env_cash > 0:
+        return hv + env_cash, env_cash, "account_cash"
+    if cfg_total > 0:
+        return cfg_total, max(0.0, cfg_total - hv), "account_total"
+    if cfg_cash > 0:
+        return hv + cfg_cash, cfg_cash, "account_cash"
+
+    pct = cfg.get("account_cash_pct")
     try:
-        pct = cfg.get("account_cash_pct")
         pct = float(pct) if pct not in (None, "") else 0.0
     except (TypeError, ValueError):
         pct = 0.0
-    if 0.0 < pct < 1.0 and holdings_value > 0:
-        return holdings_value * pct / (1.0 - pct)
-    return 0.0
+    if 0.0 < pct < 1.0 and hv > 0:
+        c = hv * pct / (1.0 - pct)
+        return hv + c, c, "account_cash_pct"
+
+    return hv, 0.0, "holdings_only"
 
 
 def _news_cls(score) -> str:
@@ -1123,8 +1168,13 @@ def build_html_report(today: str, backend: str, summary_line: str, sections_html
 </div></body></html>"""
 
 
-def render_summary_html(summary: dict, count: int, cash: float = 0.0) -> str:
-    """顶部组合汇总卡片。cash>0 时额外展示账户现金与总资产（仓位调整分母口径）。"""
+def render_summary_html(summary: dict, count: int, cash: float = 0.0,
+                        equity_total: float | None = None) -> str:
+    """顶部组合汇总卡片。
+
+    ``equity_total`` 非空时额外展示账户现金与总资产（= 「仓位调整」所用分母口径）；
+    现金为 0 也照样展示（说明已超配、无现金可用），不要用 ``cash > 0`` 当开关。
+    """
     if not summary:
         return ""
     tv = summary.get("total_value") or 0.0
@@ -1141,9 +1191,9 @@ def render_summary_html(summary: dict, count: int, cash: float = 0.0) -> str:
         )
 
     cells = [_cell("持仓市值", fmt_money(tv))]
-    if cash > 0:
+    if equity_total:
         cells.append(_cell("账户现金", fmt_money(cash)))
-        cells.append(_cell("总资产", fmt_money(tv + cash)))
+        cells.append(_cell("总资产", fmt_money(equity_total)))
     if tc is not None:
         cells.append(_cell("持仓成本", fmt_money(tc)))
     if pnl is not None:
@@ -1164,7 +1214,8 @@ def render_summary_html(summary: dict, count: int, cash: float = 0.0) -> str:
     )
 
 
-def render_summary_md(summary: dict, count: int, cash: float = 0.0) -> str:
+def render_summary_md(summary: dict, count: int, cash: float = 0.0,
+                      equity_total: float | None = None) -> str:
     if not summary:
         return ""
     tv = summary.get("total_value") or 0.0
@@ -1174,9 +1225,9 @@ def render_summary_md(summary: dict, count: int, cash: float = 0.0) -> str:
     today_pnl = summary.get("today_pnl")
     today_pct = summary.get("today_pnl_pct")
     lines = [f"## 💼 组合概览（{count} 只持仓）", f"- **持仓市值**：{fmt_money(tv)}"]
-    if cash > 0:
+    if equity_total:
         lines.append(f"- **账户现金**：{fmt_money(cash)}")
-        lines.append(f"- **总资产**：{fmt_money(tv + cash)}（= 仓位调整所用分母）")
+        lines.append(f"- **总资产**：{fmt_money(equity_total)}（= 仓位调整所用分母）")
     if tc is not None:
         lines.append(f"- **持仓成本**：{fmt_money(tc)}")
     if pnl is not None:
@@ -1466,13 +1517,14 @@ def main() -> int:
             entries.append({"code": code, "pos": pos, "analysis": analysis, "err": err_text})
 
         summary = build_portfolio_summary(stock_list)
-        # 组合分母 = 持仓市值 + 账户现金（见 _account_cash 的「为什么需要现金」说明）。
+        # 组合分母 = 账户总资产（优先）或 持仓市值 + 现金，见 _resolve_denominator。
         holdings_value = summary.get("total_value") or 0.0
-        cash = _account_cash(holdings_value, POSITION_SIZING_CONFIG)
-        portfolio_value = holdings_value + cash
+        portfolio_value, cash, basis = _resolve_denominator(holdings_value, POSITION_SIZING_CONFIG)
         log_lines.append(
-            f"组合分母：持仓市值 {holdings_value:,.0f} + 现金 {cash:,.0f} = {portfolio_value:,.0f} 元"
-            + ("" if cash > 0 else "（未配置现金 → 各票权重之和≈100%，设 ACCOUNT_CASH 可修正）")
+            f"组合分母[{basis}]：持仓市值 {holdings_value:,.0f} + 现金 {cash:,.0f} "
+            f"= {portfolio_value:,.0f} 元"
+            + ("" if cash > 0 else "（未配置账户总资产/现金 → 各票权重之和≈100%，"
+                                   "设 ACCOUNT_TOTAL 或 ACCOUNT_CASH 可修正）")
         )
 
         sections: list[str] = []
@@ -1500,16 +1552,17 @@ def main() -> int:
                 f"⚠️ {tech_only}/{ok} 只缺基本面数据 → 综合分退化为纯技术面（报告内已标注「纯技术面」）"
             )
         summary_line = f"成功 {ok} 只 / 失败 {failed} 只 / 共 {len(codes)} 只"
-        summary_md = render_summary_md(summary, len(codes), cash=cash)
-        summary_html = render_summary_html(summary, len(codes), cash=cash)
-        # 未配置现金时显式说明权重口径，避免把「各票权重和≈100%」误读为真实占比
+        equity_total = portfolio_value if basis != "holdings_only" else None
+        summary_md = render_summary_md(summary, len(codes), cash=cash, equity_total=equity_total)
+        summary_html = render_summary_html(summary, len(codes), cash=cash, equity_total=equity_total)
+        # 纯持仓口径时显式说明权重口径，避免把「各票权重和≈100%」误读为真实占比
         cash_note_md = ""
-        if cash <= 0:
+        if basis == "holdings_only":
             cash_note_md = (
-                "> ⚖️ 仓位口径：分母 = 持仓市值（未配置账户现金）→ 各票权重之和≈100%，"
+                "> ⚖️ 仓位口径：分母 = 持仓市值（未配置账户总资产/现金）→ 各票权重之和≈100%，"
                 "「仓位调整」的 current_weight 会系统性偏高。如需真实占比，"
-                "请设环境变量 `ACCOUNT_CASH=<账户可用现金元>`"
-                "（或 `POSITION_SIZING_CONFIG.account_cash` / `account_cash_pct`）后重跑。\n\n"
+                "请设环境变量 `ACCOUNT_TOTAL=<账户总资产元>` 或 `ACCOUNT_CASH=<可用现金元>`"
+                "（或 `POSITION_SIZING_CONFIG.account_total` / `account_cash`）后重跑。\n\n"
             )
         # 基本面缓存覆盖预检（cache-only 路径：缺缓存 = 报告显示「暂无基本面数据」）
         missing_cache = [c for c in codes if not fund_cache_exists(c)]
@@ -1541,9 +1594,10 @@ def main() -> int:
             ))
         if cash_note_md:
             sections_html.insert(0, (
-                '<div class="card"><div class="sig">⚖️ 仓位口径：分母 = 持仓市值（未配置账户现金）'
-                '→ 各票权重之和≈100%，「仓位调整」的 current_weight 系统性偏高。'
-                '如需真实占比，设 <code>ACCOUNT_CASH=&lt;账户可用现金元&gt;</code> 后重跑。</div></div>'
+                '<div class="card"><div class="sig">⚖️ 仓位口径：分母 = 持仓市值'
+                '（未配置账户总资产/现金）→ 各票权重之和≈100%，「仓位调整」的 current_weight '
+                '系统性偏高。如需真实占比，设 <code>ACCOUNT_TOTAL=&lt;账户总资产元&gt;</code> 或 '
+                '<code>ACCOUNT_CASH=&lt;可用现金元&gt;</code> 后重跑。</div></div>'
             ))
         if data_warn_html:
             sections_html.insert(0, data_warn_html)
