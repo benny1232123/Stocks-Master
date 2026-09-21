@@ -8,10 +8,14 @@
 
 环境变量：
 - TODAY / SIGNAL_DATE : 信号日 YYYYMMDD（默认今天）
-- KLINE_BACKEND       : 建议 akshare（CI 海外 Runner 稳定）
+- KLINE_BACKEND       : 数据源（CI 用 hithink；tdx>hithink>baostock 回退链见 kline.py）
 - SUPABASE_URL/KEY    : 持仓数据源（auto 模式，与 daily-pick 共用 secrets）
 - TRADES_BACKEND      : json | supabase | auto（默认 auto）
 - SMTP_HOST/PORT/USER/PASS/TO : 邮件推送（缺任意 → 跳过邮件）
+- HOLDINGS_FUND_REFRESH : 1/0（默认 1）报告前回填**缺失**的持仓基本面缓存
+- ACCOUNT_CASH        : 账户可用现金（元），计入「仓位调整」组合分母；不设则纯持仓口径
+- ALLOW_STALE_DATA    : 1 = 跳过 K 线定向刷新与新鲜度复核（补跑历史日 / 非交易日）
+- RECENT_DAYS         : 「近 N 天持仓建议对比」的 N（默认 5）
 
 退出码：0 = 正常（含空持仓）；1 = 致命错误（持仓读取失败等）。
 """
@@ -177,6 +181,97 @@ def _rec_cls(action: str) -> str:
         "减仓": "bear", "减仓偏空": "bear",
         "持有观望": "neutral", "未知": "neutral",
     }.get(action, "neutral")
+
+
+# ── 数据准备（自包含守卫）──────────────────────────────────────────────────
+# ⚠️ 2026-09-21 审计：daily-holdings.yml 原先**没有任何 K 线准备步骤**（daily-pick 有），
+# 报告依赖 build_stock_analysis 内部 fetch_daily_k 在 CI 现抓 —— 海外 runner 抓到旧 bar
+# 时 RSI/MACD/布林带/现价全部失真，而报告照常推送（静默缺陷）。
+# 这里把「定向刷新 + 新鲜度复核 + 缺则回填基本面」内建到脚本自身，使守卫**不依赖
+# workflow 接线**（也绕开 token 无 workflow scope 时无法改 workflow 的限制）。
+#
+# HOLDINGS_FUND_REFRESH（默认 1）：报告前只回填**缺失**的基本面缓存（已缓存不重复联网），
+#   修「缺缓存 → 综合分塌成纯技术面」。设 0 可关（纯离线确定模式）。
+# ALLOW_STALE_DATA=1：手动补跑历史日 / 非交易日时跳过 K 线刷新与新鲜度复核。
+# 二者都在**调用时**读环境（而非 import 时），便于测试与单次运行覆盖。
+def _fund_refresh_enabled() -> bool:
+    return (os.getenv("HOLDINGS_FUND_REFRESH") or "1").strip() == "1"
+
+
+def _allow_stale() -> bool:
+    return (os.getenv("ALLOW_STALE_DATA") or "").strip() == "1"
+
+
+def _refresh_klines(codes: list[str], as_of: date | None) -> tuple[list[str], str | None]:
+    """定向刷新持仓 K 线，并逐只复核最新 bar 日期。
+
+    返回 ``(stale_codes, max_bar_date)``。as_of 为 None（TODAY 不可解析）时只刷新不校验。
+
+    「逐只复核」是本次修复的核心：抓不到信号日 bar 不再静默 —— 调用方会同时
+    ① 打 ``::error::`` 注解（Actions 页面可见）② 在报告顶部插入横幅（用户直接看得到），
+    但**不**让脚本退出非零，以免整份报告落不了盘。
+    """
+    if not codes:
+        return [], None
+    from datetime import timedelta as _td
+
+    from smcore.data.kline import fetch_daily_k
+
+    end = as_of or date.today()
+    end_s = end.strftime("%Y-%m-%d")
+    for c in codes:
+        try:
+            fetch_daily_k(c, (end - _td(days=400)).strftime("%Y-%m-%d"), end_s, force_refresh=True)
+        except Exception as exc:
+            print(f"[WARN] {c} K 线刷新失败：{type(exc).__name__}: {exc}")
+    if as_of is None:
+        return [], None
+
+    stale: list[str] = []
+    max_bar = None
+    for c in codes:
+        try:
+            df = fetch_daily_k(c, (end - _td(days=30)).strftime("%Y-%m-%d"), end_s)
+            if df is None or df.empty or "date" not in df.columns:
+                stale.append(c)
+                continue
+            mx = pd.to_datetime(df["date"], errors="coerce").dropna()
+            if mx.empty:
+                stale.append(c)
+                continue
+            d = mx.max().date()
+            if max_bar is None or d > max_bar:
+                max_bar = d
+            if d < as_of:
+                stale.append(c)
+        except Exception:
+            stale.append(c)
+    return stale, (max_bar.strftime("%Y-%m-%d") if max_bar else None)
+
+
+def _refresh_fundamentals(codes: list[str]) -> None:
+    """回填**缺失**的持仓基本面缓存（best-effort，失败只告警不抛）。
+
+    只补 ``fund_cache_exists`` 为 False 的票：已缓存的不重复联网，避免每次刷新白拉。
+    失败后报告仍走 cache-only 路径并标注「纯技术面」，链路不中断。
+    """
+    if not _fund_refresh_enabled() or not codes:
+        return
+    try:
+        from smcore.strategy.fundamental import refresh_all
+    except Exception as exc:
+        print(f"[WARN] 基本面模块导入失败：{type(exc).__name__}: {exc}")
+        return
+    missing = [c for c in codes if not fund_cache_exists(c)]
+    if not missing:
+        print(f"[prep] 基本面缓存已齐备（{len(codes)} 只），无需联网回填")
+        return
+    print(f"[prep] 回填缺失基本面缓存 {len(missing)} 只：{', '.join(missing)}")
+    try:
+        n = refresh_all(missing)
+        print(f"[prep] 基本面回填成功 {n}/{len(missing)}")
+    except Exception as exc:
+        print(f"[WARN] 基本面回填失败（报告将对缺失票标注「纯技术面」）：{type(exc).__name__}: {exc}")
 
 
 def _account_cash(holdings_value: float, cfg: dict | None = None) -> float:
@@ -1309,6 +1404,37 @@ def main() -> int:
         codes = list(dict.fromkeys(str(c) for c in pos_df["代码"].tolist()))
         log_lines.append(f"当前持仓 {len(codes)} 只: {', '.join(codes)}")
 
+        # ── 数据准备（自包含守卫；见 _refresh_klines 的审计说明）──
+        data_warn_md = ""
+        data_warn_html = ""
+        stale: list[str] = []
+        max_bar = None
+        if _allow_stale():
+            log_lines.append("ALLOW_STALE_DATA=1 → 跳过 K 线定向刷新与新鲜度复核")
+        else:
+            stale, max_bar = _refresh_klines(codes, as_of_date)
+            if stale:
+                log_lines.append(
+                    f"K 线：{len(stale)}/{len(codes)} 只缺信号日 {today} 的 bar，"
+                    f"最新可得 bar={max_bar or '—'}"
+                )
+                print(f"::error::持仓 K 线缺少信号日 {today} 的 bar：{', '.join(stale)}"
+                      f"（报告将基于最新可得 bar={max_bar or '—'}，指标口径滞后）")
+                data_warn_md = (
+                    f"> ⚠️ **数据滞后告警**：{len(stale)} 只持仓缺少信号日 {today} 的日 K"
+                    f"（{'、'.join(stale)}）。下方现价/RSI/MACD/布林/KDJ 基于最新可得 bar"
+                    f"（{max_bar or '—'}），**非信号日口径**，请勿当作当日信号使用。\n\n"
+                )
+                data_warn_html = (
+                    f'<div class="card"><div class="err">⚠️ 数据滞后告警：{len(stale)} 只持仓'
+                    f'缺少信号日 {today} 的日 K（{"、".join(stale)}）。下方现价/RSI/MACD/'
+                    f'布林/KDJ 基于最新可得 bar（{max_bar or "—"}），<b>非信号日口径</b>，'
+                    f'请勿当作当日信号使用。</div></div>'
+                )
+            else:
+                log_lines.append(f"K 线：{len(codes)} 只持仓均含信号日 {today} 的 bar（最新 {max_bar or '—'}）")
+        _refresh_fundamentals(codes)
+
         # ── 两段式：① 先逐只分析 → ② 汇总求组合分母 → ③ 再统一渲染 ──
         # ⚠️ 必须两段：仓位调整的分母 = 组合总资产，只有把全部持仓分析完才知道。
         #    旧实现把 sizing 调用写在「边分析边渲染」的同一循环里、而 portfolio_value
@@ -1419,9 +1545,12 @@ def main() -> int:
                 '→ 各票权重之和≈100%，「仓位调整」的 current_weight 系统性偏高。'
                 '如需真实占比，设 <code>ACCOUNT_CASH=&lt;账户可用现金元&gt;</code> 后重跑。</div></div>'
             ))
+        if data_warn_html:
+            sections_html.insert(0, data_warn_html)
         md = (
             f"# 持仓个股分析日报 · {today}\n\n"
             f"> 数据源：{backend} ｜ {summary_line}\n\n"
+            + data_warn_md
             + cache_warn_md
             + cash_note_md
             + (summary_md + "\n" if summary_md else "")
