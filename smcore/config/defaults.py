@@ -276,7 +276,8 @@ POSITION_SIZING_CONFIG = {
     # 误判成普遍超配（每只都 > target 8%）。计入账户现金后 current_weight 才是真实占比。
     # 现金来源优先级：环境变量 ACCOUNT_CASH > account_cash > account_cash_pct×持仓市值。
     # 默认 0 = 未配置（退回纯持仓口径，报告会显式提示如何修正）。
-    "account_cash": 0.0,                # 账户可用现金（元）；>0 时计入分母
+    # ⚠️ 2026-09-21 用户设定：账户现金 3 万元（用于「仓位调整」的真实权重分母）。
+    "account_cash": 30000.0,            # 账户可用现金（元）；>0 时计入分母
     "account_cash_pct": None,           # 或按「现金 / 总资产」比例（0~1）估算现金额
 }
 
