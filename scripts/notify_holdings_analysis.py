@@ -38,6 +38,7 @@ from smcore.holdings import compute_fifo_positions, load_trades
 from smcore.analysis import (
     build_stock_analysis,
     recommendation_from_analysis,
+    adaptive_sizing_context,
     position_sizing_recommendation,
     fundamentals_available,
 )
@@ -582,7 +583,7 @@ def render_stock(analysis: dict, pos: dict | None = None, sizing: dict | None = 
         # 超限时 aim=上限（只削超限部分）；否则 aim=政策目标
         _aim_s = f"{_aim:.1f}%" if _aim is not None else _tw_s
         _head = f"当前 {_cw_s} → {'上限' if _capped else '目标'} {_aim_s}"
-        _tw_note = f"，政策目标 {_tw_s}" if _capped and _tw is not None else ""
+        _tw_note = f"，目标 {_tw_s}" if _capped and _tw is not None else ""
         _dw_s = f"{_dw:+.1f}%" if _dw is not None else "—"
         _dv_s = f"{'+' if _dv >= 0 else ''}{fmt_money(_dv)}" if _dv is not None else "—"
         _dq_s = f"{'+' if _dq >= 0 else ''}{_dq}" if _dq is not None else "—"
@@ -1128,7 +1129,7 @@ def render_stock_html(analysis: dict, pos: dict | None = None, sizing: dict | No
         # 超限时 aim=上限（只削超限部分）；否则 aim=政策目标
         _aim_s = f"{_aim:.1f}%" if _aim is not None else _tw_s
         _head = f"当前 {_cw_s} → {'上限' if _capped else '目标'} {_aim_s}"
-        _tw_note = f"　｜　政策目标 {_tw_s}" if _capped and _tw is not None else ""
+        _tw_note = f"　｜　目标 {_tw_s}" if _capped and _tw is not None else ""
         _dw_s = f"{_dw:+.1f}%" if _dw is not None else "—"
         _dv_s = f"{'+' if _dv >= 0 else ''}{fmt_money(_dv)}" if _dv is not None else "—"
         _dq_s = f"{'+' if _dq >= 0 else ''}{_dq}" if _dq is not None else "—"
@@ -1539,6 +1540,35 @@ def main() -> int:
                                    "设 ACCOUNT_TOTAL 或 ACCOUNT_CASH 可修正）")
         )
 
+        # ── 自适应仓位：regime 定总仓位 + 组合优化层定个股权重 ──
+        # ⚠️ 必须放在逐只分析**之后**：score_weighted 口径要用到各票综合分。
+        _analyses = {e["code"]: e["analysis"] for e in entries if not e["err"]}
+        adaptive_ctx = adaptive_sizing_context(
+            codes, as_of=as_of_date, cfg=POSITION_SIZING_CONFIG, analyses=_analyses
+        )
+        if adaptive_ctx.get("enabled"):
+            _eq = float(adaptive_ctx.get("equity_ratio") or 0) * 100
+            log_lines.append(
+                f"自适应仓位[{adaptive_ctx.get('source')}]：市场状态 "
+                f"{adaptive_ctx.get('regime')}（强度 {adaptive_ctx.get('regime_strength')}）"
+                f"→ 总仓位目标 {_eq:.1f}%；个股权重方法 "
+                f"{adaptive_ctx.get('weight_method')}"
+            )
+            if adaptive_ctx.get("note"):
+                log_lines.append(f"⚠️ 自适应仓位部分降级：{adaptive_ctx['note']}")
+            _an = (
+                f"市场状态 **{adaptive_ctx.get('regime')}**"
+                f"（强度 {adaptive_ctx.get('regime_strength')}）→ 总仓位目标 **{_eq:.1f}%**；"
+                f"个股权重方法 **{adaptive_ctx.get('weight_method')}**"
+            )
+        else:
+            log_lines.append(
+                f"自适应仓位未启用 → 用静态口径（{adaptive_ctx.get('note') or '—'}）"
+            )
+            _an = f"静态口径（自适应未启用：{adaptive_ctx.get('note') or '—'}）"
+        data_warn_md += f"> 📊 **自适应仓位**：{_an}\n\n"
+        data_warn_html += f'<div class="card"><div class="sig">📊 自适应仓位：{_an}</div></div>'
+
         sections: list[str] = []
         sections_html: list[str] = []
         tech_only = 0
@@ -1557,7 +1587,7 @@ def main() -> int:
             # 故必须把持有只数传进去（注意分母=组合总资产、N=持有只数，两者口径不同，别混）。
             sizing = position_sizing_recommendation(
                 analysis, pos, portfolio_value, cfg=POSITION_SIZING_CONFIG,
-                n_holdings=len(codes),
+                n_holdings=len(codes), adaptive=adaptive_ctx,
             )
             if sizing_probe is None:
                 sizing_probe = sizing

@@ -429,33 +429,180 @@ def _rating_rank(rating: str, labels: list[str]) -> int:
     return 0
 
 
+def adaptive_sizing_context(
+    codes: list[str],
+    as_of: "date | None" = None,
+    cfg: dict | None = None,
+    analyses: dict | None = None,
+) -> dict:
+    """一次算好整份报告共用的**自适应仓位**参数：总仓位目标 + 每票波动率倾斜系数。
+
+    设计（2026-09-21）：
+    - **总仓位自适应**：``regime`` 定基线（趋势上行/震荡轮动/下行防御），``regime_strength``
+      在基线 ±span/2 内连续微调（strength 是「看多程度」合成分，0.5 恰好落在基线）。
+    - **个股权重自适应**：委托 :func:`smcore.strategy.portfolio.compute_target_weights`
+      （**与选股清单同一条实现**，方法见 ``adaptive.weight_method``），返回权重和为 1 →
+      只做**重分配**、不改变总仓位（否则会把「择时」和「分配」两件事混在一起）。
+      再按 ``min_weight_frac`` 夹下限并重新归一化，避免把某只已持仓算成 0%（≈强制清仓）。
+    - **fail-soft**：任一环节失败/数据缺失都回落静态 ``target_equity_ratio`` 口径
+      （``source="static"``），**绝不抛异常**。regime 检测本身缺数据时会退「震荡轮动」。
+
+    ⚠️ 本函数内一律**懒 import** `smcore.strategy.*`：defaults.py 明确警告过
+    `smcore.strategy` 包初始化期间（fusion→position_sizing→defaults）存在循环导入，
+    模块顶层 import 会在已导入 engine 后炸。
+
+    返回：
+    - enabled / source: 是否生效 / ``adaptive_regime`` | ``static``
+    - regime / regime_strength: 市场状态与连续强度
+    - equity_ratio: 本次总仓位目标（0~1）
+    - weight_frac: ``{code: 权重占比}``（和为 1；整体退化为等权时为 1/N）
+    - weight_method: 实际生效的分配方法（``inherit`` 会解析为具体方法名）
+    - analyses: 可选 ``{code: analysis}``，用于给 ``score_weighted`` 提供综合分
+    - note: 未生效或部分降级的原因（供日志/报告展示）
+    """
+    cfg = cfg or POSITION_SIZING_CONFIG
+    a_cfg = dict(cfg.get("adaptive") or {})
+    out: dict = {
+        "enabled": False, "source": "static", "regime": None, "regime_strength": None,
+        "equity_ratio": float(cfg.get("target_equity_ratio") or 0.70),
+        "weight_frac": {}, "weight_method": None, "note": "",
+    }
+    if not a_cfg.get("enabled"):
+        out["note"] = "adaptive.enabled=False → 用静态 target_equity_ratio"
+        return out
+
+    # ① 市场状态 → 总仓位
+    try:
+        from smcore.strategy.market import compute_market_profile
+
+        prof = compute_market_profile(as_of)
+        regime = getattr(prof, "regime", None)
+        strength = getattr(prof, "regime_strength", None)
+    except Exception as exc:                                     # noqa: BLE001
+        out["note"] = f"regime 检测失败（{type(exc).__name__}: {exc}）→ 回落静态口径"
+        return out
+
+    by_regime = a_cfg.get("equity_ratio_by_regime") or {}
+    if regime not in by_regime:
+        out["note"] = f"regime「{regime}」未命中映射表 → 回落静态口径"
+        return out
+    try:
+        s = float(strength) if strength is not None else 0.5
+    except (TypeError, ValueError):
+        s = 0.5
+    span = float(a_cfg.get("strength_span", 0.0) or 0.0)
+    equity = float(by_regime[regime]) + (s - 0.5) * span
+    bounds = list(a_cfg.get("equity_ratio_bounds") or [0.30, 0.95])
+    equity = min(max(equity, float(bounds[0])), float(bounds[-1]))
+
+    # ② 个股权重分配：委托组合优化层（与选股清单同一条实现，全配置驱动）
+    weight_frac: dict[str, float] = {}
+    method = str(a_cfg.get("weight_method", "risk_parity_erc") or "risk_parity_erc")
+    try:
+        from smcore.strategy.portfolio import compute_target_weights
+        from smcore.strategy.position_sizing import _estimate_vol20
+        from smcore.strategy.risk_rules import CONFIG as _RISK_CFG
+        from smcore.utils.code import format_stock_code
+
+        pcfg = dict(_RISK_CFG.get("portfolio") or {})
+        if method == "inherit":
+            method = str(pcfg.get("method", "score_weighted"))
+        codes6 = [format_stock_code(str(c)) for c in codes]
+        scores: dict[str, float] = {}
+        for c in codes:
+            a = (analyses or {}).get(str(c))
+            if not a or a.get("error"):
+                continue
+            try:
+                scores[format_stock_code(str(c))] = float(
+                    recommendation_from_analysis(a, cfg=RECOMMENDATION_CONFIG).get("score") or 0.0
+                )
+            except Exception:                                    # noqa: BLE001
+                pass
+        vols = _estimate_vol20(
+            codes6, window=int(a_cfg.get("vol_window") or pcfg.get("window") or 20)
+        )
+        weight_frac = compute_target_weights(
+            codes6, scores, vols,
+            method=method,
+            score_power=float(pcfg.get("score_power", 1.5)),
+            score_floor=float(pcfg.get("score_floor", 0.0)),
+            erc_max_iter=int(pcfg.get("erc_max_iter", 50)),
+            risk_parity_fallback=str(pcfg.get("risk_parity_fallback", "equal_weight")),
+        )
+        # 下限夹取 + 重新归一化：避免把某只已持仓算成 0% 目标（≈强制清仓）
+        floor = float(a_cfg.get("min_weight_frac") or 0.0)
+        if weight_frac and floor > 0:
+            weight_frac = {c: max(v, floor) for c, v in weight_frac.items()}
+            tot = sum(weight_frac.values())
+            if tot > 0:
+                weight_frac = {c: v / tot for c, v in weight_frac.items()}
+    except Exception as exc:                                     # noqa: BLE001
+        out["note"] = f"个股权重分配不可用（{type(exc).__name__}: {exc}）→ 退化为等权"
+        weight_frac = {}
+
+    out.update(
+        enabled=True, source="adaptive_regime", regime=regime,
+        regime_strength=round(s, 2), equity_ratio=round(equity, 4),
+        weight_frac=weight_frac, weight_method=method,
+    )
+    return out
+
+
 def _resolve_target_weight(
-    code: str, cfg: dict, n_holdings: int | None
-) -> tuple[float, str]:
-    """解析单票目标权重（%），返回 ``(目标, 口径来源)``。
+    code: str, cfg: dict, n_holdings: int | None, adaptive: dict | None = None
+) -> tuple[float, float, str]:
+    """解析单票目标权重（%），返回 ``(目标, 政策目标, 口径来源)``。
 
     优先级：
     1. ``per_code_targets[code]`` —— 逐票显式指定（压过全局口径）。
-    2. ``target_equity_ratio`` ÷ 持有只数 —— **推荐**：表达「想投多少、均分到 N 只」，
-       与只数解耦；N 变化时结论自动跟随。
-    3. ``target_weight_pct`` —— 旧口径：固定每票权重，隐含「总仓位 = 8% × N」，
+    2. **自适应**：``adaptive.equity_ratio × weight_frac[code]``
+       （regime 定总仓位、组合优化层定分配）。
+    3. ``target_equity_ratio`` ÷ 持有只数 —— 静态口径：表达「想投多少、均分到 N 只」。
+    4. ``target_weight_pct`` —— 旧口径：固定每票权重，隐含「总仓位 = 8% × N」，
        N 一变全表结论就变（2026-09-21 全表减仓的根因）。
 
-    口径来源（``per_code`` / ``equity_ratio`` / ``fixed_pct``）随结果返回，供报告/前端标注。
+    **政策目标**（第 2 个返回值）是**未做波动率倾斜**的 ``equity_ratio ÷ N``，
+    仅供展示/诊断（自适应下与倾斜后的生效目标可能不同）；单票硬上限一律按
+    **生效目标** ``target_w`` 比例推导（见 :func:`_resolve_hard_cap`），
+    保证目标永不越线。静态口径下政策目标与生效目标相等。
+    口径来源（``per_code`` / ``adaptive`` / ``equity_ratio`` / ``fixed_pct``）随结果返回。
     """
     per = cfg.get("per_code_targets") or {}
     if code in per:
-        return float(per[code]), "per_code"
-    ratio = cfg.get("target_equity_ratio")
-    if ratio is not None and n_holdings:
+        w = float(per[code])
+        return w, w, "per_code"
+    n = 0
+    if n_holdings:
         try:
-            r = float(ratio)
             n = int(n_holdings)
         except (TypeError, ValueError):
-            r, n = 0.0, 0
-        if r > 0 and n > 0:
-            return r * 100.0 / n, "equity_ratio"
-    return float(cfg.get("target_weight_pct", 8.0)), "fixed_pct"
+            n = 0
+    a = adaptive or {}
+    if a.get("enabled") and n > 0:
+        try:
+            ratio = float(a.get("equity_ratio") or 0.0)
+        except (TypeError, ValueError):
+            ratio = 0.0
+        if ratio > 0:
+            policy = ratio * 100.0 / n
+            try:
+                frac = float((a.get("weight_frac") or {}).get(code, 0.0) or 0.0)
+            except (TypeError, ValueError):
+                frac = 0.0
+            # 自适应未覆盖该票（如不在 codes 里）→ 退回政策等权目标
+            return (ratio * 100.0 * frac if frac > 0 else policy), policy, "adaptive"
+    ratio = cfg.get("target_equity_ratio")
+    if ratio is not None and n > 0:
+        try:
+            r = float(ratio)
+        except (TypeError, ValueError):
+            r = 0.0
+        if r > 0:
+            w = r * 100.0 / n
+            return w, w, "equity_ratio"
+    w = float(cfg.get("target_weight_pct", 8.0))
+    return w, w, "fixed_pct"
 
 
 def _resolve_hard_cap(cfg: dict, target_w: float) -> float:
@@ -483,6 +630,7 @@ def position_sizing_recommendation(
     portfolio_value: float,
     cfg: dict | None = None,
     n_holdings: int | None = None,
+    adaptive: dict | None = None,
 ) -> dict[str, object]:
     """由「目标权重 − 当前权重」的 delta 给出真正的**仓位调整**建议。
 
@@ -495,26 +643,29 @@ def position_sizing_recommendation(
     - pos: FIFO 聚合持仓 {qty, cost, ...}（来自 notify_holdings_analysis.pos_map）
     - portfolio_value: 组合市值分母（建议传 build_portfolio_summary.total_value）
     - cfg: POSITION_SIZING_CONFIG（可覆盖）
-    - n_holdings: 当前**持有只数** N。仅 ``target_equity_ratio`` 口径需要
+    - n_holdings: 当前**持有只数** N。自适应与 ``target_equity_ratio`` 口径都需要
       （每票目标 = 总仓位目标 ÷ N）；缺省 None 时退化为固定 ``target_weight_pct`` 口径。
+    - adaptive: :func:`adaptive_sizing_context` 的输出。enabled 时每票目标 =
+      ``equity_ratio × weight_frac[code]``（regime 定总仓位、组合优化层定分配）。
 
     输出（口径全部 %/元/股，前端/报告直接展示）：
     - action: 加仓 / 持有偏多 / 持有观望 / 减仓偏空 / 减仓
     - current_weight / target_weight / delta_weight (%)
-      target_weight = **政策目标**；delta_weight 是相对 ``aim_weight`` 的偏离
+      target_weight = **生效目标**（自适应下为倾斜后的目标）；delta_weight 是相对
+      ``aim_weight`` 的偏离
     - aim_weight: 本次动作实际要到达的权重。正常 = target_weight；
-      **超硬上限时 = hard_cap_weight**（只削超限部分，不一步砍到政策目标）
+      **超硬上限时 = hard_cap_weight**（只削超限部分，不一步砍到目标）
     - capped_trim: 是否因超硬上限而"只减到上限"
-    - cap_below_target: 配置自相矛盾告警（显式硬上限 < 政策目标 → 目标本身就越线）
+    - cap_below_target: 配置自相矛盾告警（显式硬上限 < 生效目标 → 目标本身就越线）
     - hard_cap_weight: 本次生效的单票硬上限（%）
-    - target_source: 政策目标来自哪个口径（per_code / equity_ratio / fixed_pct）
+    - target_source: 目标来自哪个口径（per_code / adaptive / equity_ratio / fixed_pct）
     - delta_value (元，正=应加钱 / 负=应减钱)
     - delta_qty (股，正=买 / 负=卖，已取整到一手)
     - reason: 自然语言理由
     - rating / score / faces: 复用 recommendation_from_analysis 的健康研判（仅展示，不参与 delta 决策）
 
     决策：
-    0. 先解析政策目标 target_w（_resolve_target_weight）与单票硬上限 hard_cap（_resolve_hard_cap）。
+    0. 先解析生效目标 target_w（_resolve_target_weight）与单票硬上限 hard_cap（_resolve_hard_cap）。
     1. current_weight > hard_cap → 强制「减仓」，且**只减到上限**（aim_weight = hard_cap）。
     2. delta_weight >= add_band（欠配）→ 候选加仓：研判 ≥ health_add_min_rating 才「加仓」，
        否则「持有偏多」（欠配但健康不足，暂不加）。
@@ -550,10 +701,15 @@ def position_sizing_recommendation(
     except (TypeError, ValueError):
         qty = 0.0
 
-    # 政策目标权重：per_code_targets > target_equity_ratio/N > target_weight_pct
-    target_w, target_src = _resolve_target_weight(code, cfg, n_holdings)
-    # 单票硬上限：显式 hard_cap_pct 优先；否则 = 目标 × multiple（以 ceiling 封顶）
-    hard_cap = _resolve_hard_cap(cfg, target_w)
+    # 目标权重：per_code_targets > 自适应(regime×vol) > target_equity_ratio/N > target_weight_pct
+    target_w, _policy_w, target_src = _resolve_target_weight(code, cfg, n_holdings, adaptive)
+    # 单票硬上限的推导基准 = **该票生效目标** target_w（自适应下 = 倾斜后的目标）：
+    #  - 比例化：上限 = 目标 × hard_cap_multiple（ceiling 封顶）→「允许的最大偏离」
+    #    天然与该票自身目标成比例（低波票目标大→允许更宽；高波票目标小→同步收紧）；
+    #  - _resolve_hard_cap 内兜底 max(…, target_w) → 保证上限 ≥ 目标、目标永不越线。
+    #    ⚠️ 曾误用「政策目标」做基准：风险平价给低波票的倾斜目标可 > 政策 × multiple
+    #    → cap_below_target 恒 True、报告永远要求减仓。
+    hard_cap = _resolve_hard_cap(cfg, float(target_w))
     cap_below_target = hard_cap < target_w
     add_band = float(cfg.get("add_band_pct", 2.0))
     reduce_band = float(cfg.get("reduce_band_pct", 2.0))
@@ -579,7 +735,7 @@ def position_sizing_recommendation(
         action = "减仓"
         reason = (
             f"当前权重 {current_w:.1f}% 已超单票硬上限 {hard_cap:.1f}%，先减至上限内"
-            f"（政策目标 {target_w:.1f}%）；研判「{rating}」"
+            f"（目标 {target_w:.1f}%）；研判「{rating}」"
         )
     elif delta_w >= add_band:
         # 欠配 → 候选加仓，看健康门控

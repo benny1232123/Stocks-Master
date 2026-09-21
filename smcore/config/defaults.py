@@ -260,7 +260,7 @@ RECOMMENDATION_CONFIG = {
 #  - 单票硬上限：显式 hard_cap_pct 优先；否则 = 每票目标 × hard_cap_multiple（以
 #    hard_cap_ceiling_pct 封顶）。**必须 > 目标**，否则"目标本身就越线"、报告永远要求减仓；
 #    倍数化后 cap 随持有只数自适应，任何 N 都自洽。
-#    ⚠️ 超限时只减到「上限」而非一步减到政策目标（削掉超限部分即可，避免过度交易）。
+#    ⚠️ 超限时只减到「上限」而非一步减到目标（削掉超限部分即可，避免过度交易）。
 #  - add/reduce_band_pct：当前权重相对目标偏离超过 ±band 才触发"候选加仓/减仓"。
 #  - health_add_min_rating / health_reduce_max_rating：健康门控，用 RECOMMENDATION_CONFIG.rating
 #    五档语义（推荐关注=最强 … 回避=最弱）：
@@ -278,6 +278,35 @@ POSITION_SIZING_CONFIG = {
     "hard_cap_pct": None,               # 显式绝对上限(%)；None = 按下面两项推导（推荐 None）
     "hard_cap_multiple": 1.5,           # 推导口径：上限 = 每票目标 × 1.5（4 只时 = 26.25%）
     "hard_cap_ceiling_pct": 35.0,       # 绝对天花板：任何只数下单票都不得超此权重
+    # ── 自适应仓位（2026-09-21）：regime 定总仓位 + 波动率给个股权重倾斜 ──
+    # 总仓位不再固定：基线由市场状态给，再按 regime_strength 连续微调；
+    # 个股权重 = 等权 × 波动率倾斜（按均值归一化 → 只重分配、不改总仓位）。
+    # 任一环节缺数据都 fail-soft 回落到静态 target_equity_ratio 口径，绝不抛异常。
+    # 一键关闭：把 enabled 置 False 即完全回到静态口径。
+    "adaptive": {
+        "enabled": True,
+        # regime → 总仓位基线（0~1）。三态来自 market.compute_market_profile(as_of)。
+        "equity_ratio_by_regime": {
+            "趋势上行": 0.85,
+            "震荡轮动": 0.70,
+            "下行防御": 0.55,
+        },
+        # regime_strength(0~1，是「看多程度」合成分；0.5 = 恰在基线) 在基线 ±span/2 内微调
+        "strength_span": 0.10,
+        # 总仓位绝对边界（防极端数据把仓位推到 0 或满仓）
+        "equity_ratio_bounds": [0.30, 0.95],
+        # 个股权重分配方法（**复用 smcore/strategy/portfolio.py**，与选股清单同一条实现）：
+        #   "risk_parity_erc" → w ∝ 1/σ（**默认**：只调风险、不掺观点，保持「仓位层与研判层正交」）
+        #   "equal_weight"    → 等权
+        #   "score_weighted"  → w ∝ score^power（强票多配；但会把「研判观点」引进仓位层，
+        #                        且最低分票可能被压到 ~0% —— 对已持仓等于强制清仓，慎用）
+        #   "inherit"         → 跟随 risk_config.json 的 portfolio.method（当前为 score_weighted）
+        "weight_method": "risk_parity_erc",
+        "vol_window": 20,                 # 波动率估计窗口（交易日），供 ERC / 波动估计用
+        # 单票权重下限（占总仓位的比例）：防止某只已持仓被算成 0% 目标（≈强制清仓）。
+        # 先按下限夹取、再重新归一化，保证 Σ权重 == 1（总仓位不被下限改动）。
+        "min_weight_frac": 0.05,
+    },
     "add_band_pct": 2.0,                # 欠配超过此值 → 候选加仓
     "reduce_band_pct": 2.0,             # 超配超过此值 → 候选减仓
     "health_add_min_rating": "偏积极",  # 候选加仓侧：研判须达此档（含）才真加仓
