@@ -1158,6 +1158,8 @@ def main() -> int:
         )
     else:
         # 构建持仓基础信息（代码 -> 名称/成本价/数量/买入日期）
+        # ⚠️ FIFO 同一代码可能多批次建仓 → pos_df 多出多行；必须按代码聚合，
+        # 否则 pos_map[c] 被末笔覆盖，数量/成本/盈亏全部算错（演示见 _demo_multilot.py）。
         pos_map: dict[str, dict] = {}
         for _, prow in pos_df.iterrows():
             c = str(prow.get("代码", "")).strip()
@@ -1166,19 +1168,36 @@ def main() -> int:
             cost = prow.get("成本价")
             qty = prow.get("数量")
             buy_date = prow.get("买入日期", "")
-            nm = ""
+            if cost in (None, "") or qty in (None, ""):
+                # 缺成本/数量的脏 lot 不进成本聚合；仍占位避免后续 KeyError
+                pos_map.setdefault(c, {"name": "", "cost": None, "qty": None, "buy_date": "", "lots": 0})
+                continue
             try:
-                nm = _resolve_name(c).get("name", "") or ""
-            except Exception:
+                cf = float(cost); qf = float(qty)
+            except (TypeError, ValueError):
+                continue
+            if c not in pos_map:
                 nm = ""
-            pos_map[c] = {
-                "name": nm,
-                "cost": float(cost) if cost not in (None, "") else None,
-                "qty": float(qty) if qty not in (None, "") else None,
-                "buy_date": str(buy_date) if buy_date else "",
-            }
+                try:
+                    nm = _resolve_name(c).get("name", "") or ""
+                except Exception:
+                    nm = ""
+                pos_map[c] = {
+                    "name": nm, "cost": cf, "qty": qf,
+                    "buy_date": str(buy_date) if buy_date else "", "lots": 1,
+                }
+            else:
+                p = pos_map[c]
+                nq = p["qty"] + qf
+                # 数量加权平均成本（报告单一成本基点的标准做法）
+                p["cost"] = (p["cost"] * p["qty"] + cf * qf) / nq if nq else cf
+                p["qty"] = nq
+                if str(buy_date) and (not p["buy_date"] or str(buy_date) < p["buy_date"]):
+                    p["buy_date"] = str(buy_date)
+                p["lots"] = p.get("lots", 1) + 1
 
-        codes = [str(c) for c in pos_df["代码"].tolist()]
+        # 去重：pos_df 可能同一代码多行，避免个股分析与组合汇总被重复计入
+        codes = list(dict.fromkeys(str(c) for c in pos_df["代码"].tolist()))
         log_lines.append(f"当前持仓 {len(codes)} 只: {', '.join(codes)}")
 
         sections: list[str] = []
