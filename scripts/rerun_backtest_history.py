@@ -5,7 +5,8 @@
 - socket.setdefaulttimeout(45)：防止 akshare 单次请求挂死整轮。
 - 删除旧 Multi-Backtest-*-{summary,trades,equity}.csv，强制 daily_backtest 的
   _skip_completed 不再跳过已走完窗口的信号日，使全部历史日都用「新 DAL」重新回测。
-- LOOKBACK_DAYS=200：覆盖全部 38 个信号日（DAL 跨度 20260610~20260731）。
+- LOOKBACK_DAYS=200：覆盖仓内全部 Daily-Action-List 信号日（不写死日期范围）。
+- HOLD_DAYS 取生产 CI 同值（daily-pick.yml = 12），避免与日常回测口径分叉。
 - 通过 runpy 以 __main__ 身份执行 daily_backtest.py，复用其预拉/内联过滤/回测逻辑。
 """
 import glob
@@ -30,10 +31,13 @@ except Exception:
     print("[info] TDX 不可达，回退 akshare", flush=True)
 
 os.environ["LOOKBACK_DAYS"] = "200"
-os.environ["HOLD_DAYS"] = "10"
-os.environ["BACKTEST_MIN_STRATEGIES"] = "2"
-os.environ["PREPULL_INTERVAL"] = "0.2"
-os.environ["BACKTEST_INLINE_FILTER"] = "1"
+# ⚠️ 必须与生产 CI 一致：daily-pick.yml 的回测步骤 env 是 HOLD_DAYS="12"。
+# 此处曾硬编码 "10"，会让「全量重回测」的持有期与日常回测不同，
+# 两批结果混进同一个回测面板后不可比。改用 setdefault：调用方显式指定时尊重调用方。
+os.environ.setdefault("HOLD_DAYS", "12")
+os.environ.setdefault("BACKTEST_MIN_STRATEGIES", "2")
+os.environ.setdefault("PREPULL_INTERVAL", "0.2")
+os.environ.setdefault("BACKTEST_INLINE_FILTER", "1")
 
 from smcore.artifacts import STOCK_DATA_DIR
 
