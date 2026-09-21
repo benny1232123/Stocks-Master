@@ -95,11 +95,65 @@ TOP_N = 30
 # 避免对全量 600+ 候选逐只拉 K 线导致超时。
 FILTER_PRE_TOP_N = 100
 
-# 波动率自适应止损：个股近20日波动率 vol20 → 止损比例 = clamp(VOL_STOP_MULT*vol20, 6%, 15%)。
-# 高波动股给更宽止损避免被洗、低波动给更紧；无 vol 数据时回退引擎全局 -8%。
+# ⚠️ DEPRECATED（2026-09-21）：VOL_STOP_MULT 已**不再是默认止损口径**。
+# 止损的单一真源 = `smcore/strategy/boll_levels.py::_compute_boll_levels`
+#   → stop_pct = clamp(stop_pct_vol_mult(2.5) × 日σ, stop_pct_min(4%), stop_pct_max(12%))
+# 该值由 fusion 写入 DAL 的 `stop_pct` 列，PositionMonitor 与回测都直接读它。
+# 旧口径 clamp(VOL_STOP_MULT × 日σ, 6%, 15%) 仅保留给 _resolve_stops(source="legacy")、
+# 供复现历史结果或用 BACKTEST_STOP_SOURCE=legacy 做参数实验；
+# 其他脚本（historical_backtest*.py / param_scan.py / experiment_exit_ab.py）仍 import 本常量。
 VOL_STOP_MULT = 8.0
+# 旧口径的上下限（只给 legacy 分支用）
+VOL_STOP_LEGACY_BOUNDS = (0.06, 0.15)
 # 总仓位随市场波动率缩放（高波动留现金）：改为自适应——由 cash_from_volatility(波动率分位)
 # 的 S 型曲线 + cash_from_regime(趋势) 计算，不再用硬编码 low/mid/high 映射。
+
+
+def _resolve_stops(
+    dal_values,
+    codes,
+    lv_get,
+    source: str = "dal",
+    vol_mult: float = VOL_STOP_MULT,
+    legacy_bounds=VOL_STOP_LEGACY_BOUNDS,
+) -> list:
+    """解析逐只止损比例（正数小数，如 0.10 = 10%）。
+
+    **单一真源**：``source="dal"`` 直接透传融合写入 DAL 的 ``stop_pct``
+    （= boll_levels 口径），缺失时才用同一 ``lv_get`` 口径就地补算 —— 保证
+    清单 / 网站 / PositionMonitor / 回测四者同源。
+    ``source="legacy"`` 复现旧口径 ``clamp(vol_mult × σ, 6%, 15%)``（仅实验用）。
+
+    参数：dal_values 与 codes 等长（可为 None/NaN，逐位回退）；
+    lv_get(code) -> dict，至少含 ``stop_pct`` / ``vol20``。
+    """
+    import math as _math
+    lo, hi = legacy_bounds
+    out = []
+    for i, code in enumerate(codes):
+        d = None
+        if dal_values is not None:
+            try:
+                d = dal_values[i]
+            except Exception:
+                d = None
+        try:
+            if d is not None and not (isinstance(d, float) and _math.isnan(d)) and float(d) > 0:
+                d = float(d)
+            else:
+                d = None
+        except (TypeError, ValueError):
+            d = None
+        if source == "legacy":
+            v = (lv_get(str(code).strip()) or {}).get("vol20")
+            out.append(max(lo, min(vol_mult * v, hi)) if (v and v > 0) else None)
+            continue
+        if d is not None:
+            out.append(d)
+            continue
+        sp = (lv_get(str(code).strip()) or {}).get("stop_pct")
+        out.append(float(sp) if sp else None)
+    return out
 
 
 class _PortfolioCurve:
@@ -365,6 +419,10 @@ def _backtest_one(path: Path, sd: date, hold_days: int, portfolio_curve=None, dd
     # 使自适应策略权重真正驱动收益（替代原先纯综合评分定仓）
     if "权重" in df.columns:
         sub["权重"] = pd.to_numeric(df["权重"], errors="coerce").values[: len(codes)]
+    # 逐只止损比例：**直接沿用融合写入 DAL 的 stop_pct**（单一真源，与网站/监控同源）。
+    # 引擎在 enable_exits 下优先用该列（engine: eff_stop = row_stop or 全局 stop_loss_pct）。
+    if "stop_pct" in df.columns:
+        sub["stop_pct"] = pd.to_numeric(df["stop_pct"], errors="coerce").values[: len(codes)]
     # 逐行最大持有天数（exit.hold_days_by_strategy 按策略分档；缺省 {} = 全部用全局
     # hold_days——数值待 measure_hold_by_family 测量给出证据后再配置）
     try:
@@ -386,6 +444,10 @@ def _backtest_one(path: Path, sd: date, hold_days: int, portfolio_curve=None, dd
 
     # 波动率自适应风控（market profile 驱动）
     _vol_stop_on = os.environ.get("VOL_SCALED_STOP", "1") == "1"
+    # 止损来源：dal（默认，单一真源=boll_levels 写入 DAL 的 stop_pct）| legacy（旧口径，实验用）
+    _stop_src = (os.environ.get("BACKTEST_STOP_SOURCE", "dal") or "dal").strip().lower()
+    if _stop_src not in ("dal", "legacy"):
+        _stop_src = "dal"
     _vol_pos_on = os.environ.get("VOL_POS_SCALE", "1") == "1"
     _vol_mult = float(os.environ.get("VOL_STOP_MULT", str(VOL_STOP_MULT)))
     capital_scale = 1.0
@@ -417,16 +479,17 @@ def _backtest_one(path: Path, sd: date, hold_days: int, portfolio_curve=None, dd
                 dd_breaker_extra = max(0, int(_dr.cash_pct - _base_cash))
             # 逐只波动率自适应止损：无 vol 数据回退引擎全局 -8%
             if _vol_stop_on:
-                _stops = []
-                for code in sub["代码"]:
-                    v = _lv(str(code).strip()).get("vol20")
-                    if v and v > 0:
-                        _stops.append(max(0.06, min(_vol_mult * v, 0.15)))
-                    else:
-                        _stops.append(None)
+                _stops = _resolve_stops(
+                    sub["stop_pct"].tolist() if "stop_pct" in sub.columns else None,
+                    sub["代码"].tolist(), _lv,
+                    source=_stop_src, vol_mult=_vol_mult,
+                )
                 sub["stop_pct"] = _stops
-                print(f"  [波动率自适应] 市场波动={_prof.volatility_level} 总仓位缩放={capital_scale} "
-                      f"逐只止损: {sum(1 for s in _stops if s)}/{len(_stops)} 只已定")
+                _ok = [s for s in _stops if s]
+                _med = pd.Series(_ok).median() if _ok else 0.0
+                print(f"  [止损口径] 源={_stop_src} 市场波动={_prof.volatility_level} "
+                      f"总仓位缩放={capital_scale} 逐只止损: {len(_ok)}/{len(_stops)} 只已定 "
+                      f"(中位 {_med * 100:.2f}%)")
 
     strategies = derive_strategies(df["来源策略"]) if "来源策略" in df.columns else ",".join(sorted(STRATEGY_LABEL.values()))
 
@@ -455,8 +518,10 @@ def _backtest_one(path: Path, sd: date, hold_days: int, portfolio_curve=None, dd
         #  - 均值回归(boll/relativity)：上轨止盈 + 固定/自适应止损 + 持有期满；**不启用 MA60 破位**
         #    （relativity 实测因 MA60 破位恶化 -9.57%→-13.86%）。
         # 全样本BASELINE实测 -6.37%→-5.09%(+1.28pct)，回撤 -7.81%→-6.69% 收窄。
-        # 波动率自适应：stop_loss_pct 为全局兜底(-8%)，逐只 stop_pct 列（个股 vol20 定）优先。
-        # 全局兜底也改由 compute_adaptive_exit_params 自适应（波动率/regime 浮动）。
+        # 逐只止损比例 stop_pct：**单一真源 = 融合写入 DAL 的 stop_pct**（boll_levels 口径
+        # clamp(2.5×日σ, 4%, 12%)），与清单/网站/PositionMonitor 同源；缺值时按同一
+        # boll_levels 口径就地补算。全局 stop_loss_pct 仅在该列为空时兜底。
+        # （旧口径 clamp(8×日σ, 6%, 15%) 见 BACKTEST_STOP_SOURCE=legacy，仅供实验。）
         enable_exits=True,
         use_signal_bands=True,
         stop_loss_pct=_exit["stop_loss_pct"],
@@ -492,6 +557,11 @@ def _backtest_one(path: Path, sd: date, hold_days: int, portfolio_curve=None, dd
     summary["capital_scale"] = round(capital_scale, 2)
     summary["cash_pct"] = round(cash_pct, 1)
     summary["size_mode"] = f"adaptive_weight({size_by})" if size_by else "equal"
+    # 止损口径（可追溯：下次有人说「回测止损和清单不一致」时先看这一列）
+    summary["stop_mode"] = (
+        "dal_boll(2.5σ,[4%,12%])" if _stop_src == "dal"
+        else f"legacy({_vol_mult}σ,[6%,15%])"
+    )
     summary["signals_days"] = 1
     summary["codes_count"] = len(sub)
     summary["strategies"] = strategies
