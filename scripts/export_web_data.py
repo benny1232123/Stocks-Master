@@ -58,6 +58,17 @@ def _sanitize(obj):
     return obj
 
 
+def _is_empty_payload(obj) -> bool:
+    """空载荷判定：带 ``latest`` 键但 latest 为空（None/{}）→ 视为「本次没查到」。
+
+    export 侧据此**跳过写盘**：否则会把「查不到」固化成永久快照，让
+    ``latest_backtest()`` / ``artifacts`` / ``daily_full`` 永远读回空值
+    （快照自我毒化）。不写盘 → 保留上一次有效快照或让后端走实时路径，二者都优于写 null。
+    没有 ``latest`` 键的载荷（dashboard / portfolio 等）不受影响。
+    """
+    return isinstance(obj, dict) and "latest" in obj and not obj.get("latest")
+
+
 def main() -> int:
     OUT_DIR.mkdir(parents=True, exist_ok=True)
     # 关键：导出时必须禁用后端的静态优先层——否则 GET 端点会把「旧快照」原样
@@ -76,6 +87,10 @@ def main() -> int:
             data = r.json()
             if sanitize:
                 data = _sanitize(data)
+            if _is_empty_payload(data):
+                print(f"[export] 跳过写入 {name}（空载荷：latest 为空）"
+                      f"——避免快照自我毒化，后端保留实时路径")
+                continue
             (OUT_DIR / name).write_text(
                 json.dumps(data, ensure_ascii=False, indent=1), encoding="utf-8"
             )

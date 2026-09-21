@@ -411,11 +411,18 @@ def remove_trades() -> dict:
 
 @app.get("/api/backtests/latest")
 def latest_backtest() -> dict:
+    # ⚠️ 空快照不算命中（2026-09-21）：export_web_data 会把「查不到产物」的空结果
+    # （{"latest": null, ...}）也写进 backtests_latest.json，而本端点原先"存在即返回"
+    # → 快照**自我毒化**：之后每次都命中空快照，永远返回 null 且不可能自愈。
+    # 故 latest 为空的快照一律视为 miss，继续走实时路径；export 侧也同步不写空载荷。
     snap = _web_snapshot("backtests_latest.json")
-    if snap is not None:
+    if snap and snap.get("latest"):
         return snap
     latest = find_latest_file_any(
         [
+            # 现行管线产物（daily-pick.yml → scripts/daily_backtest.py）
+            "Multi-Backtest-*-summary.csv",
+            # 以下为已退役家族：远端已 0 个文件，保留仅为兼容遗留产物目录
             "Signal-Backtest-*-summary.csv",
             "Trade-Backtest-*-summary.csv",
             "*-portfolio-summary.csv",
