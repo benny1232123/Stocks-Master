@@ -252,8 +252,15 @@ RECOMMENDATION_CONFIG = {
 # 二者并列展示在持仓日报，避免"把股票健康度误读成加钱指令"。
 #
 # 设计原则（符合"权重/阈值集中配置、禁散落魔数"）：
-#  - 单票目标权重 target_weight_pct：组合层"等权偏中枢"默认目标，per_code_targets 可逐票覆盖。
-#  - hard_cap_pct：单票硬上限，超过此权重**无论研判如何**都强制减仓（与 MAX_SINGLE_WEIGHT_PCT 同口径）。
+#  - 单票目标权重（三口径，优先级从高到低）：
+#      ① per_code_targets[code]    —— 逐票显式覆盖（%）
+#      ② target_equity_ratio ÷ N   —— 总仓位目标均分到 N 只（**推荐**，与持有只数解耦）
+#      ③ target_weight_pct         —— 固定每票权重（%）：隐含"总仓位 = 8% × N"，
+#                                     N 一变全表结论就变 <- 2026-09-21 全表减仓的根因
+#  - 单票硬上限：显式 hard_cap_pct 优先；否则 = 每票目标 × hard_cap_multiple（以
+#    hard_cap_ceiling_pct 封顶）。**必须 > 目标**，否则"目标本身就越线"、报告永远要求减仓；
+#    倍数化后 cap 随持有只数自适应，任何 N 都自洽。
+#    ⚠️ 超限时只减到「上限」而非一步减到政策目标（削掉超限部分即可，避免过度交易）。
 #  - add/reduce_band_pct：当前权重相对目标偏离超过 ±band 才触发"候选加仓/减仓"。
 #  - health_add_min_rating / health_reduce_max_rating：健康门控，用 RECOMMENDATION_CONFIG.rating
 #    五档语义（推荐关注=最强 … 回避=最弱）：
@@ -263,8 +270,14 @@ RECOMMENDATION_CONFIG = {
 #        只做温和再平衡（减仓偏空、理由中性），不判为看空。
 #  - lot_size：A股一手=100股（交易所规则），delta_qty 取整到此。
 POSITION_SIZING_CONFIG = {
-    "target_weight_pct": 8.0,           # 单票目标权重（%）
-    "hard_cap_pct": 15.0,               # 单票硬上限（%），超过强制减仓
+    # ── 单票目标权重：优先级 per_code_targets > target_equity_ratio > target_weight_pct ──
+    "target_equity_ratio": 0.70,        # ① 总仓位目标(0~1) ÷ 持有只数 = 每票目标。推荐：与只数解耦。
+                                        #    现持 4 只 → 17.5%/只；加到 6 只自动变 11.7%，无需改配置。
+    "target_weight_pct": 8.0,           # ③ 固定每票目标(%)：仅当 target_equity_ratio=None 时生效
+    # ── 单票硬上限：显式 hard_cap_pct 优先；否则 = 每票目标 × multiple，以 ceiling 封顶 ──
+    "hard_cap_pct": None,               # 显式绝对上限(%)；None = 按下面两项推导（推荐 None）
+    "hard_cap_multiple": 1.5,           # 推导口径：上限 = 每票目标 × 1.5（4 只时 = 26.25%）
+    "hard_cap_ceiling_pct": 35.0,       # 绝对天花板：任何只数下单票都不得超此权重
     "add_band_pct": 2.0,                # 欠配超过此值 → 候选加仓
     "reduce_band_pct": 2.0,             # 超配超过此值 → 候选减仓
     "health_add_min_rating": "偏积极",  # 候选加仓侧：研判须达此档（含）才真加仓

@@ -429,8 +429,60 @@ def _rating_rank(rating: str, labels: list[str]) -> int:
     return 0
 
 
+def _resolve_target_weight(
+    code: str, cfg: dict, n_holdings: int | None
+) -> tuple[float, str]:
+    """解析单票目标权重（%），返回 ``(目标, 口径来源)``。
+
+    优先级：
+    1. ``per_code_targets[code]`` —— 逐票显式指定（压过全局口径）。
+    2. ``target_equity_ratio`` ÷ 持有只数 —— **推荐**：表达「想投多少、均分到 N 只」，
+       与只数解耦；N 变化时结论自动跟随。
+    3. ``target_weight_pct`` —— 旧口径：固定每票权重，隐含「总仓位 = 8% × N」，
+       N 一变全表结论就变（2026-09-21 全表减仓的根因）。
+
+    口径来源（``per_code`` / ``equity_ratio`` / ``fixed_pct``）随结果返回，供报告/前端标注。
+    """
+    per = cfg.get("per_code_targets") or {}
+    if code in per:
+        return float(per[code]), "per_code"
+    ratio = cfg.get("target_equity_ratio")
+    if ratio is not None and n_holdings:
+        try:
+            r = float(ratio)
+            n = int(n_holdings)
+        except (TypeError, ValueError):
+            r, n = 0.0, 0
+        if r > 0 and n > 0:
+            return r * 100.0 / n, "equity_ratio"
+    return float(cfg.get("target_weight_pct", 8.0)), "fixed_pct"
+
+
+def _resolve_hard_cap(cfg: dict, target_w: float) -> float:
+    """解析单票硬上限（%）。
+
+    显式 ``hard_cap_pct`` 优先（显式即绝对，尊重调用方）；否则按 ``目标 ×
+    hard_cap_multiple`` 推导，并以 ``hard_cap_ceiling_pct`` 封顶。
+
+    为什么按目标倍数推导：固定上限与「按总仓位推导的目标」会互相矛盾 ——
+    例如 2 只票、总仓位 70% → 每票目标 35%；若上限仍写 15%，目标本身就越线、
+    报告会永远要求减仓。倍数化后 cap 随持有只数自适应，任何 N 都自洽。
+    推导口径下再取 ``max(…, target_w)``：上限绝不低于目标本身（ceiling 低于目标时兜底）。
+    """
+    explicit = cfg.get("hard_cap_pct")
+    if explicit is not None:
+        return float(explicit)
+    mult = float(cfg.get("hard_cap_multiple", 1.5))
+    ceiling = float(cfg.get("hard_cap_ceiling_pct", 35.0))
+    return max(min(target_w * mult, ceiling), target_w)
+
+
 def position_sizing_recommendation(
-    analysis: dict, pos: dict | None, portfolio_value: float, cfg: dict | None = None
+    analysis: dict,
+    pos: dict | None,
+    portfolio_value: float,
+    cfg: dict | None = None,
+    n_holdings: int | None = None,
 ) -> dict[str, object]:
     """由「目标权重 − 当前权重」的 delta 给出真正的**仓位调整**建议。
 
@@ -443,17 +495,27 @@ def position_sizing_recommendation(
     - pos: FIFO 聚合持仓 {qty, cost, ...}（来自 notify_holdings_analysis.pos_map）
     - portfolio_value: 组合市值分母（建议传 build_portfolio_summary.total_value）
     - cfg: POSITION_SIZING_CONFIG（可覆盖）
+    - n_holdings: 当前**持有只数** N。仅 ``target_equity_ratio`` 口径需要
+      （每票目标 = 总仓位目标 ÷ N）；缺省 None 时退化为固定 ``target_weight_pct`` 口径。
 
     输出（口径全部 %/元/股，前端/报告直接展示）：
     - action: 加仓 / 持有偏多 / 持有观望 / 减仓偏空 / 减仓
     - current_weight / target_weight / delta_weight (%)
+      target_weight = **政策目标**；delta_weight 是相对 ``aim_weight`` 的偏离
+    - aim_weight: 本次动作实际要到达的权重。正常 = target_weight；
+      **超硬上限时 = hard_cap_weight**（只削超限部分，不一步砍到政策目标）
+    - capped_trim: 是否因超硬上限而"只减到上限"
+    - cap_below_target: 配置自相矛盾告警（显式硬上限 < 政策目标 → 目标本身就越线）
+    - hard_cap_weight: 本次生效的单票硬上限（%）
+    - target_source: 政策目标来自哪个口径（per_code / equity_ratio / fixed_pct）
     - delta_value (元，正=应加钱 / 负=应减钱)
     - delta_qty (股，正=买 / 负=卖，已取整到一手)
     - reason: 自然语言理由
     - rating / score / faces: 复用 recommendation_from_analysis 的健康研判（仅展示，不参与 delta 决策）
 
     决策：
-    1. current_weight > hard_cap → 强制「减仓」（超单票硬上限，无论研判）。
+    0. 先解析政策目标 target_w（_resolve_target_weight）与单票硬上限 hard_cap（_resolve_hard_cap）。
+    1. current_weight > hard_cap → 强制「减仓」，且**只减到上限**（aim_weight = hard_cap）。
     2. delta_weight >= add_band（欠配）→ 候选加仓：研判 ≥ health_add_min_rating 才「加仓」，
        否则「持有偏多」（欠配但健康不足，暂不加）。
     3. delta_weight <= -reduce_band（超配）→ 候选减仓：研判 ≤ health_reduce_max_rating 才
@@ -475,6 +537,8 @@ def position_sizing_recommendation(
     if close is None or not portfolio_value:
         return {
             "action": "未知", "current_weight": None, "target_weight": None,
+            "aim_weight": None, "capped_trim": False, "cap_below_target": False,
+            "target_source": None, "hard_cap_weight": None,
             "delta_weight": None, "delta_value": None, "delta_qty": None,
             "reason": "缺少最新价或组合市值，无法测算仓位",
             "rating": rating, "score": score, "faces": faces,
@@ -486,11 +550,11 @@ def position_sizing_recommendation(
     except (TypeError, ValueError):
         qty = 0.0
 
-    target_w = float(cfg.get("target_weight_pct", 8.0))
-    per = cfg.get("per_code_targets") or {}
-    if code in per:
-        target_w = float(per[code])
-    hard_cap = float(cfg.get("hard_cap_pct", 15.0))
+    # 政策目标权重：per_code_targets > target_equity_ratio/N > target_weight_pct
+    target_w, target_src = _resolve_target_weight(code, cfg, n_holdings)
+    # 单票硬上限：显式 hard_cap_pct 优先；否则 = 目标 × multiple（以 ceiling 封顶）
+    hard_cap = _resolve_hard_cap(cfg, target_w)
+    cap_below_target = hard_cap < target_w
     add_band = float(cfg.get("add_band_pct", 2.0))
     reduce_band = float(cfg.get("reduce_band_pct", 2.0))
     add_min = str(cfg.get("health_add_min_rating", "偏积极"))
@@ -499,7 +563,10 @@ def position_sizing_recommendation(
 
     current_value = float(close) * qty
     current_w = current_value / float(portfolio_value) * 100.0
-    delta_w = target_w - current_w
+    # 超硬上限 → 只减到「上限」而非一步减到政策目标（削掉超限部分即可，避免过度交易）
+    capped_trim = current_w > hard_cap
+    aim_w = hard_cap if capped_trim else target_w
+    delta_w = aim_w - current_w
 
     rank_labels = [r.get("label") for r in RECOMMENDATION_CONFIG.get("rating", []) if r.get("label")]
     rank = _rating_rank(rating, rank_labels)
@@ -508,11 +575,11 @@ def position_sizing_recommendation(
     avoid_rank = _rating_rank("回避", rank_labels)
 
     # ── 决策 ──
-    if current_w > hard_cap:
+    if capped_trim:
         action = "减仓"
         reason = (
-            f"当前权重 {current_w:.1f}% 已超单票硬上限 {hard_cap:.0f}%，"
-            f"须降至上限内；研判「{rating}」"
+            f"当前权重 {current_w:.1f}% 已超单票硬上限 {hard_cap:.1f}%，先减至上限内"
+            f"（政策目标 {target_w:.1f}%）；研判「{rating}」"
         )
     elif delta_w >= add_band:
         # 欠配 → 候选加仓，看健康门控
@@ -568,6 +635,11 @@ def position_sizing_recommendation(
         "action": action,
         "current_weight": round(current_w, 2),
         "target_weight": round(target_w, 2),
+        "aim_weight": round(aim_w, 2),
+        "capped_trim": capped_trim,
+        "cap_below_target": cap_below_target,
+        "hard_cap_weight": round(hard_cap, 2),
+        "target_source": target_src,
         "delta_weight": round(delta_w, 2),
         "delta_value": round(delta_value, 2),
         "delta_qty": delta_qty,

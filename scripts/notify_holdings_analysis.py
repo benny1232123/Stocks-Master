@@ -572,17 +572,23 @@ def render_stock(analysis: dict, pos: dict | None = None, sizing: dict | None = 
     if sizing and sizing.get("action") not in (None, "未知"):
         _cw = sizing.get("current_weight")
         _tw = sizing.get("target_weight")
+        _aim = sizing.get("aim_weight")
         _dw = sizing.get("delta_weight")
         _dv = sizing.get("delta_value")
         _dq = sizing.get("delta_qty")
+        _capped = bool(sizing.get("capped_trim"))
         _cw_s = f"{_cw:.1f}%" if _cw is not None else "—"
         _tw_s = f"{_tw:.1f}%" if _tw is not None else "—"
+        # 超限时 aim=上限（只削超限部分）；否则 aim=政策目标
+        _aim_s = f"{_aim:.1f}%" if _aim is not None else _tw_s
+        _head = f"当前 {_cw_s} → {'上限' if _capped else '目标'} {_aim_s}"
+        _tw_note = f"，政策目标 {_tw_s}" if _capped and _tw is not None else ""
         _dw_s = f"{_dw:+.1f}%" if _dw is not None else "—"
         _dv_s = f"{'+' if _dv >= 0 else ''}{fmt_money(_dv)}" if _dv is not None else "—"
         _dq_s = f"{'+' if _dq >= 0 else ''}{_dq}" if _dq is not None else "—"
         lines.append(
-            f"- **⚖️ 仓位调整**：{sizing.get('action')}（当前 {_cw_s} → 目标 {_tw_s}，"
-            f"Δ {_dw_s}；建议 {_dv_s} / {_dq_s} 股）— {sizing.get('reason')}"
+            f"- **⚖️ 仓位调整**：{sizing.get('action')}（{_head}，Δ {_dw_s}{_tw_note}；"
+            f"建议 {_dv_s} / {_dq_s} 股）— {sizing.get('reason')}"
         )
     if pos:
         cost = (pos or {}).get("cost")
@@ -1112,11 +1118,17 @@ def render_stock_html(analysis: dict, pos: dict | None = None, sizing: dict | No
         }.get(sizing.get("action"), "neutral")
         _cw = sizing.get("current_weight")
         _tw = sizing.get("target_weight")
+        _aim = sizing.get("aim_weight")
         _dw = sizing.get("delta_weight")
         _dv = sizing.get("delta_value")
         _dq = sizing.get("delta_qty")
+        _capped = bool(sizing.get("capped_trim"))
         _cw_s = f"{_cw:.1f}%" if _cw is not None else "—"
         _tw_s = f"{_tw:.1f}%" if _tw is not None else "—"
+        # 超限时 aim=上限（只削超限部分）；否则 aim=政策目标
+        _aim_s = f"{_aim:.1f}%" if _aim is not None else _tw_s
+        _head = f"当前 {_cw_s} → {'上限' if _capped else '目标'} {_aim_s}"
+        _tw_note = f"　｜　政策目标 {_tw_s}" if _capped and _tw is not None else ""
         _dw_s = f"{_dw:+.1f}%" if _dw is not None else "—"
         _dv_s = f"{'+' if _dv >= 0 else ''}{fmt_money(_dv)}" if _dv is not None else "—"
         _dq_s = f"{'+' if _dq >= 0 else ''}{_dq}" if _dq is not None else "—"
@@ -1124,7 +1136,7 @@ def render_stock_html(analysis: dict, pos: dict | None = None, sizing: dict | No
         _sreason = html_escape_mod.escape(str(sizing.get("reason") or ""))
         sizing_html = (
             f'<div class="rec {_scls}">⚖️ 仓位调整：{_saction}'
-            f'　｜　当前 {_cw_s} → 目标 {_tw_s}（Δ {_dw_s}）'
+            f'　｜　{_head}（Δ {_dw_s}）{_tw_note}'
             f'　｜　建议 {_dv_s} / {_dq_s} 股'
             f'<br><span style="font-weight:400;font-size:12px">'
             f'📋 {_sreason}（与上方「股票研判」并列：研判=票本身强弱，本栏=相对目标的仓位 delta）</span></div>'
@@ -1530,6 +1542,7 @@ def main() -> int:
         sections: list[str] = []
         sections_html: list[str] = []
         tech_only = 0
+        sizing_probe: dict | None = None   # 取首只成功票的 sizing，用于日志展示目标口径
         for e in entries:
             code, pos, analysis = e["code"], e["pos"], e["analysis"]
             if e["err"]:
@@ -1539,14 +1552,27 @@ def main() -> int:
                     f'</div><div class="err">⚠️ {e["err"]}</div></div>'
                 )
                 continue
-            # 仓位调整：用组合总资产分母算 (target − current) 的 delta
+            # 仓位调整：用组合总资产分母算 (target − current) 的 delta。
+            # n_holdings=len(codes)：target_equity_ratio 口径下「每票目标 = 总仓位目标 ÷ N」，
+            # 故必须把持有只数传进去（注意分母=组合总资产、N=持有只数，两者口径不同，别混）。
             sizing = position_sizing_recommendation(
-                analysis, pos, portfolio_value, cfg=POSITION_SIZING_CONFIG
+                analysis, pos, portfolio_value, cfg=POSITION_SIZING_CONFIG,
+                n_holdings=len(codes),
             )
+            if sizing_probe is None:
+                sizing_probe = sizing
             if not fundamentals_available(analysis):
                 tech_only += 1
             sections.append(render_stock(analysis, pos, sizing))
             sections_html.append(render_stock_html(analysis, pos, sizing))
+        if sizing_probe:
+            log_lines.append(
+                f"目标权重口径[{sizing_probe.get('target_source')}]：每票目标 "
+                f"{sizing_probe.get('target_weight')}%、单票硬上限 "
+                f"{sizing_probe.get('hard_cap_weight')}%"
+                + ("（⚠️ 硬上限 < 目标：配置自相矛盾，目标本身就越线）"
+                   if sizing_probe.get("cap_below_target") else "")
+            )
         if tech_only:
             log_lines.append(
                 f"⚠️ {tech_only}/{ok} 只缺基本面数据 → 综合分退化为纯技术面（报告内已标注「纯技术面」）"
