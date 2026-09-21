@@ -9,7 +9,7 @@ from typing import Any
 import numpy as np
 import pandas as pd
 
-from smcore.config.defaults import RECOMMENDATION_CONFIG
+from smcore.config.defaults import RECOMMENDATION_CONFIG, POSITION_SIZING_CONFIG
 from smcore.data.kline import fetch_daily_k
 from smcore.indicators.boll import calc_bollinger, evaluate_boll_signal
 from smcore.strategy.fundamental import annualize_roe
@@ -403,6 +403,167 @@ def recommendation_from_analysis(
         "faces": {"technical": int(techScore), "fundamental": int(fundScore), "capital": int(capScore)},
         "rating": rating,
         "cls": {"technical": techCls, "fundamental": fundCls, "capital": capCls},
+    }
+
+
+def _rating_rank(rating: str, labels: list[str]) -> int:
+    """RECOMMENDATION_CONFIG.rating 五档 → 数值（越高越偏多）。
+
+    labels 为从高到低的 label 列表（推荐关注 … 回避）。rating 不在列表中 → 0。
+    用于仓位调整的健康门控比较，避免硬编码档位顺序。
+    """
+    for i, r in enumerate(labels):
+        if r == rating:
+            return len(labels) - i
+    return 0
+
+
+def position_sizing_recommendation(
+    analysis: dict, pos: dict | None, portfolio_value: float, cfg: dict | None = None
+) -> dict[str, object]:
+    """由「目标权重 − 当前权重」的 delta 给出真正的**仓位调整**建议。
+
+    ⚠️ 与 recommendation_from_analysis 的「股票研判」语义**正交**：
+    后者是"该票本身技术/基本面/资金综合健康度"（action=加仓 ≠ 真加钱），
+    本函数才是用户真正用于加减仓的依据 —— (target_weight − current_weight) 的 delta。
+
+    输入：
+    - analysis: build_stock_analysis 输出（提供最新收盘价 latest.close）
+    - pos: FIFO 聚合持仓 {qty, cost, ...}（来自 notify_holdings_analysis.pos_map）
+    - portfolio_value: 组合市值分母（建议传 build_portfolio_summary.total_value）
+    - cfg: POSITION_SIZING_CONFIG（可覆盖）
+
+    输出（口径全部 %/元/股，前端/报告直接展示）：
+    - action: 加仓 / 持有偏多 / 持有观望 / 减仓偏空 / 减仓
+    - current_weight / target_weight / delta_weight (%)
+    - delta_value (元，正=应加钱 / 负=应减钱)
+    - delta_qty (股，正=买 / 负=卖，已取整到一手)
+    - reason: 自然语言理由
+    - rating / score / faces: 复用 recommendation_from_analysis 的健康研判（仅展示，不参与 delta 决策）
+
+    决策：
+    1. current_weight > hard_cap → 强制「减仓」（超单票硬上限，无论研判）。
+    2. delta_weight >= add_band（欠配）→ 候选加仓：研判 ≥ health_add_min_rating 才「加仓」，
+       否则「持有偏多」（欠配但健康不足，暂不加）。
+    3. delta_weight <= -reduce_band（超配）→ 候选减仓：研判 ≤ health_reduce_max_rating 才
+       「减仓/减仓偏空」，否则仅「减仓偏空」温和再平衡（非看空）。
+    4. 其余（在 ±band 内）→ 「持有偏多/持有观望」按研判强弱定。
+    """
+    cfg = cfg or POSITION_SIZING_CONFIG
+    # 复用股票研判健康度（仅取 rating/score/faces 展示，不并入 delta 决策）
+    rec = recommendation_from_analysis(analysis, cfg=RECOMMENDATION_CONFIG)
+    rating = rec.get("rating", "中性观望")
+    score = rec.get("score", 0)
+    faces = rec.get("faces") or {}
+
+    latest = analysis.get("latest", {}) or {}
+    close = latest.get("close")
+    code = analysis.get("code", "")
+
+    # 安全基座：无价 / 无组合市值 → 无法测算
+    if close is None or not portfolio_value:
+        return {
+            "action": "未知", "current_weight": None, "target_weight": None,
+            "delta_weight": None, "delta_value": None, "delta_qty": None,
+            "reason": "缺少最新价或组合市值，无法测算仓位",
+            "rating": rating, "score": score, "faces": faces,
+        }
+
+    qty = (pos or {}).get("qty")
+    try:
+        qty = float(qty) if qty not in (None, "") else 0.0
+    except (TypeError, ValueError):
+        qty = 0.0
+
+    target_w = float(cfg.get("target_weight_pct", 8.0))
+    per = cfg.get("per_code_targets") or {}
+    if code in per:
+        target_w = float(per[code])
+    hard_cap = float(cfg.get("hard_cap_pct", 15.0))
+    add_band = float(cfg.get("add_band_pct", 2.0))
+    reduce_band = float(cfg.get("reduce_band_pct", 2.0))
+    add_min = str(cfg.get("health_add_min_rating", "偏积极"))
+    reduce_max = str(cfg.get("health_reduce_max_rating", "偏谨慎"))
+    lot = int(cfg.get("lot_size", 100)) or 100
+
+    current_value = float(close) * qty
+    current_w = current_value / float(portfolio_value) * 100.0
+    delta_w = target_w - current_w
+
+    rank_labels = [r.get("label") for r in RECOMMENDATION_CONFIG.get("rating", []) if r.get("label")]
+    rank = _rating_rank(rating, rank_labels)
+    add_min_rank = _rating_rank(add_min, rank_labels)
+    reduce_max_rank = _rating_rank(reduce_max, rank_labels)
+    avoid_rank = _rating_rank("回避", rank_labels)
+
+    # ── 决策 ──
+    if current_w > hard_cap:
+        action = "减仓"
+        reason = (
+            f"当前权重 {current_w:.1f}% 已超单票硬上限 {hard_cap:.0f}%，"
+            f"须降至上限内；研判「{rating}」"
+        )
+    elif delta_w >= add_band:
+        # 欠配 → 候选加仓，看健康门控
+        if rank >= add_min_rank:
+            action = "加仓"
+            reason = (
+                f"欠配 {delta_w:.1f}%（目标 {target_w:.1f}%）；研判「{rating}」"
+                f"达标(≥{add_min})，建议加仓至目标"
+            )
+        else:
+            action = "持有偏多"
+            reason = (
+                f"欠配 {delta_w:.1f}%（目标 {target_w:.1f}%）但研判「{rating}」"
+                f"强度不足(＜{add_min})，暂不加仓、保持观察"
+            )
+    elif delta_w <= -reduce_band:
+        # 超配 → 候选减仓
+        if rank <= reduce_max_rank:
+            action = "减仓" if rank <= avoid_rank else "减仓偏空"
+            reason = (
+                f"超配 {-delta_w:.1f}%（目标 {target_w:.1f}%）；研判「{rating}」"
+                f"偏弱(≤{reduce_max})，建议减仓"
+            )
+        else:
+            action = "减仓偏空"
+            reason = (
+                f"超配 {-delta_w:.1f}%（目标 {target_w:.1f}%）；该股研判「{rating}」尚稳，"
+                f"仅做再平衡减回目标，非看空"
+            )
+    else:
+        # 在 ±band 内，维持
+        if rank >= add_min_rank:
+            action = "持有偏多"
+        else:
+            action = "持有观望"
+        reason = (
+            f"权重 {current_w:.1f}% 在目标±{add_band:.0f}% 内（目标 {target_w:.1f}%）；"
+            f"研判「{rating}」，维持"
+        )
+
+    # ── delta 量纲 ──
+    delta_value = delta_w / 100.0 * float(portfolio_value)
+    if delta_value >= 0:
+        raw_qty = delta_value / float(close) / lot if close else 0.0
+        delta_qty = int(math.ceil(raw_qty)) * lot if raw_qty > 0 else 0
+    else:
+        raw_qty = -delta_value / float(close) / lot if close else 0.0
+        sell_qty = int(math.floor(raw_qty)) * lot if raw_qty > 0 else 0
+        held_lots = int(qty // lot) * lot if qty > 0 else 0
+        delta_qty = -min(sell_qty, held_lots)
+
+    return {
+        "action": action,
+        "current_weight": round(current_w, 2),
+        "target_weight": round(target_w, 2),
+        "delta_weight": round(delta_w, 2),
+        "delta_value": round(delta_value, 2),
+        "delta_qty": delta_qty,
+        "reason": reason,
+        "rating": rating,
+        "score": score,
+        "faces": faces,
     }
 
 

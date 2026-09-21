@@ -245,6 +245,35 @@ RECOMMENDATION_CONFIG = {
 }
 
 
+# ── 仓位调整（目标权重 − 当前权重 的 delta，驱动真实加减仓）──
+# ⚠️ 与上方 RECOMMENDATION_CONFIG 的「股票研判」语义**正交**：
+#   - 股票研判 = 该票本身技术/基本面/资金综合健康度（"加仓"≠真加钱）；
+#   - 仓位调整 = (target_weight − current_weight) 的 delta，才是用户加减仓的依据。
+# 二者并列展示在持仓日报，避免"把股票健康度误读成加钱指令"。
+#
+# 设计原则（符合"权重/阈值集中配置、禁散落魔数"）：
+#  - 单票目标权重 target_weight_pct：组合层"等权偏中枢"默认目标，per_code_targets 可逐票覆盖。
+#  - hard_cap_pct：单票硬上限，超过此权重**无论研判如何**都强制减仓（与 MAX_SINGLE_WEIGHT_PCT 同口径）。
+#  - add/reduce_band_pct：当前权重相对目标偏离超过 ±band 才触发"候选加仓/减仓"。
+#  - health_add_min_rating / health_reduce_max_rating：健康门控，用 RECOMMENDATION_CONFIG.rating
+#    五档语义（推荐关注=最强 … 回避=最弱）：
+#      * 候选加仓侧：研判须 ≥ health_add_min_rating 才真加仓；低于则"欠配但暂不加(持有偏多)"，
+#        避免往弱票追仓。
+#      * 候选减仓侧：研判 ≤ health_reduce_max_rating 才判"减仓/减仓偏空"；高于（健康尚可）
+#        只做温和再平衡（减仓偏空、理由中性），不判为看空。
+#  - lot_size：A股一手=100股（交易所规则），delta_qty 取整到此。
+POSITION_SIZING_CONFIG = {
+    "target_weight_pct": 8.0,           # 单票目标权重（%）
+    "hard_cap_pct": 15.0,               # 单票硬上限（%），超过强制减仓
+    "add_band_pct": 2.0,                # 欠配超过此值 → 候选加仓
+    "reduce_band_pct": 2.0,             # 超配超过此值 → 候选减仓
+    "health_add_min_rating": "偏积极",  # 候选加仓侧：研判须达此档（含）才真加仓
+    "health_reduce_max_rating": "偏谨慎",  # 候选减仓侧：研判达此档（含）才判减仓
+    "lot_size": 100,                    # A股一手=100股
+    "per_code_targets": {},             # 可选：代码→目标权重覆盖，如 {"600519": 12.0}
+}
+
+
 def is_low_memory_host() -> bool:
     """内存 ≤1.5GB 的 Linux 容器（Render free 等托管环境）判定。
 

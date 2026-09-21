@@ -29,8 +29,8 @@ if ROOT not in sys.path:
 
 from smcore.storage.trades_repo import get_trade_repository
 from smcore.holdings import compute_fifo_positions, load_trades
-from smcore.analysis import build_stock_analysis, recommendation_from_analysis
-from smcore.config.defaults import STOCK_DATA_DIR
+from smcore.analysis import build_stock_analysis, recommendation_from_analysis, position_sizing_recommendation
+from smcore.config.defaults import STOCK_DATA_DIR, POSITION_SIZING_CONFIG
 from smcore.notify.email import send_email
 from smcore.stock_names import resolve as _resolve_name
 from smcore.data.kline import fetch_daily_k
@@ -294,7 +294,7 @@ def render_compare_md(hist: dict) -> str:
     return f"## 📅 近 {len(dates)} 天持仓建议对比\n\n{head}\n{sep}\n" + "\n".join(rows) + "\n"
 
 
-def render_stock(analysis: dict, pos: dict | None = None) -> str:
+def render_stock(analysis: dict, pos: dict | None = None, sizing: dict | None = None) -> str:
     """把单只票的分析字典渲染成 Markdown 段落。
 
     pos: 来自 FIFO 持仓的 {name, cost, qty, buy_date}（可选）。
@@ -376,6 +376,22 @@ def render_stock(analysis: dict, pos: dict | None = None) -> str:
         f"- **持仓建议**：{rec.get('action')}（{rec.get('reason')}）",
         f"- **三维打分**：{_faces_line}（各面 0-100，与网站评分一致；≥65 偏多/优质/活跃，<45 偏空/偏弱/清淡）",
     ]
+    # ── 仓位调整（与「股票研判」正交：target − current 的 delta，才是加减仓依据）──
+    if sizing and sizing.get("action") not in (None, "未知"):
+        _cw = sizing.get("current_weight")
+        _tw = sizing.get("target_weight")
+        _dw = sizing.get("delta_weight")
+        _dv = sizing.get("delta_value")
+        _dq = sizing.get("delta_qty")
+        _cw_s = f"{_cw:.1f}%" if _cw is not None else "—"
+        _tw_s = f"{_tw:.1f}%" if _tw is not None else "—"
+        _dw_s = f"{_dw:+.1f}%" if _dw is not None else "—"
+        _dv_s = f"{'+' if _dv >= 0 else ''}{fmt_money(_dv)}" if _dv is not None else "—"
+        _dq_s = f"{'+' if _dq >= 0 else ''}{_dq}" if _dq is not None else "—"
+        lines.append(
+            f"- **⚖️ 仓位调整**：{sizing.get('action')}（当前 {_cw_s} → 目标 {_tw_s}，"
+            f"Δ {_dw_s}；建议 {_dv_s} / {_dq_s} 股）— {sizing.get('reason')}"
+        )
     if pos:
         cost = (pos or {}).get("cost")
         qty = (pos or {}).get("qty")
@@ -702,7 +718,7 @@ def build_fundamentals_compare(today: str, holdings: list[dict]) -> tuple[str, s
     return html, md
 
 
-def render_stock_html(analysis: dict, pos: dict | None = None) -> str:
+def render_stock_html(analysis: dict, pos: dict | None = None, sizing: dict | None = None) -> str:
     """把单只票的分析字典渲染成好看的 HTML 卡片。
 
     pos: 来自 FIFO 持仓的 {name, cost, qty, buy_date}（可选）。
@@ -888,6 +904,35 @@ def render_stock_html(analysis: dict, pos: dict | None = None) -> str:
         f'　｜　{_rec_reason}{faces_html}</div>'
     )
 
+    # ── 仓位调整（与「股票研判」正交：target − current 的 delta，才是加减仓依据）──
+    sizing_html = ""
+    if sizing and sizing.get("action") not in (None, "未知"):
+        # 注意：本函数内 _rec_cls 是字符串(CSS 类)，故此处用内联映射取仓位调整配色
+        _scls = {
+            "加仓": "bull", "持有偏多": "bull",
+            "减仓": "bear", "减仓偏空": "bear",
+            "持有观望": "neutral", "未知": "neutral",
+        }.get(sizing.get("action"), "neutral")
+        _cw = sizing.get("current_weight")
+        _tw = sizing.get("target_weight")
+        _dw = sizing.get("delta_weight")
+        _dv = sizing.get("delta_value")
+        _dq = sizing.get("delta_qty")
+        _cw_s = f"{_cw:.1f}%" if _cw is not None else "—"
+        _tw_s = f"{_tw:.1f}%" if _tw is not None else "—"
+        _dw_s = f"{_dw:+.1f}%" if _dw is not None else "—"
+        _dv_s = f"{'+' if _dv >= 0 else ''}{fmt_money(_dv)}" if _dv is not None else "—"
+        _dq_s = f"{'+' if _dq >= 0 else ''}{_dq}" if _dq is not None else "—"
+        _saction = html_escape_mod.escape(str(sizing.get("action") or ""))
+        _sreason = html_escape_mod.escape(str(sizing.get("reason") or ""))
+        sizing_html = (
+            f'<div class="rec {_scls}">⚖️ 仓位调整：{_saction}'
+            f'　｜　当前 {_cw_s} → 目标 {_tw_s}（Δ {_dw_s}）'
+            f'　｜　建议 {_dv_s} / {_dq_s} 股'
+            f'<br><span style="font-weight:400;font-size:12px">'
+            f'📋 {_sreason}（与上方「股票研判」并列：研判=票本身强弱，本栏=相对目标的仓位 delta）</span></div>'
+        )
+
     return f"""
     <div class="card">
       <div class="card-head">
@@ -899,6 +944,7 @@ def render_stock_html(analysis: dict, pos: dict | None = None) -> str:
       <div class="sig">Boll 信号：{sig}</div>
       {pos_html}
       {rec_html}
+      {sizing_html}
       {bar_html}
       <div class="metrics">
         {_m("MA5", ma5)} {_m("MA10", ma10)} {_m("MA20", ma20)} {_m("MA60", ma60)}
@@ -1226,10 +1272,16 @@ def main() -> int:
                 ok += 1
             stock_list.append((analysis, pos))
             holdings_meta.append({"code": code, "name": (pos or {}).get("name", ""), "analysis": analysis})
-            sections.append(render_stock(analysis, pos))
-            sections_html.append(render_stock_html(analysis, pos))
+            # 仓位调整：用组合市值分母算 (target − current) 的 delta
+            sizing = position_sizing_recommendation(analysis, pos, portfolio_value, cfg=POSITION_SIZING_CONFIG)
+            sections.append(render_stock(analysis, pos, sizing))
+            sections_html.append(render_stock_html(analysis, pos, sizing))
 
         summary = build_portfolio_summary(stock_list)
+        # 组合市值分母：用于「仓位调整」的 current_weight 计算（= Σ close×qty）。
+        # 注：本报告不含现金，故各票权重之和≈100%（若账户有现金则实际占比更低，
+        # 用户可通过 POSITION_SIZING_CONFIG.target_weight_pct 下调以预留现金）。
+        portfolio_value = summary.get("total_value") or 0.0
         summary_line = f"成功 {ok} 只 / 失败 {failed} 只 / 共 {len(codes)} 只"
         summary_md = render_summary_md(summary, len(codes))
         summary_html = render_summary_html(summary, len(codes))
