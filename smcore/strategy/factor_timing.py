@@ -3,8 +3,8 @@
 """因子生效开关（factor timing overlay）——生产路径（2026-09-16）.
 
 每日按「信念 IC」（分配器给策略 s 的权重 vs s 选中票当日平均前向收益的滚动 Spearman）
-给 5 个策略（=5 类因子）打分：仅当近期信念 IC 显著为正才让该因子"生效"，否则其权重清零、
-其余按比例重分配。纯数据驱动、零硬编码。
+给 5 个策略（=5 类因子）打分：仅当近期信念 IC **显著为负**才把该因子权重清零，
+其余（正 IC / 近零 IC）一律保留——防止好因子因"不显著"被误杀。纯数据驱动、零硬编码。
 
 开关：``CONFIG["factor_timing"].enabled``（默认关）。由
 ``scripts/walk_forward_factor_timing.py`` 的 walk-forward 稳健门控判定后写回；
@@ -84,7 +84,9 @@ def factor_timing_mask_from_points(
 ) -> dict[str, bool]:
     """纯函数。points={strategy:[(day,w,ret)]}；prev_days=严格早于 signal_date 的信号日（已按窗口截取）。
 
-    窗口内点数不足 / IC 无定义 → 保留（无证据不判失效）；否则仅当信念 IC 显著为正才生效。
+    判据（保守、防误杀）：窗口内点数不足 / IC 无定义 → 保留（无证据不判失效）；
+    否则**仅当信念 IC 显著为负才清零**，其余（正 IC、近零 IC）一律保留。
+    ⇒ 好因子不会因"不显著"被枪毙，只有被证据明确证伪（显著为负）的坏因子才出局。
     """
     past_set = set(prev_days)
     mask: dict[str, bool] = {}
@@ -99,7 +101,8 @@ def factor_timing_mask_from_points(
             mask[s] = True
             continue
         crit = z / math.sqrt(n - 1)
-        mask[s] = bool(ic > 0 and abs(ic) >= crit)
+        # 仅当 IC 显著为负才清零；正 IC / 近零 IC 一律保留（防止误杀好因子）
+        mask[s] = bool(ic >= -crit)
     return mask
 
 

@@ -2,7 +2,7 @@
 
 守护：
 1. Spearman/秩纯函数边界；
-2. 核心 mask 逻辑（显著正 → 生效、显著负 → 关闭、点数不足 → 保留）；
+2. 核心 mask 逻辑（**显著负 → 清零；正 IC / 近零 IC / 不显著 → 一律保留**——防误杀好因子）；
 3. **分歧守卫**：验证器 _factor_timing_mask 与本模块 factor_timing_mask_from_points 给同一 mask；
 4. apply_mask 清零+重归一化；全关则原样返回；
 5. 生产接线 _apply_factor_timing 取整且和为 100。
@@ -50,6 +50,34 @@ def test_mask_keeps_factor_when_insufficient_points():
     pts = _pts({"pvcorr20": [(0.1, 0.1), (0.2, 0.2)]})  # 仅 2 点 < min_n
     mask = ft.factor_timing_mask_from_points(pts, _DAYS6, min_n=5, z=1.96)
     assert mask["pvcorr20"] is True  # 无证据不判失效
+
+
+def test_mask_keeps_positive_not_significant_ic():
+    """核心修复守卫：正但不显著的 IC 必须保留（旧逻辑因"不显著"把它清零 = 误杀好因子）。
+
+    w=[1,2,3,4,5]、r=[1,2,3,5,4]（末两位交换）→ Spearman≈+0.90；n=5 时 crit=0.98，
+    属于"正但不显著"区间。新逻辑：ic(0.90) >= -crit(-0.98) → 保留。
+    """
+    r = [1, 2, 3, 5, 4]
+    pts = {s: [] for s in ALL_STRATEGIES}
+    pts["skew60"] = [(_DAYS6[i], float(1 + i), float(r[i])) for i in range(5)]
+    mask = ft.factor_timing_mask_from_points(pts, _DAYS6, min_n=5, z=1.96)
+    assert mask["skew60"] is True
+
+
+def test_mask_kills_significant_negative_ic():
+    """显著为负的 IC 仍清零（层的正经职责：杀真正失效的坏因子）。"""
+    pts = _pts({"illiq20": [(0.4 + 0.1 * i, -0.1 * i) for i in range(6)]})  # 完美负相关 → ic≈-1
+    mask = ft.factor_timing_mask_from_points(pts, _DAYS6, min_n=5, z=1.96)
+    assert mask["illiq20"] is False
+
+
+def test_mask_keeps_degenerate_ic_none():
+    """IC 无定义（收益无方差）一律保留——不能把"数据退化"误判为失效。"""
+    pts = _pts({"cvamt20": [(0.1 + 0.05 * i, 0.5) for i in range(6)]})  # r 恒为 0.5 → vy=0 → None
+    mask = ft.factor_timing_mask_from_points(pts, _DAYS6, min_n=5, z=1.96)
+    assert mask["cvamt20"] is True
+
 
 
 def test_shared_core_matches_validator(monkeypatch):

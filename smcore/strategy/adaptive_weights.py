@@ -82,16 +82,19 @@ _BUILTIN_DEFAULTS = {
     # 控（scripts/walk_forward_pw_edge.py）判定开启，绝不手动改权重。默认关闭。
     "position_weighted": False,
     },
-    # ── 因子生效开关（factor timing overlay，2026-09-16 立项）──
+    # ── 因子生效开关（factor timing overlay，2026-09-16 立项；2026-09-21 修正判据）──
     # 开启后 _weights_for_day 在基权重之上套用「因子生效开关」：近期信念 IC（分配器权重 vs
-    # 该策略选中票前向收益的滚动 Spearman）非显著为正的策略权重清零、其余按比例重分配。
-    # 即「每日给各因子打分、只保留有效的方法」，零硬编码、纯数据驱动。经 walk-forward 稳健门
+    # 该策略选中票前向收益的滚动 Spearman）**仅当显著为负**才把该因子权重清零，其余（正 IC /
+    # 近零 IC / 不显著）一律保留并按比例重分配——防止好因子因「不显著」被误杀。
+    # 即「每日给各因子打分、只抑制被证据证伪的方法」，零硬编码、纯数据驱动。经 walk-forward 稳健门
     # 控（scripts/walk_forward_factor_timing.py）判定开启；月度自动化 tripwire 可自动回滚。
     # ⚠️ 必须注册于此 _BUILTIN_DEFAULTS：否则 _load_config 忽略它、save_config 丢弃它
     #    （前者致开关静默失效，后者致写回时整个 factor_timing 块被抹掉——2026-09-16 踩坑）。
-    # ⚠️ 目前消费方仅有 scripts/walk_forward_validator.py（回测/验证口径）；生产选股
-    #    （smcore.adaptive_weights.compute_adaptive_allocation / fusion）尚未接入本开关，
-    #    故开启它暂不改变线上选股权重——需先完成生产接线（见 memory 2026-09-16）。
+    #    （本处为安全内置默认 enabled=False；部署用 adaptive_weights_config.json 覆写为
+    #     true，故线上实际生效——见下方「生产已接入」说明。）
+    # ✅ 生产已接入：fusion.py → compute_adaptive_allocation()（L982）惰性委托
+    #    smcore.strategy.factor_timing.apply_mask，故 CONFIG.enabled=true 时本覆盖层**生效于
+    #    线上选股权重**（2026-09-21 核对；旧注释「未接入 / 开启不改变线上权重」已过时）。
     "factor_timing": {"enabled": False, "window": 10, "min_n": 5},
     # ── 硬编码策略黑名单（2026-09-17）：被证据判死刑的策略强制清零，不参与分配。
     # 与 factor_timing 覆盖层互补：覆盖层是「数据驱动、可翻案」门控（theme/cctv 当前被其清零、
@@ -771,7 +774,7 @@ def cash_from_drawdown(
 
 
 def _apply_factor_timing(weights: dict, signal_date: Optional[str] = None) -> dict:
-    """因子生效开关（默认关）：清零近期信念 IC 非显著为正的因子权重并按比例重分配。
+    """因子生效开关（默认关）：**仅当**近期信念 IC 显著为负才清零该因子权重，其余（正 IC / 近零 IC / 不显著）一律保留并按比例重分配——防误杀好因子。
 
     惰性 import smcore.strategy.factor_timing（仅开启时加载，不增启动内存）；
     任何异常一律 fail-soft 返回原权重（绝不让 overlay 故障拖垮主链路）。
@@ -977,7 +980,7 @@ def compute_adaptive_allocation(
         edge, shrinkage=shrinkage, floor=eff_floor,
         zero_negative_edge=zero_negative_edge, min_evidence_n=min_evidence_n,
     )
-    # 因子生效开关（默认关）：仅 CONFIG.enabled 时惰性套用（清零近期信念 IC 非显著为正的因子）
+    # 因子生效开关（默认关）：仅 CONFIG.enabled 时惰性套用（**仅显著为负**的信念 IC 才清零该因子，其余保留）
     if bool((CONFIG.get("factor_timing") or {}).get("enabled", False)):
         weights = _apply_factor_timing(weights, signal_date)
     # 黑名单 + 无证据门（最终兜底）：名单内强制清零；无业绩历史的策略只留 floor 探索权重，
