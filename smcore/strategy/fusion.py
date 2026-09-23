@@ -254,10 +254,14 @@ def fuse_signals(
     from smcore.strategy.adaptive_weights import (
         compute_adaptive_allocation,
         save_regime_snapshot,
+        CONFIG as _AW_CONFIG,
     )
     from smcore.strategy.dynamic_risk import compute_dynamic_risk
 
-    edge, adaptive_pct, _, cold = compute_adaptive_allocation()
+    # edge.window 来自 adaptive_weights_config.json（此前 fusion 调用漏传 edge_window，
+    # 一直用函数默认值 20，配置里的 window 是死配置）。现在显式接上，使配置真正生效。
+    _edge_window = int((_AW_CONFIG.get("edge") or {}).get("window", 20))
+    edge, adaptive_pct, _, cold = compute_adaptive_allocation(edge_window=_edge_window)
     strategy_scores = adaptive_pct  # 综合评分基础分（百分比量级）
     # 现金比例 = 动态风险引擎（波动率 S 型曲线 + 趋势 regime 微调 + 防御下线钳制），
     # 中性点 = risk_config / adaptive_weights_config 现值，行为与旧链路一致。
