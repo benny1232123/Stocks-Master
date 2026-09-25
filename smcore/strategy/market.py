@@ -20,11 +20,16 @@
 """
 from __future__ import annotations
 
+import threading
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Optional
 
 import pandas as pd
+
+# hithink 指数历史拉取超时闸（秒）。海外 CI 上该接口可能**永久挂起且无内置超时**，
+# 会卡死整个 fuse_signals 流程 → 用 daemon 线程 + join(timeout) 兜底降级新浪。
+_HITHINK_FETCH_TIMEOUT = 20
 
 # 三大宽基指数（baostock 代码）
 _HS300 = "sh.000300"
@@ -110,6 +115,11 @@ def _fetch_index_series_hithink(code: str) -> pd.DataFrame | None:
 
     code 为 baostock 形式（sh.000300）→ 转 hithink thscode（000300.SH）。
     缺少 Key / 接口异常返回 None，由调用方降级到新浪 → baostock/akshare。
+
+    ⚠️ 海外 CI 上 hithink 指数历史接口可能**永久挂起且无内置超时**（不抛异常、不返回），
+    会卡死整个 fuse_signals 流程（实测历史信号日单步 55+ 分钟零输出）。故用 daemon 线程
+    + join(timeout) 设闸：超时即放弃该源、返回 None，由 `_get_index_series` 降级新浪
+    （15s 超时、海外可达、本地缓存）——绝不阻塞主流程。
     """
     try:
         from smcore.data import hithink as _hk
@@ -120,8 +130,24 @@ def _fetch_index_series_hithink(code: str) -> pd.DataFrame | None:
         if len(parts) != 2:
             return None
         ths = f"{parts[1]}.{parts[0].upper()}"
-        df = _hk.fetch_index_historical(ths, "2020-01-01", pd.Timestamp.today().strftime("%Y-%m-%d"))
-        if df is None or df.empty or len(df) < 22:
+        end = pd.Timestamp.today().strftime("%Y-%m-%d")
+
+        holder: dict = {}
+        err: dict = {}
+
+        def _call():
+            try:
+                holder["df"] = _hk.fetch_index_historical(ths, "2020-01-01", end)
+            except Exception as _e:  # noqa: BLE001
+                err["e"] = _e
+
+        t = threading.Thread(target=_call, name=f"hithink-idx-{ths}", daemon=True)
+        t.start()
+        t.join(timeout=_HITHINK_FETCH_TIMEOUT)
+        if t.is_alive() or "e" in err:
+            return None  # 挂起或异常 → 降级新浪/baostock/akshare
+        df = holder.get("df")
+        if df is None or getattr(df, "empty", True) or len(df) < 22:
             return None
         close = pd.to_numeric(df["close"], errors="coerce")
         vol = pd.to_numeric(df.get("volume"), errors="coerce")
