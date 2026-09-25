@@ -1,5 +1,5 @@
 {
- "generated_at": "2026-09-25T23:21:53",
+ "generated_at": "2026-09-26T00:06:24",
  "index_snapshot": [
   {
    "指数": "上证指数",
@@ -32,7 +32,7 @@
    "涨跌额": -78.13420000000042
   }
  ],
- "index_snapshot_as_of": "2026-09-25",
+ "index_snapshot_as_of": "2026-09-26",
  "market_breadth": {
   "上涨": 853,
   "下跌": 4146,
@@ -42,7 +42,7 @@
   "_source": "tencent_sample_41stocks"
  },
  "macro_snapshot": {
-  "_generated_at": "2026-09-25",
+  "_generated_at": "2026-09-26",
   "美元/人民币": 6.7172,
   "美元/人民币_src": "实时",
   "欧元/人民币": 7.6371,
