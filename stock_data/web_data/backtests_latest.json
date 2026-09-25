@@ -2,7 +2,7 @@
  "latest": {
   "name": "Multi-Backtest-20260918-summary.csv",
   "path": "stock_data/Multi-Backtest-20260918-summary.csv",
-  "modified_at": 1790349972.6872132
+  "modified_at": 1790352684.1525052
  },
  "preview": {
   "columns": [
@@ -56,10 +56,10 @@
     "strategies": "CVAmt20,PVCorr20,Skew20,Skew60,VRatio20_120",
     "signal_mode": "forward",
     "date": 20260918,
-    "run_date": 20260925,
+    "run_date": 20260926,
     "signal_start": "2026-09-18",
     "signal_end": "2026-09-18",
-    "hold_days": 7,
+    "hold_days": 8,
     "exit_mode": "boll_upper_take+take6%+trailing5%+MA60break",
     "size_mode": "adaptive_weight(权重)",
     "vol_mode": "scaled_stop+pos0.8",
@@ -71,7 +71,7 @@
     "signals_days": 1,
     "codes_count": 9,
     "start": "2026-09-18",
-    "end": "2026-09-25",
+    "end": "2026-09-26",
     "bench_return": -1.51,
     "bench_return_exposed": -1.21,
     "excess_return": 0.4
