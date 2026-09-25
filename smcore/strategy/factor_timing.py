@@ -103,6 +103,20 @@ def factor_timing_mask_from_points(
         crit = z / math.sqrt(n - 1)
         # 仅当 IC 显著为负才清零；正 IC / 近零 IC 一律保留（防止误杀好因子）
         mask[s] = bool(ic >= -crit)
+    # ── 因果闸（可选、失败软）── Double ML 因果体检 verdicts 门控
+    # 启用且 verdicts 可用时，把「非稳定 / mirage」因子额外清零（只放真因果因子进信号）；
+    # enabled=False（默认）或 verdicts 缺失/异常 → 原样返回，零行为变化（与 factor_timing 同纪律）。
+    try:
+        from smcore.config.defaults import FACTOR_CAUSAL_GATE
+        if FACTOR_CAUSAL_GATE.get("enabled"):
+            from smcore.strategy.causal_validation import (
+                load_causal_verdicts, apply_causal_gate_to_mask,
+            )
+            verdicts = load_causal_verdicts(FACTOR_CAUSAL_GATE.get("source"))
+            if verdicts:
+                mask = apply_causal_gate_to_mask(mask, verdicts, FACTOR_CAUSAL_GATE)
+    except Exception:
+        pass
     return mask
 
 

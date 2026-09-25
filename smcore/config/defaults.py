@@ -269,6 +269,22 @@ RECOMMENDATION_CONFIG = {
 #      * 候选减仓侧：研判 ≤ health_reduce_max_rating 才判"减仓/减仓偏空"；高于（健康尚可）
 #        只做温和再平衡（减仓偏空、理由中性），不判为看空。
 #  - lot_size：A股一手=100股（交易所规则），delta_qty 取整到此。
+
+# ── 因子因果闸（Double ML 因果去偏体检门控，2026-09-24）────────────────────
+# 治本工具：现有 12 因子的「显著 IC」里有多少是混淆/碰撞偏差造成的 factor mirage
+# （动量/反转类跨期翻脸、illiq20 纯混淆）。本闸离线跑 `causal_validation` 算出每策略
+# 因果 verdict（theta/t/符号稳定性），存 verdicts JSON；生产 `factor_timing_mask_from_points`
+# 启用时据此把「非稳定 / mirage」因子额外清零，只放真因果因子进信号。
+# 默认 enabled=False → 零行为变化（与 factor_timing / macro_regime 同款「内置关、采纳后开」纪律）。
+# verdicts 由 `.workbuddy/causal_validation_demo.py` 离线产出 `causal_factor_verdict.json`。
+FACTOR_CAUSAL_GATE = {
+    "enabled": True,
+    "source": "causal_factor_verdict.json",   # 相对 STOCK_DATA_DIR
+    "min_sign_stability": 0.60,              # 横截面符号稳定性下限（< 此值 = 跨期翻脸）
+    "min_abs_t": 2.0,                        # 聚类稳健 t 绝对值下限（< 此值 = 被混淆吸收/mirage）
+}
+
+
 POSITION_SIZING_CONFIG = {
     # ── 单票目标权重：优先级 per_code_targets > target_equity_ratio > target_weight_pct ──
     "target_equity_ratio": 0.70,        # ① 总仓位目标(0~1) ÷ 持有只数 = 每票目标。推荐：与只数解耦。
@@ -306,6 +322,27 @@ POSITION_SIZING_CONFIG = {
         # 单票权重下限（占总仓位的比例）：防止某只已持仓被算成 0% 目标（≈强制清仓）。
         # 先按下限夹取、再重新归一化，保证 Σ权重 == 1（总仓位不被下限改动）。
         "min_weight_frac": 0.05,
+        # ── 宏观 regime 校准分支（2026-09-24 立项）──
+        # 在 price-based regime 总仓位之上叠加一层宏观择时（期限利差/信用利差/M2/PMI/
+        # 境外流动性/股指动量 → 连续 score，深度防御时硬封顶、其余连续微调）。
+        # 直接打「57% 闲置现金何时部署」痛点，是现有 adaptive regime 层的校准升级，
+        # 非新因子、非风控叠加。详见 smcore/strategy/macro_regime.py。
+        # ⚠️ 内置默认 enabled=False：保证「零配置 → 完全无行为变化」；须先由
+        #    fetch_macro_akshare.py 拉数据、再经 calibrate_macro_regime walk-forward 门控
+        #   采纳（OOS rankIC 稳健为正）后，才在部署配置里置 enabled=True。
+        # ⚠️ 变量口径（parquet 列）以 macro_regime.DEFAULT_MACRO_VARS 为单一真相源；
+        #    本处只放开关/倾斜参数，改倾斜逻辑须同步 macro_regime.py。
+        "macro": {
+            "enabled": False,
+            "source": "macro/macro_series.parquet",
+            "hard_defensive_score": -0.50,   # score ≤ 此 → 硬防御覆盖（无视 price regime 扩张信号）
+            "macro_defensive_cap": 0.40,     # 硬防御时总仓位封顶（低于 equity_ratio_bounds 下限仍夹下限）
+            "tilt_amp": 0.10,                # 非硬防御时总仓位按 score×tilt_amp 连续微调
+            # walk-forward 门控（calibrate_macro_regime 用）：OOS rankIC 均值 > wf_min_ic
+            # 且 ≥ wf_min_stable_folds 折为正才 adopt
+            "wf_min_ic": 0.02,
+            "wf_min_stable_folds": 3,
+        },
     },
     "add_band_pct": 2.0,                # 欠配超过此值 → 候选加仓
     "reduce_band_pct": 2.0,             # 超配超过此值 → 候选减仓
