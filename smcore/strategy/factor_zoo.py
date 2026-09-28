@@ -59,7 +59,7 @@ FAMILY = {
     "tsrank": "时序位置", "matrend": "均线趋势", "stoch": "区间位置",
     "volratio": "量能比", "amtratio": "量能比", "cvvol": "成交稳定性",
     "cvamt": "成交稳定性", "pvcorr": "量价相关", "pamtcorr": "量价相关",
-    "gap": "跳空", "intraday": "日内收益",
+    "gap": "跳空", "intraday": "日内收益", "marginchg": "融资杠杆",
     # Alpha101 启发式算子族（2026-09-17 扩展；候选源，非 live 菜单）
     "rklow": "Alpha101", "rkvol": "Alpha101", "rkcls": "Alpha101",
     "chl": "Alpha101", "dcls": "Alpha101", "a": "Alpha101",
@@ -109,6 +109,8 @@ TEMPLATES: list[tuple[str, int, list, str]] = [
     # 时序位置 / 微观结构
     ("tsrank", +1, [(5, 60), (5, 120), (20, 60), (20, 120), (20, 250), (60, 250)], "tsrank{w1}_{w2}"),
     ("gapmean", -1, [5, 20, 60], "gap{w}"),
+    # 融资余额 w 日变化率（两融标的，T+1 发布滞后已内建）——先验多低（拥挤 → 跑输）
+    ("marginchg", -1, [5, 20], "marginchg{w}"),
     ("intraday", +1, [5, 20, 60], "intraday{w}"),
     # Alpha101 启发式算子（候选源扩展，2026-09-17，纯 OHLCV；不直接进 live 菜单）
     ("csrankl", -1, [20, 60], "rklow{w}"),
@@ -322,6 +324,19 @@ def compute_factor(ctx: dict, cand: Candidate) -> pd.DataFrame:
         return (op / close.shift(1) - 1).rolling(w, min_periods=m1).mean()
     if kind == "intraday":
         return (close / op - 1).rolling(w, min_periods=m1).mean()
+    if kind == "marginchg":
+        # 融资余额 w 日变化率（新数据维度，2026-09-28）：面板自带 T+1 发布滞后，
+        # 非两融标的/缺数日为 NaN（掩码端中性）。先验 -1：两融拥挤 → 后续跑输。
+        try:
+            from smcore.data.margin import load_panel
+            panel = load_panel(close.index)
+        except Exception:
+            panel = None
+        if panel is None or panel.empty:
+            return close * np.nan
+        f = panel.pct_change(w, fill_method=None).reindex(
+            index=close.index, columns=close.columns)
+        return f
     # ── Alpha101 启发式算子（候选源扩展，2026-09-17，纯 OHLCV）─────────────
     if kind == "csrankl":
         return _cs_rank(low)
