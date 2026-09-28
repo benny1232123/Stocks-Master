@@ -380,8 +380,16 @@ def compute_market_profile(as_of=None) -> MarketProfile:
 _REGIME_SERIES_CACHE: dict = {}  # code -> 新浪全量序列 DataFrame（进程内缓存，避免批量标注重复联网）
 
 
+_INDEX_STALE_DAYS = 7  # 缓存最晚 bar 距今日历天数超过此值 → 尝试刷新一次（失败保留旧缓存）
+
+
 def _load_index_series_sina_cached(code: str, cache_dir: Path) -> Optional["pd.DataFrame"]:
-    """新浪历史K线（海外可达），带本地文件缓存 + 进程内缓存；失败返回 None。"""
+    """新浪历史K线（海外可达），带本地文件缓存 + 进程内缓存；失败返回 None。
+
+    新鲜度（2026-09-28 修复）：缓存最晚 bar 距今超过 _INDEX_STALE_DAYS 个日历日时
+    自动尝试刷新（成功回写缓存；失败保留旧缓存并告警——离线/CI 环境的回退必须可见）。
+    此前「存在即用」导致 2026-08-07 之后 regime 标注全部基于冻结的旧数据。
+    """
     if code in _REGIME_SERIES_CACHE:
         return _REGIME_SERIES_CACHE[code]
     cname = code.replace(".", "")
@@ -394,6 +402,23 @@ def _load_index_series_sina_cached(code: str, cache_dir: Path) -> Optional["pd.D
                 df = None
         except Exception:
             df = None
+    if df is not None:
+        try:
+            last = df.index.max()
+            if (pd.Timestamp.now() - last).days > _INDEX_STALE_DAYS:
+                fresh = _fetch_index_series_sina(code)
+                if fresh is not None and len(fresh) >= 65 and fresh.index.max() > last:
+                    df = fresh
+                    try:
+                        cache_dir.mkdir(parents=True, exist_ok=True)
+                        df.to_csv(cf)
+                    except Exception:
+                        pass
+                else:
+                    print(f"[market] WARN: {cname} 指数缓存陈旧（最新 {last.date()}）且刷新失败，"
+                          f"regime 标注基于旧数据", flush=True)
+        except Exception:
+            pass
     if df is None:
         df = _fetch_index_series_sina(code)
         if df is not None:
