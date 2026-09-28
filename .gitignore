@@ -121,3 +121,7 @@ _t_secret.py
 # 仓库损坏恢复时的本地取证备份（不入库）
 .git.bak-20260806/
 .git_broken-20260901/
+
+# k_data parquet 桶=可再生缓存（2026-09-28 移除跟踪：b00 已超 GitHub 100MB 硬限，
+# 夜间自动提交从此推不动；本地 warmup/prepull 可随时重建）
+stock_data/k_data/*.parquet
