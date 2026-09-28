@@ -495,6 +495,30 @@ def adaptive_sizing_context(
     bounds = list(a_cfg.get("equity_ratio_bounds") or [0.30, 0.95])
     equity = min(max(equity, float(bounds[0])), float(bounds[-1]))
 
+    # ③ 宏观 regime 校准分支（默认关；fail-soft）：在 price regime 总仓位之上叠加宏观择时。
+    # 直接治「57% 闲置现金何时部署」——宏观深度防御时硬封顶、其余按 score 连续微调。
+    # 数据缺失 / 开关关 / 任一异常 → 不改 equity（零行为变化）。
+    macro_cfg = a_cfg.get("macro") or {}
+    if macro_cfg.get("enabled"):
+        try:
+            from smcore.strategy.macro_regime import (
+                load_macro_series, compute_macro_regime, macro_equity_tilt,
+            )
+            mdf = load_macro_series(macro_cfg.get("source"))
+            if mdf is not None:
+                mstate = compute_macro_regime(mdf, as_of, cfg=macro_cfg)
+                if mstate is not None:
+                    equity, mnote = macro_equity_tilt(
+                        equity, mstate, cfg=macro_cfg, bounds=bounds,
+                    )
+                    out["macro_regime"] = mstate["regime"]
+                    out["macro_score"] = mstate["score"]
+                    out["note"] = (out.get("note") or "") + f" | 宏观:{mnote}"
+        except Exception as exc:  # noqa: BLE001
+            out["note"] = (out.get("note") or "") + (
+                f" | 宏观叠加跳过({type(exc).__name__}: {exc})"
+            )
+
     # ② 个股权重分配：委托组合优化层（与选股清单同一条实现，全配置驱动）
     weight_frac: dict[str, float] = {}
     method = str(a_cfg.get("weight_method", "risk_parity_erc") or "risk_parity_erc")

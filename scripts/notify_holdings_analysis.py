@@ -1695,6 +1695,20 @@ def main() -> int:
         except Exception as exc:
             log_lines.append(f"跨持仓基本面对比生成失败: {exc}")
 
+        # 纪律与结构监控（Stocks-Master 硬条件核对 + 周线结构，2026-09-28）
+        try:
+            import os as _os
+            _here = _os.path.dirname(_os.path.abspath(__file__))
+            if _here not in sys.path:
+                sys.path.insert(0, _here)
+            from holdings_daily_report import build_sections
+            discipline_md, discipline_html, _disc = build_sections()
+            sections_html.append(discipline_html)
+            md = md.rstrip() + "\n\n" + discipline_md
+            html = build_html_report(today, backend, summary_line, "\n".join(sections_html), summary_html)
+        except Exception as exc:
+            log_lines.append(f"纪律监控 section 生成失败: {exc}")
+
     # 2) 落盘（Markdown 兼容 + HTML 美观版）
     md_path = STOCK_DATA_DIR / f"holdings_analysis_{today}.md"
     html_path = STOCK_DATA_DIR / f"holdings_analysis_{today}.html"

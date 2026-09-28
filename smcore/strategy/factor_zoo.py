@@ -38,7 +38,7 @@ import pandas as pd
 from smcore.strategy import factor_engine as fe
 
 # ── 预注册常数 ──────────────────────────────────────────────────────────
-MAX_CANDIDATES = 200          # 候选上限（当前文法展开 123 个，未触顶）
+MAX_CANDIDATES = 200          # 候选上限（当前文法展开 153 个，未触顶）
 SPLIT_END = "2022-12-31"      # 发现集结束；之后为验证集
 MIN_OOS_EVAL_DAYS = 40        # 验证集非重叠样本下限（≈1.6 年，10 日一档）
 MIN_IC_ABS = 0.010            # 存活所需最小 |均值 IC|
@@ -63,6 +63,13 @@ FAMILY = {
     # Alpha101 启发式算子族（2026-09-17 扩展；候选源，非 live 菜单）
     "rklow": "Alpha101", "rkvol": "Alpha101", "rkcls": "Alpha101",
     "chl": "Alpha101", "dcls": "Alpha101", "a": "Alpha101",
+    # Alpha158 扩展轮（2026-09-26 预注册新增；Qlib Alpha158 启发的新原语，
+    # 与既有文法正交：影线 / 分位位置 / 极值时序 / 量加权涨跌 / 量波动交互）
+    "kup": "K线影线", "klow": "K线影线",
+    "qtlu": "分位位置", "qtld": "分位位置",
+    "imax": "极值时序", "imxd": "极值时序",
+    "sump": "量加权涨跌", "vsump": "量加权涨跌",
+    "wvma": "量波动交互",
 }
 _NAME_PREFIX_RE = re.compile(r"^[a-z]+")
 
@@ -113,6 +120,19 @@ TEMPLATES: list[tuple[str, int, list, str]] = [
     ("alpha6", -1, [20, 60], "a6_{w}"),
     ("alpha12", -1, [5, 20, 60], "a12_{w}"),
     ("alpha20", -1, [10, 20], "a20_{w}"),
+    # ── Alpha158 扩展轮（2026-09-26 预注册新增 = 新一轮；Qlib Alpha158 启发，
+    #    只选与既有文法**正交**的原语，非换窗扩展。窗口统一 {5,20,60}，
+    #    候选 123→153，仍在 200 上限内。先验均为经济直觉预注册，证伪即记录。）
+    ("kup", -1, [5, 20, 60], "kup{w}"),       # 上影线占比：冲高回落=上方抛压
+    ("klow", +1, [5, 20, 60], "klow{w}"),     # 下影线占比：下探回收=下方承接
+    ("qtlu", +1, [5, 20, 60], "qtlu{w}"),     # 收盘/滚动80分位：贴近高位（同 disthi）
+    ("qtld", -1, [5, 20, 60], "qtld{w}"),     # 收盘/滚动20分位：贴近低位（同 distlo）
+    ("imax", -1, [5, 20, 60], "imax{w}"),     # 距窗内最高点天数：高点越近越强（锚定/新高效应）
+    ("imxd", +1, [5, 20, 60], "imxd{w}"),     # 高点-低点时序差：高点晚于低点=上升结构
+    ("corrlv", +1, [5, 20, 60], "corrlv{w}"), # 收盘-对数量相关（level 类，同 priceamtcorr 先验）
+    ("sump", +1, [5, 20, 60], "sump{w}"),     # 涨幅贡献占比（幅度加权版 upfrac）
+    ("vsump", +1, [5, 20, 60], "vsump{w}"),   # 上涨日成交量占比：买盘主导度
+    ("wvma", -1, [5, 20, 60], "wvma{w}"),     # 量加权振幅：放量剧烈=情绪过热（同 vol 先验）
 ]
 
 
@@ -194,6 +214,29 @@ def _ts_rank(x: pd.DataFrame, w: int) -> pd.DataFrame:
 def _cs_rank(x: pd.DataFrame) -> pd.DataFrame:
     """当日横截面分位排名（0~1，逐行 rank pct）：值越低 = 该日在全市场越靠后。"""
     return x.rank(pct=True, axis=1)
+
+
+def _extreme_pos(df: pd.DataFrame, w: int, mode: str, chunk: int = 128) -> pd.DataFrame:
+    """滑窗内极值出现位置（0=窗口最旧, w-1=最新；argmax 首现约定，与 qlib IdxMax 对齐）。
+
+    按行（股票）分块用 stride 视图 + argmax/argmin，避免 (T×w×N) 3D 全量展开爆内存。
+    含 NaN 窗口：NaN 不参与极值比较；整窗全 NaN → 该值 NaN。
+    """
+    A = df.to_numpy(dtype=float)
+    T, N = A.shape
+    out = np.full((T, N), np.nan)
+    if T < w:
+        return pd.DataFrame(out, index=df.index, columns=df.columns)
+    win = np.lib.stride_tricks.sliding_window_view(A.T, w, axis=1)  # (N, T-w+1, w) 视图
+    fill = -np.inf if mode == "max" else np.inf
+    for r0 in range(0, N, chunk):
+        blk = win[r0:r0 + chunk]
+        bn = np.where(np.isnan(blk), fill, blk)
+        pos = (bn.argmax(axis=2) if mode == "max" else bn.argmin(axis=2)).astype(float)
+        allnan = np.isnan(blk).all(axis=2)
+        pos[allnan] = np.nan
+        out[w - 1:, r0:r0 + chunk] = pos.T
+    return pd.DataFrame(out, index=df.index, columns=df.columns)
 
 
 # ── 因子计算 ────────────────────────────────────────────────────────────
@@ -299,6 +342,43 @@ def compute_factor(ctx: dict, cand: Candidate) -> pd.DataFrame:
         return np.sign(dv.where(dv.notna(), 0.0)) * (-(close - close.shift(w)))
     if kind == "alpha20":
         return -_cs_rank(op - high)
+    # ── Alpha158 扩展轮（2026-09-26 预注册）─────────────────────────────────
+    if kind == "kup":
+        return ((high - np.maximum(op, close)) / close).rolling(w, min_periods=m1).mean()
+    if kind == "klow":
+        return ((np.minimum(op, close) - low) / close).rolling(w, min_periods=m1).mean()
+    if kind == "qtlu":
+        q = close.rolling(w, min_periods=m1).quantile(0.8)
+        return close / q.where(q > 0) - 1
+    if kind == "qtld":
+        q = close.rolling(w, min_periods=m1).quantile(0.2)
+        return close / q.where(q > 0) - 1
+    if kind == "imax":
+        # 距窗内最高点的天数占比：0=最高点就是今天, 1=最高点在窗口最旧端
+        pmax = _extreme_pos(high, w, "max")
+        return (w - 1 - pmax) / max(w - 1, 1)
+    if kind == "imxd":
+        # 高点与低点的时序差：+1=高点最新且低点最旧（上升结构），-1 反之
+        pmax = _extreme_pos(high, w, "max")
+        pmin = _extreme_pos(low, w, "min")
+        return (pmax - pmin) / max(w - 1, 1)
+    if kind == "corrlv":
+        lv = np.log(vol.where(vol > 0))
+        return _roll_corr(close, lv, w)
+    if kind == "sump":
+        d = close.diff(1)
+        up = d.clip(lower=0).rolling(w, min_periods=m1).sum()
+        tot = d.abs().rolling(w, min_periods=m1).sum()
+        return up / tot.replace(0.0, np.nan)
+    if kind == "vsump":
+        d = close.diff(1)
+        vup = vol.where(d > 0, 0.0).rolling(w, min_periods=m1).sum()
+        vtot = vol.rolling(w, min_periods=m1).sum()
+        return vup / vtot.replace(0.0, np.nan)
+    if kind == "wvma":
+        num = (ret1.abs() * vol).rolling(w, min_periods=m1).mean()
+        den = vol.rolling(w, min_periods=m1).mean()
+        return num / den.replace(0.0, np.nan)
     raise KeyError(f"unknown factor kind: {kind}")
 
 

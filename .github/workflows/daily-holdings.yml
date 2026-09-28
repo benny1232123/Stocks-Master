@@ -86,6 +86,54 @@ jobs:
           pip install --upgrade pip
           pip install --retries 3 numpy pandas pyarrow akshare baostock supabase requests
 
+      # ⚠️ 2026-09-21 审计修复：本工作流原先**没有任何 K 线准备步骤**（daily-pick 有），
+      # 报告依赖 fetch_daily_k 在 CI 现抓；海外 runner 抓到旧 bar 时 RSI/MACD/布林/现价
+      # 全部失真，而报告照样推送（静默缺陷）。以下两步对齐 daily-pick 做法。
+      - name: 数据新鲜度硬校验（信号日 bar 必须存在，防止用 D-1 数据出当日信号）
+        if: steps.gate.outputs.ok == 'true'
+        timeout-minutes: 5
+        env:
+          KLINE_BACKEND: hithink
+          HITHINK_FINANCE_API_KEY: ${{ secrets.HITHINK_FINANCE_API_KEY }}
+          ALLOW_STALE_DATA: ${{ vars.ALLOW_STALE_DATA }}
+        run: |
+          python scripts/verify_data_freshness.py --signal-date ${{ steps.gate.outputs.today }}
+
+      - name: 持仓 K 线定向刷新 + 新鲜度复核
+        if: steps.gate.outputs.ok == 'true'
+        timeout-minutes: 15
+        env:
+          TODAY: ${{ steps.gate.outputs.today }}
+          KLINE_BACKEND: hithink
+          HITHINK_FINANCE_API_KEY: ${{ secrets.HITHINK_FINANCE_API_KEY }}
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_KEY: ${{ secrets.SUPABASE_KEY }}
+          TRADES_BACKEND: auto
+          ALLOW_STALE_DATA: ${{ vars.ALLOW_STALE_DATA }}
+        run: |
+          # 只刷当前持仓（<20 只，秒级）；刷完逐只复核信号日 bar，
+          # 全部缺当日 bar 则 exit 1（红 build），部分缺则 ::warning:: 列出代码。
+          if [ "${ALLOW_STALE_DATA}" = "1" ]; then
+            echo "ALLOW_STALE_DATA=1 → 跳过定向刷新（手动补跑/非交易日）"
+          else
+            python scripts/prepull_klines.py --date "${TODAY}" --from-holdings
+          fi
+
+      - name: 持仓基本面缓存刷新（best-effort，失败不阻塞日报）
+        if: steps.gate.outputs.ok == 'true'
+        continue-on-error: true
+        timeout-minutes: 10
+        env:
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_KEY: ${{ secrets.SUPABASE_KEY }}
+          TRADES_BACKEND: auto
+          HITHINK_FINANCE_API_KEY: ${{ secrets.HITHINK_FINANCE_API_KEY }}
+        run: |
+          # 修复「综合分塌成纯技术面」：FUND_REPORT_ONLINE 默认关 → 报告走 cache-only，
+          # 缺缓存的持仓 has_f=False → total 退化为 techScore（0.40/0.35/0.25 三维塌成
+          # 100% 技术面）。此处在报告前按持仓定向回填基本面缓存，让三维综合分成立。
+          python scripts/refresh_fundamentals.py --from-holdings
+
       - name: 生成持仓个股分析并推送
         if: steps.gate.outputs.ok == 'true'
         env:

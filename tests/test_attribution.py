@@ -49,8 +49,10 @@ def test_forward_returns_shape_and_missing():
 
 
 def test_run_attribution_on_refused_date():
-    # 0719 已重融合且有 k_data → 应返回归因结果字典（部分股票收益缺失时 by_code 可能不全）
-    res = run_attribution("20260719", horizon=10, benchmark="equal")
+    # 用真实回放信号日（20260710 周五，DAL 已重融合、k_data 覆盖 10 交易日前向窗口）。
+    # 旧用例取 20260719——该日是周日，现管线（W-FRI 周回放 + A 批菜单）不产周日 DAL，
+    # 属数据陈旧而非归因逻辑问题（2026-09-27 修正）。
+    res = run_attribution("20260710", horizon=10, benchmark="equal")
     assert res is not None
     assert "total" in res
     assert "active" in res["total"]

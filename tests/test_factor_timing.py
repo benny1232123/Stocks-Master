@@ -16,6 +16,7 @@ import pytest  # noqa: F401
 
 from smcore.strategy import factor_timing as ft
 from smcore.strategy.adaptive_weights import ALL_STRATEGIES
+from smcore.config import defaults  # 用于隔离因果闸（专测 factor_timing IC 逻辑）
 
 _DAYS6 = [f"2024010{i}" for i in range(1, 7)]  # 6 个信号日
 
@@ -35,7 +36,8 @@ def test_spearman_ic_bounds():
     assert ft.spearman_ic([1, 2], [1, 2]) is None        # n<3
 
 
-def test_mask_from_points_switches_off_negative_ic():
+def test_mask_from_points_switches_off_negative_ic(monkeypatch):
+    monkeypatch.setattr(defaults, "FACTOR_CAUSAL_GATE", {"enabled": False})  # 隔离因果闸
     pts = _pts({
         "pvcorr20": [(0.4 + 0.1 * i, 0.1 * i) for i in range(6)],      # +IC → 生效
         "cvamt20": [(0.4 + 0.1 * i, -0.1 * i) for i in range(6)],  # -IC → 关闭
@@ -46,7 +48,8 @@ def test_mask_from_points_switches_off_negative_ic():
     assert mask["cvamt20"] is False
 
 
-def test_mask_keeps_factor_when_insufficient_points():
+def test_mask_keeps_factor_when_insufficient_points(monkeypatch):
+    monkeypatch.setattr(defaults, "FACTOR_CAUSAL_GATE", {"enabled": False})  # 隔离因果闸
     pts = _pts({"pvcorr20": [(0.1, 0.1), (0.2, 0.2)]})  # 仅 2 点 < min_n
     mask = ft.factor_timing_mask_from_points(pts, _DAYS6, min_n=5, z=1.96)
     assert mask["pvcorr20"] is True  # 无证据不判失效
@@ -72,8 +75,9 @@ def test_mask_kills_significant_negative_ic():
     assert mask["illiq20"] is False
 
 
-def test_mask_keeps_degenerate_ic_none():
+def test_mask_keeps_degenerate_ic_none(monkeypatch):
     """IC 无定义（收益无方差）一律保留——不能把"数据退化"误判为失效。"""
+    monkeypatch.setattr(defaults, "FACTOR_CAUSAL_GATE", {"enabled": False})  # 隔离因果闸
     pts = _pts({"cvamt20": [(0.1 + 0.05 * i, 0.5) for i in range(6)]})  # r 恒为 0.5 → vy=0 → None
     mask = ft.factor_timing_mask_from_points(pts, _DAYS6, min_n=5, z=1.96)
     assert mask["cvamt20"] is True
@@ -99,6 +103,7 @@ def test_shared_core_matches_validator(monkeypatch):
 
 
 def test_apply_mask_renormalizes(monkeypatch):
+    monkeypatch.setattr(defaults, "FACTOR_CAUSAL_GATE", {"enabled": False})  # 隔离因果闸
     pts = _pts({
         "pvcorr20": [(0.4 + 0.1 * i, 0.1 * i) for i in range(6)],
         "cvamt20": [(0.4 + 0.1 * i, -0.1 * i) for i in range(6)],

@@ -22,7 +22,7 @@ lowmom20 全部移除，菜单收缩为 **A 批 12 个因子池（factor_zoo 预
   - skew20 / skew60             收益偏度
   - vratio20_120 / vratio10_60  波动比
   - distlo10 / distlo60         位置·距低点
-  - vol20                       波动
+  - maxret10                    极值日（2026-09-27 置换评审接替 vol20）
   - illiq20                     非流动性
 
 这些因子公式 1:1 复用 `factor_zoo.compute_factor`（不改窗口、不改先验方向），保证
@@ -47,7 +47,7 @@ STRATEGY_FACTOR_TYPE = {
     "vratio10_60": "波动比",
     "distlo10": "位置·距低点",
     "distlo60": "位置·距低点",
-    "vol20": "波动",
+    "maxret10": "极值日",
     "illiq20": "非流动性",
 }
 
@@ -67,14 +67,17 @@ STRATEGY_LABEL = {
     "vratio10_60": "VRatio10_60",
     "distlo10": "DistLo10",
     "distlo60": "DistLo60",
-    "vol20": "Vol20",
+    "maxret10": "MaxRet10",
     "illiq20": "Illiq20",
 }
 
 # 策略 id 规范顺序（供报告/权重行动态渲染；与 fusion 命中标签顺序一致）
+# 2026-09-27 菜单置换评审：vol20 → maxret10（预注册沙箱 A/B 过门 +4.19pp，
+# 头对头残差 t=-5.04 vs -0.99，Su 2025「A 股 MAX 吸收 IVOL」；归档
+# stock_data/archive/pre_menu_swap_20260927/，报告 stock_data/menu_swap_ab.md）
 STRATEGY_ORDER = [
     "pvcorr20", "pvcorr60", "cvamt20", "cvamt60", "skew20", "skew60",
-    "vratio20_120", "vratio10_60", "distlo10", "distlo60", "vol20", "illiq20",
+    "vratio20_120", "vratio10_60", "distlo10", "distlo60", "maxret10", "illiq20",
 ]
 
 # 展示顺序（与既有策略认知一致，便于阅读）：同一族归并桶紧邻排布
@@ -84,6 +87,7 @@ FACTOR_TYPE_ORDER = [
     "收益偏度",
     "波动比",
     "位置·距低点",
+    "极值日",
     "波动",
     "非流动性",
     "其他",

@@ -26,16 +26,26 @@ def _signal_days():
 
 
 def _codes_from_latest_dal():
+    """最新【非空】DAL 的股票代码（ML 评估的候选池 = 当前实盘清单口径）。
+
+    从最新往回找第一个含有效代码的 DAL——最新文件可能是假期占位/全空表
+    （如 20260925 假期周五），直接取 dals[-1] 会拿到空列表 → compute_exposures(None)
+    返回空 → 整个评估 0 可用日（2026-09-26 实测）。
+    """
     from smcore.config.defaults import STOCK_DATA_DIR
     import pandas as pd
-    dals = sorted(STOCK_DATA_DIR.glob("Daily-Action-List-*.csv"))
-    if not dals:
-        return []
-    try:
-        d = pd.read_csv(dals[-1], encoding="utf-8-sig")
-        return d["股票代码"].astype(str).tolist()
-    except Exception:
-        return []
+    dals = sorted(STOCK_DATA_DIR.glob("Daily-Action-List-*.csv"), reverse=True)
+    for dal in dals:
+        try:
+            d = pd.read_csv(dal, encoding="utf-8-sig")
+        except Exception:
+            continue
+        if "股票代码" not in d.columns:
+            continue
+        codes = [str(c).strip() for c in d["股票代码"].dropna().astype(str).tolist() if str(c).strip()]
+        if codes:
+            return codes
+    return []
 
 
 def main() -> int:

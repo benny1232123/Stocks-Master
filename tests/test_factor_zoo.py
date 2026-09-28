@@ -296,3 +296,70 @@ def test_short_windows_have_no_lookahead():
         full = fz.compute_factor(ctx, cm[name])
         part = fz.compute_factor(_slice(ctx, cut + 1), cm[name])
         assert np.allclose(full.iloc[cut].values, part.iloc[-1].values, equal_nan=True), name
+
+
+# ── 9. Alpha158 扩展轮（2026-09-26 预注册新增）──────────────────────────
+ALPHA158_NEW = ["kup5", "klow20", "qtlu5", "qtld60", "imax5", "imxd60",
+                "corrlv20", "sump20", "vsump20", "wvma5"]
+
+
+def test_alpha158_round_enumerated_deterministically():
+    names = [c.name for c in fz.enumerate_candidates()]
+    for n in ALPHA158_NEW:
+        assert n in names, f"{n} 不在文法中"
+    # 新轮窗口统一 {5,20,60}，总数 153
+    new_kinds = {"kup", "klow", "qtlu", "qtld", "imax", "imxd",
+                 "corrlv", "sump", "vsump", "wvma"}
+    got = [n for n in names if n.split("_")[0].rstrip("0123456789") in new_kinds
+           or any(n.startswith(k) for k in new_kinds)]
+    assert len(got) == 30, f"Alpha158 扩展轮应为 30 候选，实际 {len(got)}"
+    assert len(names) == 153
+
+
+def test_alpha158_round_values_finite_and_in_range():
+    ctx = _ctx(n_days=200)
+    cm = _cand_map()
+    for name in ALPHA158_NEW:
+        f = fz.compute_factor(ctx, cm[name])
+        assert not f.dropna(how="all").empty, f"{name} 全空"
+        v = f.iloc[-1].dropna()
+        assert len(v) == len(ctx["close"].columns), f"{name} 末行缺值"
+        if name.startswith(("imax", "imxd")):
+            assert v.between(-1.0001, 1.0001).all(), f"{name} 超出 [-1,1]"
+        if name.startswith(("kup", "klow", "sump", "vsump")):
+            assert (v > -0.5).all() and (v < 1.5).all(), f"{name} 比例越界"
+
+
+def test_alpha158_round_no_lookahead():
+    ctx = _ctx(n_days=300)
+    cut = 250
+    cm = _cand_map()
+    for name in ALPHA158_NEW:
+        full = fz.compute_factor(ctx, cm[name])
+        part = fz.compute_factor(_slice(ctx, cut + 1), cm[name])
+        assert np.allclose(full.iloc[cut].values, part.iloc[-1].values, equal_nan=True), (
+            f"{name} 在 t 日的取值依赖了 t 之后的数据（未来函数）")
+
+
+def test_extreme_pos_matches_naive_argmax():
+    """_extreme_pos 必须与逐窗 np.argmax（首现约定）逐值一致。"""
+    rng = np.random.default_rng(7)
+    idx = pd.date_range("2024-01-01", periods=80, freq="D")
+    df = pd.DataFrame(rng.normal(0, 1, (80, 6)) * 10 + rng.normal(0, 0.01, (80, 6)), index=idx)
+    df.iloc[40, 2] = np.nan  # 混入 NaN
+    w = 20
+    got = fz._extreme_pos(df, w, "max")
+    for t in range(w - 1, 80):
+        for c in range(6):
+            win = df.iloc[t - w + 1:t + 1, c]
+            if win.isna().all():
+                exp = np.nan
+            else:
+                arr = win.to_numpy().copy()
+                arr[np.isnan(arr)] = -np.inf  # 与实现同约定：NaN 不参与极值比较
+                exp = float(arr.argmax())
+            gv = got.iloc[t, c]
+            if exp != exp or gv != gv:
+                assert exp != exp and gv != gv
+            else:
+                assert gv == exp, f"t={t} c={c}: {gv} != {exp}"

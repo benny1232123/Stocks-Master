@@ -388,6 +388,9 @@ def fuse_signals(
         rows.append(row)
 
     df = pd.DataFrame(rows)
+    # ML 叠加因子接入决策（下方 else 分支按门控覆盖；无论是否生效均入 meta 审计）
+    mlp = CONFIG.get("ml_factors", {}).get("fuse_integration", {})
+    ml_applied, ml_note = False, None
     # 趋势守卫：剔除价格远低于 MA20 的破位/下降通道股（自由落体风险）
     filtered_out = 0
     if trend_guard:
@@ -429,6 +432,21 @@ def fuse_signals(
             df["综合评分"] = df.apply(
                 lambda r: round(r["综合评分"] + fscore.get(r["股票代码"], 0.0), 1), axis=1
             )
+        # ── ML 叠加因子（OOS 接入门控，2026-09-27）：研究闸门三件套之外另立的接入层 ——
+        # 研究闸门已激活（ml_factors.json）+ 近窗衰减监控（最近 N 折 IC 仍为正）+ 配置显式
+        # 开关（fuse_integration.enabled，默认 False）。回放历史信号日时门控只统计
+        # test_sd < 信号日 的折（因果过滤），保证复放清单不被「今天才决定的激活」增强。
+        if mlp.get("enabled") and not df.empty:
+            try:
+                from smcore.strategy.ml_factors import fuse_ml_bonus
+                ml_bonus, ml_note = fuse_ml_bonus(
+                    df["股票代码"].tolist(), date_yyyymmdd, mlp)
+            except Exception as exc:  # 接入层任何异常都降级中性，绝不阻塞出清单
+                ml_bonus, ml_note = {}, f"ML 叠加因子异常降级中性（{type(exc).__name__}: {exc}）"
+            ml_applied = bool(ml_bonus)
+            if ml_bonus:
+                df["ML分"] = df["股票代码"].map(ml_bonus).fillna(0.0)
+                df["综合评分"] = (df["综合评分"] + df["ML分"]).round(1)
         df = df.sort_values("综合评分", ascending=False).reset_index(drop=True)
         # ── 自适应风险参数（随名单广度 + 行业数 + regime 实时计算，零硬编码）──
         _sectors = _count_sectors(df, sector_map) if (sector_cap and sector_map) else 1
@@ -531,6 +549,8 @@ def fuse_signals(
                 f"\n- 🚦 市场状态：{regime}（趋势闸门生效）；"
                 f"策略权重{cold_tag}：{w_txt}；现金 {cash_pct}%"
             )
+    if ml_note:
+        report += f"\n- 🤖 {ml_note}"
     if rs_filtered_out:
         report += f"\n- 📉 相对强度过滤剔除 {rs_filtered_out} 只跑输大盘超 {rs_tol * 100:.0f}% 的票（alpha 弱，直接不治本；阈值随市浮动）"
     if liquidity_filtered_out:
@@ -583,6 +603,11 @@ def fuse_signals(
             "live_regime": live_regime,      # 仅用于对比，不参与任何决策
             "is_today": is_today,
             "date_pinned": True,            # 标记该 DAL 由 date-pinned regime 生成
+            "ml_integration": {             # ML 叠加因子接入审计（live_forward_discipline 可校验）
+                "enabled": bool(mlp.get("enabled")),
+                "applied": bool(ml_applied),
+                "note": ml_note,
+            },
         }
         mp = STOCK_DATA_DIR / f"Daily-Action-List-{date_yyyymmdd}.meta.json"
         with open(mp, "w", encoding="utf-8") as f:

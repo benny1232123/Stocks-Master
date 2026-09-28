@@ -406,6 +406,20 @@ _BUCKET_PENDING: dict[Path, pd.DataFrame] = {}
 _BUCKET_BUFFER_ENABLED = False
 
 
+def _atomic_to_parquet(df: pd.DataFrame, pf: Path) -> None:
+    """先写同目录 .tmp 再 os.replace —— 桶写入的原子性保障。
+
+    背景（2026-09-26）：非原子 to_parquet 在「写入中途进程被杀」（如回放子进程
+    300s 超时正好落在整桶重写上）会留下截断文件（Parquet magic bytes 缺失），
+    之后整个桶的**所有**代码读缓存全部失败、回测全量跳过（当日实际发生：
+    qfq_b00.parquet 损坏，51 个回测全跳）。os.replace 在同一卷上是原子操作：
+    要么旧桶完好，要么新桶完好，不存在中间态。
+    """
+    tmp = pf.with_name(pf.name + ".tmp")
+    df.to_parquet(tmp, index=False, compression="zstd")
+    os.replace(tmp, pf)
+
+
 @contextmanager
 def kline_write_buffer():
     """上下文内 ``write_kline_cache`` 只做内存缓冲，退出时按桶一次性 upsert 落盘。
@@ -449,7 +463,7 @@ def flush_kline_writes() -> int:
             else:
                 merged = new_rows
             merged = merged.sort_values(["code", "date"]).reset_index(drop=True)
-            merged.to_parquet(pf, index=False, compression="zstd")
+            _atomic_to_parquet(merged, pf)
             n_ok += 1
         except Exception as exc:
             # 桶级失败必须可见：静默吞掉会让「刷新报成功但数据没变」重演（缓存陈旧事故），
@@ -526,7 +540,7 @@ def write_kline_cache(df: pd.DataFrame, code, adjust: str = DEFAULT_ADJUST, base
             merged = out
         merged = merged.sort_values(["code", "date"]).reset_index(drop=True)
         # 与迁移落盘的 zstd 分桶保持一致，避免增量写入把分片重新压成 snappy 而膨胀越界（GH001 100MB 硬限）。
-        merged.to_parquet(pf, index=False, compression="zstd")
+        _atomic_to_parquet(merged, pf)
     # 迁移完成后 legacy CSV 应被清掉；这里顺手删除避免双份数据分歧
     legacy = base / f"{code6}_{adjust}_full.csv"
     if legacy.exists():

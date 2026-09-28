@@ -170,6 +170,16 @@ _BUILTIN_DEFAULTS = {
         "min_ic": 0.02,
         "min_ir": 0.5,
         "min_positive_frac": 0.6,
+        # 融合接入层（激活≠接入，另立 OOS 门控）：默认关闭，A/B 验证通过后显式开启
+        "fuse_integration": {
+            "enabled": False,
+            "weight": 3.0,
+            "max_bonus": 10.0,
+            "monitor_window": 20,
+            "min_monitor_folds": 5,
+            "min_recent_ic": 0.0,
+            "min_recent_positive_frac": 0.5,
+        },
     },
     "execution": {
         "enabled": True,

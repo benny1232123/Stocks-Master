@@ -27,12 +27,12 @@ def test_weak_evidence_high_shrinkage():
     """证据不足 → 靠近 base（≈ 等权）但不完全等于 base 一旦有弱显著尾部。"""
     edge = {
         "illiq20": {"n": 3, "edge": 8.0, "std": 5.0},  # t=2.77，但由于样本极小 c 很低 → 仍高度收缩
-        "vol20": {"n": 50, "edge": 0.2, "std": 9.0},  # t=0.157，不显著 → 完全 base
+        "maxret10": {"n": 50, "edge": 0.2, "std": 9.0},  # t=0.157，不显著 → 完全 base
     }
     sh = compute_dynamic_shrinkage(edge)
     assert sh["illiq20"] < 0.4  # 有微弱证据，略降
     assert sh["illiq20"] > 0.25  # 但仍高度收缩（样本太小，几乎等权）
-    assert sh["vol20"] >= 0.35  # 不显著 → 几乎完全 base（仅微小收缩）
+    assert sh["maxret10"] >= 0.35  # 不显著 → 几乎完全 base（仅微小收缩）
 
 
 def test_all_values_within_bounds():
@@ -40,7 +40,7 @@ def test_all_values_within_bounds():
     edge = {
         "pvcorr20": {"n": 200, "edge": 2.0, "std": 15.0},
         "cvamt20": {"n": 60, "edge": -1.0, "std": 12.0},  # 负 edge 同样有显著度
-        "vol20": {"n": 2, "edge": 9.0, "std": 3.0},
+        "maxret10": {"n": 2, "edge": 9.0, "std": 3.0},
         "illiq20": {"n": 0, "edge": 0.0, "std": 0.0},  # 无样本 → base
         "skew20": {"n": 40, "edge": 0.5, "std": 2.0},
         "__meta__": {"source": "universe"},
@@ -69,7 +69,7 @@ def test_sd_helper():
 
 def _flat_edge(**kw) -> dict:
     base = {s: {"n": 120, "edge": 0.2, "std": 10.0}
-            for s in ["pvcorr20", "cvamt20", "skew20", "vol20", "illiq20"]}
+            for s in ["pvcorr20", "cvamt20", "skew20", "maxret10", "illiq20"]}
     base.update(kw)
     return base
 
@@ -78,11 +78,11 @@ def test_adaptive_weights_accepts_dict_shrinkage():
     """dict shrinkage：强证据策略收缩小 → 权重高于弱证据策略。"""
     edge = _flat_edge(
         pvcorr20={"n": 120, "edge": 3.0, "std": 10.0},  # t=3.29，强证据
-        vol20={"n": 4, "edge": 1.0, "std": 8.0},         # 样本极小 → 高度收缩
+        maxret10={"n": 4, "edge": 1.0, "std": 8.0},         # 样本极小 → 高度收缩
     )
     sh = compute_dynamic_shrinkage(edge)
     pct = adaptive_weights(edge, shrinkage=sh)
-    assert pct["pvcorr20"] > pct["vol20"]
+    assert pct["pvcorr20"] > pct["maxret10"]
 
 
 def test_shrinkage_zero_dict_equals_const_zero():
@@ -108,9 +108,9 @@ def test_shrinkage_dynamic_config_drives_default(monkeypatch):
         aw.CONFIG["shrinkage_dynamic"] = True
         edge = _flat_edge(
             pvcorr20={"n": 160, "edge": 4.0, "std": 9.0},  # 强
-            vol20={"n": 3, "edge": 6.0, "std": 5.0},        # 弱样本
+            maxret10={"n": 3, "edge": 6.0, "std": 5.0},        # 弱样本
         )
         pct = adaptive_weights(edge)
-        assert pct["pvcorr20"] > pct["vol20"]
+        assert pct["pvcorr20"] > pct["maxret10"]
     finally:
         aw.CONFIG["shrinkage_dynamic"] = orig

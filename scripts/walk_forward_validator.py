@@ -474,14 +474,47 @@ def _all_signal_days() -> list[str]:
     return sorted(days)
 
 
+def _edge_lag_cal_days() -> int:
+    """严格因果 edge 窗口的日历滞后：trade 的 return_pct 在「信号日 + hold + 1 个
+    交易日」才实现（次开买、持有 hold 日），未实现前不可当已知。
+
+    日历近似 = (hold+1)*7//5 + 2（hold 取生产出场配置，回退 12）。
+    env WF_EDGE_LAG_CAL_DAYS 可覆盖；设 "0" 退回旧宽松口径（d < cutoff 即可用，
+    会把未实现收益当已知，系统性虚高 edge——2026-09-26 实测 ML IC 0.189→0.121）。
+    """
+    env = os.environ.get("WF_EDGE_LAG_CAL_DAYS", "").strip()
+    if env:
+        try:
+            return max(0, int(env))
+        except ValueError:
+            pass
+    try:
+        hold = int(compute_adaptive_exit_params().get("hold_days", 12) or 12)
+    except Exception:
+        hold = 12
+    return (hold + 1) * 7 // 5 + 2
+
+
 def causal_edge(cutoff: str, window: int = EDGE_WINDOW, position_weighted: bool = False) -> dict:
-    """只用严格早于 cutoff 的信号日（取最近 window 个）算策略 edge。
+    """只用「严格早于 cutoff 且收益已实现」的信号日（取最近 window 个）算策略 edge。
+
+    严格因果（2026-09-26 默认）：信号日 d 的 trades 在 d + hold + 1 个交易日才
+    实现，此前其 return_pct 在 cutoff 时点不可知——旧的 d < cutoff 口径把未实现
+    收益当已知（与生产 adaptive_weights 读 trades 表的口径同源）。env
+    WF_EDGE_LAG_CAL_DAYS=0 可退回旧口径做对照。
 
     每策略含 {n, avg_return, win_rate, edge, std}（std=总体标准差，供动态收缩使用）。
     position_weighted：开启时按 DAL「建议仓位%」加权聚合（与 adaptive_weights 同源口径），
     用于检验「按 pw 贡献降权非 CCTV」是否稳健优于等权聚合。
     """
     past = [d for d in _all_signal_days() if d < cutoff]
+    lag = _edge_lag_cal_days()
+    if lag > 0:
+        try:
+            cut_ts = pd.Timestamp(cutoff)
+            past = [d for d in past if (cut_ts - pd.Timestamp(d)).days >= lag]
+        except Exception:
+            pass  # 日期不可解析（合成测试数据）→ fail-open 退回宽松口径
     past = past[-window:]
     strat_pairs: dict[str, list[tuple[float, float]]] = {s: [] for s in ALL_STRATEGIES}
     for sd in past:
@@ -1037,9 +1070,160 @@ def _print_report(res: dict) -> None:
     print("相对结论（自适应 vs 等权）在两种口径下一致。")
 
 
+# ── 在线学习权重（EG / ONS，2026-09-26 扩展）────────────────────────────
+# 动机：生产 adaptive_weights 是「滚动窗口 edge → 手工 shrinkage/FLOOR」的两步映射，
+# walk-forward 显示 edge 信号有效但映射把权重抹平。EG（Exponential Gradient,
+# Helmbold et al. 1998）与 ONS（Online Newton Step, Hazan et al. 2007）是在线学习
+# （OLPS）文献里的标准乘性/二阶更新——只用已实现收益递推、天然无未来函数、
+# 无手工平滑参数。此处与生产自适应/等权在同一批票、同一分配规则（命中策略权重
+# 取 max）下对比，差异纯粹来自「权重更新规则」。
+# 信息集约定：默认与现有框架一致（Ti 日的权重可用所有信号日 < Ti 的已实现收益，
+# 即便个别 trade 在 Ti 尚未平仓——与 causal_edge 同一口径，保证公平对比）；
+# strict_lag=True 时改为「信号日后 WF_HOLD_DAYS+1 个信号日才喂给更新器」的
+# 严格因果档（收益完全实现后才可见），检验结论是否依赖该约定。
+# ⚠️ 2026-09-27 验证结论（scripts/verify_online_causality.py，预注册四档 feed 对比）：
+# 默认 lag=1 档喂的是「未走完的全期收益」= 前视（j+1 时 j 的 10 交易日收益尚有
+# ~3-5 个交易日未来信息）。诚实信息集（realized 卖出实现后喂 / mtm 决策时点
+# mark-to-market）下，EG/ONS 全部配置无一跑赢等权（V0 ONS η=1.0 的 -3.93% vs
+# 等权 -22.49% 的 +18.6pp 超额完全消失，因果档多数深亏至 -33%~-57%）。
+# → 在线权重家族不进生产候选；本函数的 lag=1 档数字只作前视上界参照，
+#   不得与生产自适应（严格因果 edge）直接对比。详见 stock_data/online_causality_report.md。
+
+_ONLINE_RET_SCALE = 5.0     # r̃ = r / 5（%收益 → z 量级，≈策略日均收益的 1σ）
+_ONLINE_CLIP = 2.0          # r̃ 截断到 [-2, 2]，防单日极端收益主导乘性更新
+_ONLINE_EG_ETAS = [0.05, 0.2, 1.0]
+_ONLINE_ONS_ETAS = [0.5, 1.0]
+_ONLINE_STREAM: list | None = None
+
+
+def _strategy_day_stream() -> list[tuple[str, list[dict], dict[str, float]]]:
+    """按信号日序缓存 [(sd, picks, {strategy: 当日均收益%})]，全部在线变体共用一份。"""
+    global _ONLINE_STREAM
+    if _ONLINE_STREAM is None:
+        stream = []
+        for sd in _all_signal_days():
+            picks = _load_day_picks(sd)
+            if not picks:
+                continue
+            by: dict[str, list[float]] = {}
+            for p in picks:
+                for s in p["sources"]:
+                    by.setdefault(s, []).append(float(p["return_pct"]))
+            stream.append((sd, picks,
+                           {s: sum(v) / len(v) for s, v in by.items() if v}))
+        _ONLINE_STREAM = stream
+    return _ONLINE_STREAM
+
+
+def _project_simplex(v) -> list[float]:
+    """欧氏投影到概率单纯形（Duchi et al. 2008）。"""
+    n = len(v)
+    u = sorted(v, reverse=True)
+    css, rho, theta = 0.0, 0, 0.0
+    for i, ui in enumerate(u):
+        css += ui
+        t = (css - 1.0) / (i + 1)
+        if ui - t > 0:
+            rho, theta = i + 1, t
+    if rho == 0:
+        return [1.0 / n] * n
+    return [max(x - theta, 0.0) for x in v]
+
+
+def _rtilde(r: float) -> float:
+    return max(-_ONLINE_CLIP, min(_ONLINE_CLIP, r / _ONLINE_RET_SCALE))
+
+
+def run_online(algo: str, eta: float, strict_lag: bool = False) -> dict:
+    """在线权重 walk-forward：EG / ONS 逐日递推权重，样本外对比等权。
+
+    algo: "eg"（乘性指数更新）| "ons"（在线牛顿步，二阶）。
+    返回 {total_pct, win_rate, n_days, rows}。
+    """
+    import numpy as np
+
+    assert algo in ("eg", "ons"), algo
+    stream = _strategy_day_stream()
+    S = list(ALL_STRATEGIES)
+    sidx = {s: i for i, s in enumerate(S)}
+    w = np.full(len(S), 1.0 / len(S))
+    P = np.eye(len(S))          # ONS 协方差预条件子
+    lag = (WF_HOLD_DAYS + 1) if strict_lag else 1
+    pending: list[tuple[int, dict[str, float]]] = []   # 待喂入的 (日序, 当日各策略收益)
+
+    rows = []
+    for i, (sd, picks, rday) in enumerate(stream):
+        # 1) 消费所有「信息已可得」的历史日收益，更新权重
+        #    （pending 按日序追加，eligibility 对 j 单调 → 可消费项恰为前缀）
+        while pending and pending[0][0] + lag <= i:
+            _j, rj = pending.pop(0)
+            g = np.zeros(len(S))
+            for s, r in rj.items():
+                if s in sidx:
+                    g[sidx[s]] = _rtilde(r)
+            if algo == "eg":
+                w = w * np.exp(eta * g)
+                w = w / w.sum()
+            else:  # ons：线性损失 ℓ=-r̃ᵀw 的在线牛顿步（Hazan et al. 2007）
+                Pg = P @ g
+                denom = 1.0 + float(g @ Pg)
+                w = np.array(_project_simplex(list(w + eta * Pg)))
+                P = P - np.outer(Pg, Pg) / denom
+        # 2) 当日组合收益：与 _run_impl 同一分配规则（命中策略权重取 max，归一化）
+        wmap = {S[k]: float(w[k]) for k in range(len(S))}
+        wvals = [max((wmap.get(x, 0.0) for x in p["sources"]), default=0.0) for p in picks]
+        tot = sum(wvals)
+        if tot > 0:
+            online_ret = sum((wv / tot) * p["return_pct"] for wv, p in zip(wvals, picks))
+        else:  # 全部策略被清零（罕见）→ 回退等权
+            online_ret = sum(p["return_pct"] for p in picks) / len(picks)
+        rows.append({"day": sd, "online_ret": round(online_ret, 3)})
+        # 3) 当日收益入队（下一日起按 lag 策略消费）
+        pending.append((i, rday))
+
+    acc, wins = 1.0, 0
+    for r in rows:
+        acc *= (1 + r["online_ret"] / 100.0)
+        wins += 1 if r["online_ret"] > 0 else 0
+    return {"algo": algo, "eta": eta, "strict_lag": strict_lag,
+            "total_pct": round((acc - 1) * 100, 2),
+            "win_rate": round(wins / len(rows) * 100, 1) if rows else None,
+            "n_days": len(rows), "rows": rows}
+
+
+def online_table() -> list[dict]:
+    """在线权重家族（EG/ONS × η 网格 + 严格因果档）样本外汇总表。"""
+    out = []
+    for eta in _ONLINE_EG_ETAS:
+        out.append(run_online("eg", eta))
+    for eta in _ONLINE_ONS_ETAS:
+        out.append(run_online("ons", eta))
+    out.append(run_online("eg", 0.2, strict_lag=True))
+    out.append(run_online("ons", 1.0, strict_lag=True))
+    return out
+
+
+def _print_online_table(prod_adaptive: float, equal: float) -> None:
+    print("=" * 64)
+    print("在线学习权重对比（EG/ONS，同一批票同一分配规则，样本外累计）")
+    print("=" * 64)
+    print(f"{'算法':<10}{'参数':<14}{'累计':>10}{'胜日率':>10}   备注")
+    print(f"{'生产自适应':<10}{'CONFIG':<14}{prod_adaptive:>+10.2f}")
+    print(f"{'等权':<10}{'—':<14}{equal:>+10.2f}")
+    for r in online_table():
+        note = "严格因果(lag=hold+1)" if r["strict_lag"] else ""
+        eta_s = f"η={r['eta']}"
+        win_s = f"{r['win_rate']}%"
+        print(f"{r['algo'].upper():<10}{eta_s:<14}{r['total_pct']:>+10.2f}{win_s:>10}   {note}")
+    print("-" * 64)
+    print("EG=乘性指数更新（Helmbold 1998）；ONS=在线牛顿步（Hazan 2007）。")
+    print("仅作实验对比，不改生产配置；adopt 需另过 --recommend 稳健性门控。")
+
+
 def main() -> int:
     import argparse
     ap = argparse.ArgumentParser()
+    ap.add_argument("--online", action="store_true", help="额外输出 EG/ONS 在线权重对比实验")
     ap.add_argument("--sweep", action="store_true", help="额外输出参数敏感性扫描表")
     ap.add_argument("--sweep-exits", action="store_true", help="额外输出出场参数敏感性扫描表（止损%/trailing%/持有期，出场感知）")
     ap.add_argument("--recommend", action="store_true", help="输出月度重验推荐配置 JSON（含稳健性判定）")
@@ -1051,6 +1235,9 @@ def main() -> int:
 
     res = run()
     _print_report(res)
+
+    if args.online:
+        _print_online_table(res["adaptive_total_pct"], res["equal_total_pct"])
 
     if args.sweep:
         print("=" * 64)

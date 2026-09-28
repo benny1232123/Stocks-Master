@@ -94,7 +94,10 @@ _SPECS: list[tuple[str, fz.Candidate]] = [
     ("distlo10", fz.Candidate(name="distlo10", kind="distlo", prior=-1, params=(10,))),
     ("distlo60", fz.Candidate(name="distlo60", kind="distlo", prior=-1, params=(60,))),
     # 波动水平（预注册基线之一，锚在因子池对比集内）
-    ("vol20", fz.Candidate(name="vol20", kind="vol", prior=-1, params=(20,))),
+    # 极值日（过去 N 日最大单日收益，MAX/彩票偏好）——先验多低
+    # 2026-09-27 菜单置换：vol20 → maxret10（头对头残差 t=-5.04 vs -0.99，
+    # Su 2025「A 股 MAX 吸收 IVOL」；沙箱 A/B +4.19pp 过门，见 stock_data/menu_swap_ab.md）
+    ("maxret10", fz.Candidate(name="maxret10", kind="maxret", prior=-1, params=(10,))),
     # 非流动性（Amihud）——先验多高
     ("illiq20", fz.Candidate(name="illiq20", kind="illiq", prior=+1, params=(20,))),
 ]
@@ -244,10 +247,21 @@ def main() -> int:
     # 不会误伤。
     min_cov = max(2, int(args.min_xsec))
     thin_days = []
+    skipped_no_trade = []
     for d in days:
         non_na, total = fe.signal_day_coverage(close, d)
-        if non_na < min_cov:
+        if non_na >= min_cov:
+            continue
+        if non_na == 0:
+            # 截面恰为 0 = 非交易日（W-FRI 回放日历含国庆/春节等假期周五，K 线无 bar）
+            # → 合法空日，跳过不产表、不算失败
+            skipped_no_trade.append(d)
+        else:
+            # 0 < 截面 < 下限 = 数据截断/未刷新 → fail-loud 中止
             thin_days.append((d, non_na, total))
+    if skipped_no_trade:
+        print(f"[zoo_factor] 跳过 {len(skipped_no_trade)} 个非交易日（截面=0，假期周五）："
+              f"{','.join(skipped_no_trade)}", flush=True)
     if thin_days:
         for d, non_na, total in thin_days:
             print(f"[zoo_factor] ERROR: 信号日 {d} 有效截面仅 {non_na}/{total}"

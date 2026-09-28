@@ -184,7 +184,7 @@ jobs:
           from smcore.storage import upload_file
 
           today = os.environ.get('SIGNAL_DATE') or __import__('datetime').date.today().strftime('%Y%m%d')
-          df, report = fuse_signals(today, total_capital=100000, max_picks=15, fetch_levels=True)
+          df, report = fuse_signals(today, total_capital=100000, max_picks=50, fetch_levels=True)
           print(f'操作清单: {len(df)} 只候选 @ {today}')
           if not df.empty:
               path = save_action_list(df, today)
