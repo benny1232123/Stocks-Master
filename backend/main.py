@@ -336,6 +336,12 @@ def daily_action_list_dates() -> dict:
     import re as _re
 
     files = sorted(_glob.glob(str(STOCK_DATA_DIR / "Daily-Action-List-*.csv")), reverse=True)
+    # 回测批次覆盖标记（2026-09-29）：前端信号日选择器据此三态显示
+    # （已加载 hold 天数 / 已完结·懒加载 / 持仓中·缺失），不再把「未装载」误标「持仓中」
+    bt_tags = {
+        os.path.basename(f)[len("Multi-Backtest-"):-len("-summary.csv")]
+        for f in _glob.glob(str(STOCK_DATA_DIR / "Multi-Backtest-*-summary.csv"))
+    }
     items = []
     for f in files:
         m = _re.search(r"(\d{8})", os.path.basename(f))
@@ -352,6 +358,7 @@ def daily_action_list_dates() -> dict:
             "path": str(Path(f).relative_to(ROOT)),
             "modified_at": Path(f).stat().st_mtime,
             "total": len(df) if df is not None else 0,
+            "has_backtest": tag in bt_tags,
         })
     return {"items": items}
 
@@ -435,12 +442,49 @@ def latest_backtest() -> dict:
     return {"latest": latest.__dict__, "preview": preview_csv(latest.path)}
 
 
+def _load_daily_batch(date_tag: str) -> tuple[dict | None, int]:
+    """读取单个信号日的回测批次（summary+equity+trades）。
+
+    trades 附带股票名称（当日 DAL 代码→名称）并剔除异常成交。
+    供 /api/backtests/daily-latest（批量装载）与 /api/backtests/daily-batch
+    （按日期懒加载）共用，保证两个端点口径完全一致。
+    返回 (item, excluded_count)；summary 缺失返回 (None, 0)。
+    """
+    summary_df = read_csv_file(f"stock_data/Multi-Backtest-{date_tag}-summary.csv")
+    summary = summary_df.to_dict(orient="records")[0] if not summary_df.empty else None
+    if summary is None:
+        return None, 0
+
+    def _read(suffix: str) -> tuple[list, int]:
+        df = read_csv_file(f"stock_data/Multi-Backtest-{date_tag}-{suffix}.csv")
+        recs = df.to_dict(orient="records") if not df.empty else []
+        if suffix == "trades":
+            # 附带股票名称：从当日信号清单读取 代码→名称
+            name_map = {}
+            dal = read_csv_file(f"stock_data/Daily-Action-List-{date_tag}.csv")
+            if not dal.empty and {"股票代码", "股票名称"}.issubset(dal.columns):
+                for _, nr in dal.iterrows():
+                    c = str(nr.get("股票代码", "")).strip()
+                    if c:
+                        name_map[c] = str(nr.get("股票名称", ""))
+            for rec in recs:
+                c = str(rec.get("code", "")).strip().zfill(6)
+                rec["name"] = name_map.get(c, "") or name_map.get(c.lstrip("0"), "")
+            clean = [r for r in recs if not _is_corrupt_trade(r)]
+            return clean, len(recs) - len(clean)
+        return recs, 0
+
+    equity, _ = _read("equity")
+    trades, excluded = _read("trades")
+    return {"date": date_tag, "summary": summary, "equity": equity, "trades": trades}, excluded
+
+
 @app.get("/api/backtests/daily-latest")
 def daily_latest_backtest() -> dict:
     """读取每日 CI 自动对全策略清单跑出的前向信号回测结果（Multi-Backtest-*）。
 
-    返回全部历史批次（按信号日倒序），前端以「信号日选择器」形式展示，
-    每个信号日对应一次独立的「从历史某天开始 → 往后持有 N 天」的前向回测。
+    只装载最近 N 个批次（默认 14），按信号日倒序；更早的信号日由前端经
+    /api/backtests/daily-batch 按日期懒加载（徽章依据 dates 端点的 has_backtest）。
     """
     import glob as _glob
 
@@ -448,10 +492,9 @@ def daily_latest_backtest() -> dict:
 
     files = sorted(_glob.glob(str(STOCK_DATA_DIR / "Multi-Backtest-*-summary.csv")), reverse=True)
     # 内存护栏（2026-09-12 OOM #2）：全量读取 84 天 × (summary+equity+trades) CSV
-    # 会把 512MB 实例打爆。默认只装载最近 90 天的批次（回测 Tab 的信号日选择器
-    # 覆盖范围足够）；需要更久可调 BACKTEST_DAILY_LIST_DAYS。
-    # 90 天全量读取在 512MB 实例上逼近内存上限（曾触发 OOM 重启循环）：
-    # 网站默认展示最近 14 天（信号日选择器覆盖范围）；本地/需要更久时调大此环境变量
+    # 会把 512MB 实例打爆。90 天全量读取在 512MB 实例上逼近内存上限（曾触发 OOM
+    # 重启循环）：网站默认展示最近 14 天；本地/需要更久时调大 BACKTEST_DAILY_LIST_DAYS。
+    # 2026-09-29 回填 281 批后选择器覆盖全年信号日，14 批以外的日期走 daily-batch 懒加载。
     _max_days = int(os.environ.get("BACKTEST_DAILY_LIST_DAYS", "14"))
     files = files[:_max_days]
     items = []
@@ -460,40 +503,29 @@ def daily_latest_backtest() -> dict:
     for f in files:
         name = os.path.basename(f)
         date_tag = name[len("Multi-Backtest-"):-len("-summary.csv")]
-
-        def _read(suffix: str):
-            nonlocal excluded_total
-            df = read_csv_file(f"stock_data/Multi-Backtest-{date_tag}-{suffix}.csv")
-            recs = df.to_dict(orient="records") if not df.empty else []
-            if suffix == "trades":
-                # 附带股票名称：从当日信号清单读取 代码→名称
-                name_map = {}
-                dal = read_csv_file(f"stock_data/Daily-Action-List-{date_tag}.csv")
-                if not dal.empty and {"股票代码", "股票名称"}.issubset(dal.columns):
-                    for _, nr in dal.iterrows():
-                        c = str(nr.get("股票代码", "")).strip()
-                        if c:
-                            name_map[c] = str(nr.get("股票名称", ""))
-                for rec in recs:
-                    c = str(rec.get("code", "")).strip().zfill(6)
-                    rec["name"] = name_map.get(c, "") or name_map.get(c.lstrip("0"), "")
-                clean = [r for r in recs if not _is_corrupt_trade(r)]
-                excluded_total += len(recs) - len(clean)
-                recs = clean
-            return recs
-
-        summary_df = read_csv_file(f"stock_data/Multi-Backtest-{date_tag}-summary.csv")
-        summary = summary_df.to_dict(orient="records")[0] if not summary_df.empty else None
-        if summary is None:
+        item, excluded = _load_daily_batch(date_tag)
+        if item is None:
             continue
-        items.append({
-            "date": date_tag,
-            "summary": summary,
-            "equity": _read("equity"),
-            "trades": _read("trades"),
-        })
+        excluded_total += excluded
+        items.append(item)
     latest = items[0] if items else None
     return {"items": items, "latest": latest, "excluded_trades": excluded_total}
+
+
+@app.get("/api/backtests/daily-batch")
+def daily_backtest_batch(date: str) -> dict:
+    """按信号日懒加载单个回测批次（summary+equity+trades，与 daily-latest 同口径）。
+
+    背景（2026-09-29）：daily-latest 因 512MB 内存护栏只装载最近 14 批，而信号日
+    选择器列出全部 DAL 日期——回填 281 批后，14 批以外的历史日期点开是空、徽章还
+    误标「持仓中」。前端对未装载且 has_backtest 的日期改走本端点按需取单批（~百KB）。
+    """
+    if not re.fullmatch(r"\d{8}", str(date)):
+        raise HTTPException(status_code=400, detail="date 必须是 YYYYMMDD 格式")
+    item, excluded = _load_daily_batch(str(date))
+    if item is None:
+        return {"latest": None, "batch": None, "excluded_trades": 0}
+    return {"latest": item, "batch": item, "excluded_trades": excluded}
 
 
 @app.get("/api/backtests/daily-summary")

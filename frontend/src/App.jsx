@@ -427,13 +427,30 @@ function App() {
   // 网站只读这份清单（下方 dalRows），不参与任何计算。
   // 回测同样只看 CI 的「每日自动回测 · 前向信号回测」批次。
 
-  // 信号日下拉：以全部 DAL 日期为基准，回测未完结的显示「持仓中」
+  // 信号日下拉：以全部 DAL 日期为基准。徽章三态（2026-09-29）：
+  // 已装载 → hold 天数；未装载但后端有批次（has_backtest）→「已完结」+ 点选懒加载；
+  // 无批次且窗口未走完 →「持仓中」；无批次且窗口已走完 →「缺失」（管线缺口，待 CI 补算）。
+  // 旧逻辑把「未装载进 14 批窗口」一律标「持仓中」，回填全年批次后 4 个月前的日期也挂持仓中。
   const btDateMap = useMemo(() => new Map((dailyBacktests || []).map((d) => [d.date, d])), [dailyBacktests])
   const selectedBtDate = dailyDates[selDaily]?.date
   const selectedBacktest = selectedBtDate ? btDateMap.get(selectedBtDate) : null
+  // 持有天数基准：取最新已装载批次的 hold_days（避免前端硬编码，回退 12 = CI HOLD_DAYS）
+  const btHoldDays = Number(dailyBacktests?.[0]?.summary?.hold_days) || 12
+  const [btBatchLoading, setBtBatchLoading] = useState(null)
+  const daysSinceDate = (tag) => {
+    if (!tag || tag.length !== 8) return 9999
+    const d = new Date(Number(tag.slice(0, 4)), Number(tag.slice(4, 6)) - 1, Number(tag.slice(6)))
+    return Math.floor((Date.now() - d.getTime()) / 86400000)
+  }
 
   useEffect(() => { loadDailyBacktest() }, [])
   useEffect(() => { loadDailyDates(); reloadArtifacts() }, [])
+  // 选中「已完结但未装载」的历史信号日 → 自动懒加载单批次（覆盖一切选择路径）
+  useEffect(() => {
+    const it = dailyDates[selDaily]
+    if (it?.has_backtest && !btDateMap.has(it.date)) loadBatchForDate(it.date)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [selectedBtDate, dailyDates])
   // 日期选择器：点击外部关闭
   useEffect(() => {
     if (!dateOpen) return
@@ -465,6 +482,23 @@ function App() {
     }
     const sdata = await safeJson(`/api/backtests/daily-summary?lookback=${summaryLookback}`, 'daily_summary.json')
     if (sdata) setDailySummary(sdata)
+  }
+
+  // 懒加载单个历史批次（2026-09-29）：daily-latest 因云端内存护栏只装载最近 14 批，
+  // 而信号日选择器列出全部 DAL 日期——选择器里「已完结」但未装载的日期点选时按需取单批。
+  async function loadBatchForDate(date) {
+    if (!date || btDateMap.has(date) || btBatchLoading) return
+    setBtBatchLoading(date)
+    try {
+      const r = await fetch(`/api/backtests/daily-batch?date=${date}`, { cache: 'no-store' })
+      if (r.ok) {
+        const d = await r.json()
+        if (d.batch) {
+          setDailyBacktests((prev) => (prev || []).some((x) => x.date === date) ? prev : [...(prev || []), d.batch])
+        }
+      }
+    } catch { /* 静默：徽章保持「已完结」，详情区显示加载失败提示 */ }
+    finally { setBtBatchLoading(null) }
   }
 
   // 切换总体总结的聚合窗口（20 / 40 / 近一年）后重新拉取总体指标。
@@ -1910,17 +1944,20 @@ function App() {
                             {dailyDates.map((it, i) => {
                               const active = i === selDaily
                               const bt = btDateMap.get(it.date)
+                              let badge = '持仓中'
+                              let badgePending = true
+                              if (bt) { badge = `${bt.summary?.hold_days ?? 0}天`; badgePending = false }
+                              else if (it.has_backtest) { badge = btBatchLoading === it.date ? '加载中' : '已完结'; badgePending = false }
+                              else if (daysSinceDate(it.date) >= btHoldDays) { badge = '缺失' }
                               return (
                                 <button
                                   key={it.date}
                                   type="button"
                                   className={`dp-item${active ? ' dp-active' : ''}`}
-                                  onClick={() => { setSelDaily(i); setBtDateOpen(false) }}
+                                  onClick={() => { setSelDaily(i); setBtDateOpen(false); if (!bt && it.has_backtest) loadBatchForDate(it.date) }}
                                 >
                                   <span>{it.date.slice(0,4)}/{it.date.slice(4,6)}/{it.date.slice(6)}</span>
-                                  <span className={`dp-badge${bt ? '' : ' pending'}`}>
-                                    {bt ? `${bt.summary?.hold_days ?? 0}天` : '持仓中'}
-                                  </span>
+                                  <span className={`dp-badge${badgePending ? ' pending' : ''}`}>{badge}</span>
                                 </button>
                               )
                             })}
@@ -2103,13 +2140,44 @@ function App() {
                   ) : null}
                 </>
                 )
-                })() : (
-                  <div className="bt-empty">
-                    <div className="bt-empty-icon">⏳</div>
-                    <div className="bt-empty-title">该信号日前向回测尚未完结</div>
-                    <div className="bt-empty-desc">信号日 {selectedBtDate ? `${selectedBtDate.slice(0,4)}/${selectedBtDate.slice(4,6)}/${selectedBtDate.slice(6)}` : ''} 的持有窗口仍在进行中，完结后每日 CI 会自动更新回测结果。</div>
-                  </div>
-                )
+                })() : (() => {
+                  const dstr = selectedBtDate ? `${selectedBtDate.slice(0,4)}/${selectedBtDate.slice(4,6)}/${selectedBtDate.slice(6)}` : ''
+                  const selIt = dailyDates.find((x) => x.date === selectedBtDate)
+                  if (btBatchLoading === selectedBtDate) {
+                    return (
+                      <div className="bt-empty">
+                        <div className="bt-empty-icon">⏳</div>
+                        <div className="bt-empty-title">批次加载中…</div>
+                        <div className="bt-empty-desc">正在读取信号日 {dstr} 的回测批次。</div>
+                      </div>
+                    )
+                  }
+                  if (selIt?.has_backtest) {
+                    return (
+                      <div className="bt-empty">
+                        <div className="bt-empty-icon">📦</div>
+                        <div className="bt-empty-title">批次加载失败</div>
+                        <div className="bt-empty-desc">信号日 {dstr} 的回测批次存在但读取失败，请重新点击日期重试。</div>
+                      </div>
+                    )
+                  }
+                  if (daysSinceDate(selectedBtDate) < btHoldDays) {
+                    return (
+                      <div className="bt-empty">
+                        <div className="bt-empty-icon">⏳</div>
+                        <div className="bt-empty-title">该信号日前向回测尚未完结</div>
+                        <div className="bt-empty-desc">信号日 {dstr} 的持有窗口仍在进行中，完结后每日 CI 会自动更新回测结果。</div>
+                      </div>
+                    )
+                  }
+                  return (
+                    <div className="bt-empty">
+                      <div className="bt-empty-icon">🌙</div>
+                      <div className="bt-empty-title">该信号日暂无回测批次</div>
+                      <div className="bt-empty-desc">信号日 {dstr} 的持有窗口已走完但管线未产出批次（当日清单可能残缺或 CI 缺跑），待每日回测补算后自动出现。</div>
+                    </div>
+                  )
+                })()
                 }
               </>
             )}
