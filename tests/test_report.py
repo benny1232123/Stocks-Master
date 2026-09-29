@@ -78,26 +78,26 @@ def test_build_report_text_factor_type_rollup_and_column():
     df = pd.DataFrame([
         {"股票代码": "000001", "股票名称": "平安银行", "命中策略数": 2,
          "综合评分": 70, "建议仓位%": 5, "止损价(下轨)": 10.0, "止盈价(上轨)": 12.0,
-         "来源策略": "PVCorr20/Vol20"},
+         "来源策略": "PVCorr20/MaxRet10"},
         {"股票代码": "600000", "股票名称": "浦发银行", "命中策略数": 1,
          "综合评分": 60, "建议仓位%": 4, "止损价(下轨)": 9.0, "止盈价(上轨)": 11.0,
          "来源策略": "Illiq20"},
     ])
-    # counts 按 A 批策略 id 传入 → 归并：量价相关2 / 收益偏度1 / 波动1 / 非流动性3
+    # counts 按 A 批策略 id 传入 → 归并：量价相关2 / 收益偏度1 / 极值日1 / 非流动性3
     text = report._build_report_text(
         df, "20260911",
-        counts={"pvcorr20": 2, "cvamt20": 0, "skew20": 1, "vol20": 1, "illiq20": 3},
-        source_dates={"PVCorr20": "20260911", "Vol20": "20260911",
+        counts={"pvcorr20": 2, "cvamt20": 0, "skew20": 1, "maxret10": 1, "illiq20": 3},
+        source_dates={"PVCorr20": "20260911", "MaxRet10": "20260911",
                       "Illiq20": "20260911"},
     )
     assert "### 因子类型贡献度" in text
     assert "量价相关: 2 只" in text
     assert "收益偏度: 1 只" in text
-    assert "波动: 1 只" in text
+    assert "极值日: 1 只" in text
     assert "非流动性: 3 只" in text
     # 明细表含因子类型列，且按来源策略推导
     assert "| 代码 | 名称 | 命中 | 因子类型 |" in text
-    assert "| 000001 | 平安银行 | 2 | 量价相关/波动 |" in text
+    assert "| 000001 | 平安银行 | 2 | 量价相关/极值日 |" in text
     assert "| 600000 | 浦发银行 | 1 | 非流动性 |" in text
 
 

@@ -295,7 +295,7 @@ const STRAT_LABEL = {
   vratio10_60: 'VRatio10_60 波动比',
   distlo10: 'DistLo10 距低点',
   distlo60: 'DistLo60 距低点',
-  vol20: 'Vol20 波动',
+  maxret10: 'MaxRet10 极值日',
   illiq20: 'Illiq20 非流动性',
 }
 

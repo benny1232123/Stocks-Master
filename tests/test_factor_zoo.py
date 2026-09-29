@@ -307,13 +307,13 @@ def test_alpha158_round_enumerated_deterministically():
     names = [c.name for c in fz.enumerate_candidates()]
     for n in ALPHA158_NEW:
         assert n in names, f"{n} 不在文法中"
-    # 新轮窗口统一 {5,20,60}，总数 153
+    # 新轮窗口统一 {5,20,60}；2026-09-28 增 marginchg5/20（融资杠杆维度），总数 155
     new_kinds = {"kup", "klow", "qtlu", "qtld", "imax", "imxd",
                  "corrlv", "sump", "vsump", "wvma"}
     got = [n for n in names if n.split("_")[0].rstrip("0123456789") in new_kinds
            or any(n.startswith(k) for k in new_kinds)]
     assert len(got) == 30, f"Alpha158 扩展轮应为 30 候选，实际 {len(got)}"
-    assert len(names) == 153
+    assert len(names) == 155
 
 
 def test_alpha158_round_values_finite_and_in_range():

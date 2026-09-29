@@ -369,8 +369,12 @@ def read_kline_cache(code, adjust: str = DEFAULT_ADJUST, base_dir=None) -> pd.Da
     frames: list[pd.DataFrame] = []
     for pf in _bucket_files(code6, adjust, base):
         try:
+            # use_threads=False（2026-09-29）：长驻进程里数千次 dataset 打开后，
+            # pyarrow 默认线程池存在确定性死锁类挂起（pytest 长会话/夜间管线实测）；
+            # 单线程读取这类小切片代价可忽略，换稳定性。
             sub = pd.read_parquet(
-                pf, columns=DAILY_K_COLUMNS + ["code"], filters=[("code", "==", code6)]
+                pf, columns=DAILY_K_COLUMNS + ["code"], filters=[("code", "==", code6)],
+                use_threads=False,
             )
             if not sub.empty:
                 frames.append(sub)

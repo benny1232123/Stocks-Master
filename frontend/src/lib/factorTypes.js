@@ -15,7 +15,7 @@
 // C 批基本面单指标原子（ROE/毛利率/EP/BP）与反向动量 lowmom20 全部移除，菜单收缩为
 // **A 批 12 个因子池（factor_zoo 预注册文法 v1）存活价格因子**：
 //   量价相关(pvcorr20/60) / 成交稳定(cvamt20/60) / 收益偏度(skew20/60) /
-//   波动比(vratio20_120/vratio10_60) / 位置·距低点(distlo10/60) / 波动(vol20) / 非流动性(illiq20)。
+//   波动比(vratio20_120/vratio10_60) / 位置·距低点(distlo10/60) / 极值日(maxret10，2026-09-27 置换接替 vol20) / 非流动性(illiq20)。
 // 这些因子公式 1:1 复用 factor_zoo.compute_factor，已验证存活。新因子候选（来自因子挖掘系统 /
 // 开源 Alpha101 等）后续按同一注册表协议接入：在 factor_types 注册 + 产出同名
 // Stock-Selection-<Label>-<date>.csv 即可，前端三处副本（本文件 / styles.css / App.jsx）同步更新，
@@ -36,7 +36,7 @@ export const STRATEGY_FACTOR_TYPE = {
   vratio10_60: '波动比',
   distlo10: '位置·距低点',
   distlo60: '位置·距低点',
-  vol20: '波动',
+  maxret10: '极值日',
   illiq20: '非流动性',
 }
 
@@ -46,6 +46,7 @@ export const FACTOR_TYPE_ORDER = [
   '收益偏度',
   '波动比',
   '位置·距低点',
+  '极值日',
   '波动',
   '非流动性',
   '其他',
@@ -95,6 +96,7 @@ export const FACTOR_TYPE_COLORS = {
   '收益偏度': { bg: 'hsla(224, 76%, 40%, 0.10)', text: '#1E40AF', border: 'hsla(224, 76%, 40%, 0.35)' },
   '波动比': { bg: 'hsla(189, 94%, 35%, 0.10)', text: '#0891B2', border: 'hsla(189, 94%, 35%, 0.35)' },
   '位置·距低点': { bg: 'hsla(30, 6%, 32%, 0.10)', text: '#57534E', border: 'hsla(30, 6%, 32%, 0.35)' },
+  '极值日': { bg: 'hsla(0, 72%, 42%, 0.10)', text: '#DC2626', border: 'hsla(0, 72%, 42%, 0.35)' },
   '波动': { bg: 'hsla(43, 96%, 40%, 0.10)', text: '#CA8A04', border: 'hsla(43, 96%, 40%, 0.35)' },
   '非流动性': { bg: 'hsla(80, 79%, 27%, 0.10)', text: '#4D7C0F', border: 'hsla(80, 79%, 27%, 0.35)' },
   '其他': { bg: 'hsl(var(--surface-2))', text: 'hsl(var(--muted))', border: 'hsl(var(--border))' },

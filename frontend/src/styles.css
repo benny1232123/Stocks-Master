@@ -857,6 +857,7 @@
 .top-tag--distlo10 { background: hsl(30, 8%, 92%); color: hsl(30, 8%, 32%); }
 .top-tag--distlo60 { background: hsl(30, 8%, 93%); color: hsl(30, 6%, 34%); }
 .top-tag--vol20    { background: hsl(43, 96%, 90%); color: hsl(40, 95%, 35%); }
+.top-tag--maxret10 { background: hsl(0, 72%, 90%); color: hsl(0, 72%, 35%); }
 .top-tag--illiq20  { background: hsl(80, 79%, 90%); color: hsl(80, 70%, 26%); }
 
 /* 副行：买入价/现价/仓位 */

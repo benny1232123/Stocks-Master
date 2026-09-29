@@ -454,10 +454,23 @@ def _day_records(sd: str, exit_kwargs=None) -> list[dict]:
     return back
 
 
+_SAD_CACHE: tuple[tuple, list[str]] | None = None
+
+
 def _all_signal_days() -> list[str]:
-    """所有存在 Daily-Action-List 且有可计算前向收益的信号日。"""
+    """所有存在 Daily-Action-List 且有可计算前向收益的信号日。
+
+    结果按「DAL 文件数 + 最新 mtime」指纹缓存（2026-09-29）：此前每次调用都对
+    ~240 个无 Multi-Backtest 的 DAL 逐票读 parquet 校验——在长驻进程里这是数千次
+    dataset 打开（挂死诱因）+ 大量重复 IO。DAL 集合变化（增删/mtime 变化）自动失效。
+    """
+    global _SAD_CACHE
+    dals = _all_daily_action_lists()
+    fp = (len(dals), max((d.stat().st_mtime for d in dals), default=0.0))
+    if _SAD_CACHE is not None and _SAD_CACHE[0] == fp:
+        return _SAD_CACHE[1]
     days = set()
-    for dal in _all_daily_action_lists():
+    for dal in dals:
         sd = _parse_signal_date_from_name(dal.name)
         if sd is None:
             continue
@@ -471,7 +484,8 @@ def _all_signal_days() -> list[str]:
             if not _load_cached_kdata(code).empty:
                 days.add(sd)
                 break
-    return sorted(days)
+    _SAD_CACHE = (fp, sorted(days))
+    return _SAD_CACHE[1]
 
 
 def _edge_lag_cal_days() -> int:
