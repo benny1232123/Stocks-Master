@@ -1,0 +1,14 @@
+{
+  "signal_date": "20260430",
+  "generated_at": "2026-09-28T18:01:44",
+  "regime": "趋势上行",
+  "regime_as_of": "20260430",
+  "live_regime": "震荡轮动",
+  "is_today": false,
+  "date_pinned": true,
+  "ml_integration": {
+    "enabled": false,
+    "applied": false,
+    "note": null
+  }
+}
