@@ -1,0 +1,4 @@
+﻿code,buy_date,sell_date,buy_price,sell_price,qty,return_pct,exit_reason
+603261,2026-06-23,2026-06-24,44.434,48.951,100,10.16,take_partial_final
+001331,2026-06-23,2026-06-29,48.128,51.199,100,6.38,take_partial
+001331,2026-06-23,2026-06-29,48.128,45.253,400,-5.97,stop_hard

@@ -1,29 +1,29 @@
 {
  "count": 20,
  "lookback": 20,
- "completed_count": 19,
- "avg_return": 0.18,
- "median_return": 0.36,
- "avg_drawdown": -0.99,
- "median_drawdown": -0.88,
- "avg_win_rate": 56.6,
- "median_win_rate": 54.5,
- "avg_sharpe": 0.17,
- "total_trades": 286,
- "positive_days": 11,
- "positive_ratio": 57.9,
- "avg_hold_days": 11.4,
+ "completed_count": 20,
+ "avg_return": -0.7,
+ "median_return": -0.99,
+ "avg_drawdown": -1.34,
+ "median_drawdown": -1.47,
+ "avg_win_rate": 52.3,
+ "median_win_rate": 39.2,
+ "avg_sharpe": -0.4,
+ "total_trades": 2720,
+ "positive_days": 5,
+ "positive_ratio": 25.0,
+ "avg_hold_days": 10.8,
  "best_day": {
   "date": "20260915",
-  "return": 2.01
+  "return": 2.27
  },
  "worst_day": {
-  "date": "20260909",
-  "return": -1.73
+  "date": "20260901",
+  "return": -2.02
  },
  "benchmark_name": "沪深300",
- "benchmark_return": -0.7,
- "excess_return": 0.88,
+ "benchmark_return": -2.17,
+ "excess_return": 1.47,
  "excluded_trades": 0,
- "avg_trade_return": 0.99
+ "avg_trade_return": 0.42
 }
