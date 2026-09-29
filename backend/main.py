@@ -37,8 +37,9 @@ from smcore.holdings import add_trade, clear_trades, portfolio_snapshot, trades_
 # ── 启动内存优化：重模块改函数内懒导入（2026-09-14）──
 # 此前 analysis / backtest / selection 三个模块在启动时即被模块级导入。实测其副作用
 # 拖入 backtrader + talib（~24MB）、akshare + jieba + bs4 + lxml + baostock（~41MB），
-# 而 RENDER_LITE=1 下这些模块对应的端点（个股分析 / 回测触发 / 全市场扫描 / 策略融合）
+# 而 RENDER_LITE=1 下这些模块对应的端点（回测触发 / 策略融合）
 # 全部被 _lite_reject 提前 503 —— 等于为一批永不可达的功能常年付 60MB+ 常驻内存。
+# （原「个股分析」端点 2026-09-29 已整体退役，见下方退役注释。）
 # 改为在各自端点函数体内按需导入：精简模式下这些包永不加载（启动基线 163MB → ~100MB）；
 # 本地完整模式首次调用时多付一次性 import 延迟（~1s），此后走 sys.modules 缓存无差别。
 
@@ -359,7 +360,7 @@ def daily_action_list_dates() -> dict:
 def news_surface() -> dict:
     """消息面 / 市场舆情：热门板块 + 全市场新闻流（CCTV 舆情产物，纯本地读取）。
 
-    供前端「日报」页渲染 📰 消息面区块；个股视角见 /api/analysis/{code} 的 news 字段。
+    供前端「日报」页渲染 📰 消息面区块（个股视角的舆情板块归属也在此列）。
     """
     return build_news_surface()
 
@@ -760,12 +761,14 @@ def _parse_date(value, default: date) -> date:
     return default
 
 
-@app.get("/api/analysis/{code}")
-def analysis(code: str, window: int = 20, k: float = 1.645, days_back: int = 180) -> dict:
-    _lite_reject("个股分析")
-    from smcore.analysis import build_stock_analysis  # 懒导入：轻量模式不会走到这里
-
-    return build_stock_analysis(code, window=window, k=k, days_back=days_back)
+# 2026-09-29 退役：原 GET /api/analysis/{code}（个股分析）已整体移除。
+# 退役原因：① 唯一调用方是前端「个股分析」面板，该面板同日下架（Tab + ComprehensivePanel
+#   全部移除）；② 端点在生产 RENDER_LITE=1 下恒 503，本地全量模式每次调用现拉 K 线，
+#   属重内存路径，留着只会误导排障。个股视角的舆情数据走 /api/artifacts/news-surface
+#   （CI 产物，零内存峰值）；三维评分真源仍由 /api/config/recommendation 提供
+#   （notify_holdings_analysis 持仓日报与前端 useScoringConfig 共用）。
+# 保留：smcore/analysis.py 模块本体（持仓日报 scripts/notify_holdings_analysis.py
+#   直接函数级调用 build_stock_analysis，不走 HTTP）。
 
 
 # 2026-09-17 退役：原 GET /api/selection/candidates（候选池）与

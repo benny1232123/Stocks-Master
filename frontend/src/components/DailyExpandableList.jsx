@@ -133,7 +133,11 @@ function DailyExpandableList({ rows, onCodeClick }) {
               <div className="daily-summary-left">
                 <span className="daily-expander">{isOpen ? '▼' : '▶'}</span>
                 {rankBadge(i)}
-                <span className="daily-code" onClick={(e) => { e.stopPropagation(); onCodeClick(code) }}>{code}</span>
+                <span
+                  className="daily-code"
+                  onClick={onCodeClick ? (e) => { e.stopPropagation(); onCodeClick(code) } : undefined}
+                  style={onCodeClick ? undefined : { cursor: 'default' }}
+                >{code}</span>
                 <span className="daily-name">{displayName}</span>
                 {/* 因子类型为主分类（彩色标签），策略名作为次级标签保留下钻 */}
                 <div className="strat-badges">

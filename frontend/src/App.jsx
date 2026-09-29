@@ -2,7 +2,6 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import {
   LayoutDashboard,
   Globe2,
-  LineChart,
   Briefcase,
   FlaskConical,
   ArrowUpRight,
@@ -24,7 +23,6 @@ import { StatCard, Field, SectionCard, MacroCard } from './components/cards'
 import DailyExpandableList from './components/DailyExpandableList'
 import { cn } from './lib/utils'
 import { factorTypesOfSource, getFactorTypeColor } from './lib/factorTypes'
-import { useScoringConfig, bandScore, bandLabel, annualizeRoe } from './config/useScoringConfig'
 
 // 构建版本（vite define 注入；本地 dev 下未定义时回退 dev）
 const BUILD_SHA = typeof __BUILD_SHA__ === 'string' ? __BUILD_SHA__ : 'dev'
@@ -37,7 +35,6 @@ const localDateStr = (d = new Date()) =>
 const TABS = [
   { id: 'overview', label: '概览', icon: LayoutDashboard },
   { id: 'macro', label: '宏观经济', icon: Globe2 },
-  { id: 'analysis', label: '分析', icon: LineChart },
   { id: 'daily', label: '日报', icon: FileText },
   { id: 'portfolio', label: '持仓', icon: Briefcase },
   { id: 'backtest', label: '回测', icon: FlaskConical },
@@ -380,326 +377,6 @@ function FilterSeg({ value, onChange }) {
   )
 }
 
-function ComprehensivePanel({ analysis }) {
-  // 评分阈值/权重来自后端单一真源（/api/config/recommendation），
-  // 后端不可达时回退打包快照；不再在本文件里硬编码任何分段阈值。
-  const CFG = useScoringConfig()
-  const L = analysis?.latest ?? {}
-  const M = analysis?.metrics ?? {}
-  const F = analysis?.fundamentals
-  const hasF = !!F
-  const news = analysis?.news
-
-  // 技术面原始指标
-  const rsi = L.rsi != null ? Number(L.rsi) : null
-  const dif = L.dif != null ? Number(L.dif) : null
-  const dea = L.dea != null ? Number(L.dea) : null
-  const macdH = L.macd_hist != null ? Number(L.macd_hist) : null
-  const kV = L.k_val != null ? Number(L.k_val) : null
-  const dV = L.d_val != null ? Number(L.d_val) : null
-  const jV = L.j_val != null ? Number(L.j_val) : null
-  const close = L.close != null ? Number(L.close) : null
-  const lower = L.lower != null ? Number(L.lower) : null
-  const upper = L.upper != null ? Number(L.upper) : null
-  const ma5 = L.ma5 != null ? Number(L.ma5) : null
-  const ma10 = L.ma10 != null ? Number(L.ma10) : null
-  const ma20 = L.ma20 != null ? Number(L.ma20) : null
-  const ma60 = L.ma60 != null ? Number(L.ma60) : null
-  const distLo = M.dist_to_lower_pct != null ? Number(M.dist_to_lower_pct) : null
-  const distHi = M.dist_to_upper_pct != null ? Number(M.dist_to_upper_pct) : null
-
-  // 技术面多空评分（自洽，不依赖外层闭包）
-  const techDetail = []
-  let techS = 0
-  if (rsi != null) {
-    if (rsi > 80) { techS -= 2; techDetail.push(['RSI', '严重超买', 'bear']) }
-    else if (rsi > 70) { techS -= 1; techDetail.push(['RSI', '高位', 'bear']) }
-    else if (rsi < 20) { techS += 2; techDetail.push(['RSI', '严重超卖', 'bull']) }
-    else if (rsi < 30) { techS += 1; techDetail.push(['RSI', '超卖', 'bull']) }
-    else if (rsi > 55) { techS += 1; techDetail.push(['RSI', '偏强', 'bull']) }
-    else if (rsi < 45) { techS -= 1; techDetail.push(['RSI', '偏弱', 'bear']) }
-    else techDetail.push(['RSI', '中性', 'neutral'])
-  }
-  if (dif != null && dea != null) {
-    // MACD 按零轴分档：dif>0「水上金叉」满分；dif<=0「水下金叉」减半（弱势反弹可靠性低）。
-    // 阈值取自后端真源 CFG.technical，勿在此硬编码。与 smcore/analysis.py 同构。
-    const T = CFG.technical ?? {}
-    if (dif > dea && macdH > 0) {
-      const above = dif > 0
-      techS += above ? (T.macd_golden_red ?? 2) : (T.macd_golden_red_below ?? 1)
-      techDetail.push(['MACD', above ? '金叉红柱' : '水下金叉', 'bull'])
-    }
-    else if (dif > dea && macdH <= 0) { techDetail.push(['MACD', '动能减弱', 'neutral']) }
-    else if (dif < dea && macdH < 0) { techS += (T.macd_dead_green ?? -2); techDetail.push(['MACD', '死叉绿柱', 'bear']) }
-    else if (dif < dea && macdH >= 0) { techDetail.push(['MACD', '柱收窄', 'neutral']) }
-    else techDetail.push(['MACD', '缠绕', 'neutral'])
-  }
-  if (kV != null && dV != null) {
-    if (jV != null && jV > 100) { techS -= 2; techDetail.push(['KDJ', '极端超买', 'bear']) }
-    else if (jV != null && jV < 0) { techS += 2; techDetail.push(['KDJ', '极端超卖', 'bull']) }
-    else if (kV > dV) { techS += 1; techDetail.push(['KDJ', '金叉', 'bull']) }
-    else if (kV < dV) { techS -= 1; techDetail.push(['KDJ', '死叉', 'bear']) }
-    else techDetail.push(['KDJ', '中性', 'neutral'])
-  }
-  if (ma5 != null && ma10 != null && ma20 != null) {
-    if (ma5 > ma10 && ma10 > ma20) { techS += 2; techDetail.push(['均线', '多头排列', 'bull']) }
-    else if (ma5 < ma10 && ma10 < ma20) { techS -= 2; techDetail.push(['均线', '空头排列', 'bear']) }
-    else if (ma5 > ma20) { techS += 1; techDetail.push(['均线', '短期偏强', 'bull']) }
-    else if (ma5 < ma20) { techS -= 1; techDetail.push(['均线', '短期偏弱', 'bear']) }
-    else techDetail.push(['均线', '中性', 'neutral'])
-  }
-  if (close != null && lower != null) {
-    if (close < lower) { techS += 1; techDetail.push(['布林', '破下轨', 'bull']) }
-    else if (distLo != null && distLo < 2) { techS += 1; techDetail.push(['布林', '近下轨', 'bull']) }
-    else if (distHi != null && distHi > -2) { techS -= 1; techDetail.push(['布林', '近上轨', 'bear']) }
-    else if (distLo != null && distLo < 5) { techDetail.push(['布林', '近下轨', 'neutral']) }
-    else if (distHi != null && distHi > -5) { techDetail.push(['布林', '近上轨', 'neutral']) }
-    else techDetail.push(['布林', '中部', 'neutral'])
-  }
-  const techClsCfg = CFG.technical_cls ?? { good: 70, bad: 30 }
-  const techScore = Math.max(0, Math.min(100, Math.round((CFG.tech_base ?? 50) + techS * (CFG.tech_step ?? 6))))
-  const techCls = techScore >= techClsCfg.good ? 'good' : techScore <= techClsCfg.bad ? 'bad' : 'neutral'
-  const techCount = { bull: techDetail.filter(x => x[2] === 'bull').length, bear: techDetail.filter(x => x[2] === 'bear').length }
-
-  // 基本面
-  const pe = F?.pe != null ? Number(F.pe) : null
-  const pb = F?.pb != null ? Number(F.pb) : null
-  const mcap = F?.mkt_cap != null ? Number(F.mkt_cap) : null
-  // ROE 口径：财报给的是**年初至今累计**，而 FUND.roe 阈值按**年度**设 → 先年化再比阈值/展示。
-  // 无 roe_period（旧扁平缓存，值本就是年度）→ 原样返回。与 smcore/analysis.py 同构。
-  const roeRaw = F?.roe != null ? Number(F.roe) : null
-  const roe = annualizeRoe(roeRaw, F?.roe_period)
-  const roeAnnualized = roeRaw != null && roe != null && roe !== roeRaw
-  const gm = F?.gross_margin != null ? Number(F.gross_margin) : null
-  const rg = F?.revenue_growth != null ? Number(F.revenue_growth) : null
-  const to = F?.turnover != null ? Number(F.turnover) : null
-  const amt = F?.amount_20 != null ? Number(F.amount_20) : null
-
-  // 基本面 / 资金面分段打分：全部走后端配置表
-  // ⚠️ 缺失因子口径（2026-09-15 与后端同构修正）：默认 exclude = 缺失因子**不进分母**
-  //（旧行为把 missing 塞进分母，等于把「未知」当「中等」，会把面分系统性拉向 50）。
-  // 只有该面一个因子都取不到时，才回落到该面 missing 分。
-  const missingPolicy = CFG.missing_factor_policy ?? 'exclude'
-  const meanOf = (pairs, missing) => {
-    const vals = pairs.filter(([v]) => v != null).map(([, s]) => s)
-    return vals.length ? Math.round(vals.reduce((a, b) => a + b, 0) / vals.length) : missing
-  }
-  const FUND = CFG.fundamental ?? {}
-  const fundMissing = FUND.missing ?? 50
-  const peScore = bandScore(FUND.pe, pe, fundMissing)
-  const pbScore = bandScore(FUND.pb, pb, fundMissing)
-  const roeScore = bandScore(FUND.roe, roe, fundMissing)
-  const gmScore = bandScore(FUND.gm, gm, fundMissing)
-  const rgScore = bandScore(FUND.rg, rg, fundMissing)
-  const fundScore = missingPolicy === 'neutral'
-    ? Math.round((peScore + pbScore + roeScore + gmScore + rgScore) / 5)
-    : meanOf([[pe, peScore], [pb, pbScore], [roe, roeScore], [gm, gmScore], [rg, rgScore]], fundMissing)
-  const fcCfg = CFG.fund_cap_cls ?? { good: 65, bad: 45 }
-  const fundCls = fundScore >= fcCfg.good ? 'good' : fundScore < fcCfg.bad ? 'bad' : 'neutral'
-
-  // 资金面（amount_20 缓存口径 = 近20日日均成交额(元)，/1e8 即亿元；勿再 /20）
-  const CAP = CFG.capital ?? {}
-  const capMissing = CAP.missing ?? 50
-  const dailyAmt = amt != null ? amt / 1e8 : null
-  const liqScore = bandScore(CAP.liq_amt, dailyAmt, capMissing)
-  const toScore = bandScore(CAP.turnover, to, capMissing)
-  const capScore = missingPolicy === 'neutral'
-    ? Math.round((liqScore + toScore) / 2)
-    : meanOf([[dailyAmt, liqScore], [to, toScore]], capMissing)
-  const capCls = capScore >= fcCfg.good ? 'good' : capScore < fcCfg.bad ? 'bad' : 'neutral'
-
-  // 综合总评分
-  const W = CFG.face_weights ?? { technical: 0.4, fundamental: 0.35, capital: 0.25 }
-  const total = hasF ? Math.round(techScore * W.technical + fundScore * W.fundamental + capScore * W.capital) : techScore
-  const rating = bandLabel(CFG.rating, total, '回避')
-  // good/neutral/bad 三档分界从 rating 表派生（第2档=偏积极→good，第3档=中性观望→neutral），
-  // 避免再写死 58 / 45
-  const rT = CFG.rating ?? []
-  const clsGood = rT.length > 1 ? (rT[1].gte ?? 58) : 58
-  const clsNeutral = rT.length > 2 ? (rT[2].gte ?? 45) : 45
-  const ratingCls = total >= clsGood ? 'good' : total >= clsNeutral ? 'neutral' : 'bad'
-
-  let verdictTxt
-  if (!hasF) verdictTxt = '当前标的暂无基本面 / 资金面缓存，研判仅基于技术面；如需完整分析，建议补充该标的覆盖后重试。'
-  else if (techCls === 'good' && fundScore >= 60 && capScore >= 55) verdictTxt = '三维共振偏多：技术走强、基本面扎实、资金活跃，可积极关注，逢回踩加仓。'
-  else if (techCls === 'bad' && fundScore < 55) verdictTxt = '技术与基本面双弱，风险偏高，建议回避或减仓。'
-  else if (techCls === 'good' && fundScore < 55) verdictTxt = '技术面偏多但基本面一般，注意估值与业绩匹配，控制仓位。'
-  else if (techCls !== 'good' && fundScore >= 65 && capScore >= 55) verdictTxt = '基本面优质、资金认可，技术震荡时可逢低布局。'
-  else verdictTxt = '多空因素交织，建议结合仓位管理观望，等待更明确信号。'
-
-  const dims = [
-    { name: '技术面', score: techScore, cls: techCls, tip: techCls === 'good' ? '偏多' : techCls === 'bad' ? '偏空' : '中性' },
-    { name: '基本面', score: fundScore, cls: fundCls, tip: hasF ? (fundCls === 'good' ? '优质' : fundCls === 'bad' ? '偏弱' : '中性') : '缺失' },
-    { name: '资金面', score: capScore, cls: capCls, tip: hasF ? (capCls === 'good' ? '活跃' : capCls === 'bad' ? '清淡' : '中性') : '缺失' },
-  ]
-
-  const pct = (v) => `${Math.max(0, Math.min(100, v))}%`
-
-  return (
-    <>
-      <div className={`comp-total comp-total--${ratingCls}`}>
-        <div className='comp-total-score'>
-          <span className='cts-num'>{total}</span>
-          <span className='cts-max'>/100</span>
-        </div>
-        <div className='comp-total-meta'>
-          <span className={cn('comp-total-badge', `ctb-${ratingCls}`)}>{rating}</span>
-          <span className='comp-total-desc'>{verdictTxt}</span>
-        </div>
-      </div>
-
-      <div className='comp-dims'>
-        {dims.map((d) => (
-          <div key={d.name} className={`comp-dim comp-dim--${d.cls}`}>
-            <div className='comp-dim-head'>
-              <span className='comp-dim-name'>{d.name}</span>
-              <span className='comp-dim-val'>{d.score}</span>
-            </div>
-            <div className='comp-dim-bar'>
-              <div className='comp-dim-fill' style={{ width: pct(d.score) }} />
-            </div>
-            <span className='comp-dim-tip'>{d.tip}</span>
-          </div>
-        ))}
-      </div>
-
-      <div className='comp-block'>
-        <div className='comp-block-head'>
-          <span className='comp-block-title'>🔍 技术面信号</span>
-          <span className='comp-block-sub'>多 {techCount.bull} / 空 {techCount.bear}</span>
-        </div>
-        <div className='comp-sig-row'>
-          {techDetail.length ? techDetail.map(([nm, txt, side]) => (
-            <span key={nm} className={cn('comp-sig', `cs-${side}`)}>{nm}·{txt}</span>
-          )) : <span className='comp-sig-empty'>指标数据不足</span>}
-        </div>
-      </div>
-
-      <div className='comp-block'>
-        <div className='comp-block-head'>
-          <span className='comp-block-title'>📊 基本面</span>
-          <span className='comp-block-sub'>估值 · 质量 · 成长 · 规模</span>
-        </div>
-        {hasF ? (
-          <div className='comp-grid'>
-            <div className='comp-cell'>
-              <span className='comp-label'>市盈率 PE</span>
-              <span className='comp-val'>{pe != null ? pe.toFixed(1) : '--'}</span>
-              <span className='comp-hint'>{pe == null ? (pb != null ? `PB ${pb.toFixed(2)}` : '估值数据暂缺') : pe < 0 ? '亏损' : pe < 15 ? '偏低·有吸引力' : pe < 25 ? '中性合理' : pe < 35 ? '偏高' : '高估值'}</span>
-            </div>
-            <div className='comp-cell'>
-              <span className='comp-label'>市净率 PB</span>
-              <span className='comp-val'>{pb != null ? pb.toFixed(2) : '--'}</span>
-              <span className='comp-hint'>{pb == null ? '数据暂缺' : pb < 1 ? '破净·低估值' : pb < 3 ? '偏低' : pb < 6 ? '合理' : pb < 10 ? '偏高' : '高PB'}</span>
-            </div>
-            <div className='comp-cell'>
-              <span className='comp-label'>总市值</span>
-              <span className='comp-val'>{mcap != null ? `${mcap.toFixed(0)}亿` : '--'}</span>
-              <span className='comp-hint'>{mcap == null ? '数据暂缺' : mcap > 2000 ? '大盘股' : mcap > 500 ? '中盘股' : mcap > 100 ? '中小盘' : '小盘股'}</span>
-            </div>
-            <div className='comp-cell'>
-              <span className='comp-label'>ROE{roeAnnualized ? '(年化)' : ''}</span>
-              <span className='comp-val'>{roe != null ? `${(roe * 100).toFixed(1)}%` : '--'}</span>
-              <span className='comp-hint'>{roe == null ? '数据暂缺' : roe > 0.15 ? '优秀' : roe > 0.10 ? '良好' : roe > 0.05 ? '一般' : '偏低'}</span>
-            </div>
-            <div className='comp-cell'>
-              <span className='comp-label'>毛利率</span>
-              <span className='comp-val'>{gm != null ? `${(gm * 100).toFixed(1)}%` : '--'}</span>
-              <span className='comp-hint'>{gm == null ? '数据暂缺（财报未覆盖）' : gm > 0.40 ? '高毛利' : gm > 0.25 ? '中等' : gm > 0.10 ? '较低' : '低毛利'}</span>
-            </div>
-            <div className='comp-cell'>
-              <span className='comp-label'>营收增长</span>
-              <span className='comp-val'>{rg != null ? `${(rg * 100).toFixed(1)}%` : '--'}</span>
-              <span className='comp-hint'>{rg == null ? '数据暂缺（财报未覆盖）' : rg > 0.20 ? '高增长' : rg > 0.10 ? '稳健增长' : rg > 0 ? '微增' : rg === 0 ? '持平' : '负增长'}</span>
-            </div>
-          </div>
-        ) : <div className='comp-empty'>暂无基本面缓存（未覆盖该标的）</div>}
-      </div>
-
-      <div className='comp-block'>
-        <div className='comp-block-head'>
-          <span className='comp-block-title'>💰 资金面</span>
-          <span className='comp-block-sub'>成交活跃度 · 换手</span>
-        </div>
-        {hasF ? (
-          <div className='comp-grid comp-grid-2'>
-            <div className='comp-cell'>
-              <span className='comp-label'>20日成交额</span>
-              <span className='comp-val'>{amt != null ? `${(amt / 1e8).toFixed(1)}亿` : '--'}</span>
-              <span className='comp-hint'>{dailyAmt == null ? (to != null ? `换手 ${to.toFixed(2)}%` : '资金缺失') : dailyAmt > 5 ? '流动性充裕' : dailyAmt > 1 ? '流动性中等' : '成交偏清淡'}</span>
-            </div>
-            <div className='comp-cell'>
-              <span className='comp-label'>换手率</span>
-              <span className='comp-val'>{to != null ? `${to.toFixed(2)}%` : '--'}</span>
-              <span className='comp-hint'>{to == null ? '数据暂缺' : to > 5 ? '高度活跃' : to > 2 ? '活跃' : to > 0.5 ? '一般' : '低迷'}</span>
-            </div>
-          </div>
-        ) : <div className='comp-empty'>暂无资金面缓存（未覆盖该标的）</div>}
-      </div>
-
-      <div className='comp-block'>
-        <div className='comp-block-head'>
-          <span className='comp-block-title'>📰 消息面</span>
-          <span className='comp-block-sub'>CCTV 舆情 · 数据日期 {news?.date || '—'}</span>
-        </div>
-        {(() => {
-          const N = news
-          if (!N || !N.has_data) return <div className='comp-empty'>暂无消息面数据（CCTV 舆情产物未生成）</div>
-          const sl = (v) => (v == null ? 'neutral' : v >= 3 ? 'bull' : v <= -3 ? 'bear' : 'neutral')
-          const slTxt = (l) => (l === 'bull' ? '偏多' : l === 'bear' ? '偏空' : '中性')
-          const relSectors = N.stock_sectors || []
-          const items = N.news_items || []
-          const hot = N.hot_sectors || []
-          return (
-            <>
-              {relSectors.length > 0 && (
-                <div className='news-sectors'>
-                  <span className='news-sectors-label'>关联热门板块</span>
-                  <div className='news-chip-row'>
-                    {relSectors.map((s, i) => (
-                      <span key={i} className={cn('news-chip', `nc-${sl(s.sentiment)}`)}>
-                        {s.sector}{s.sentiment != null ? ` · ${slTxt(sl(s.sentiment))}` : ''}
-                      </span>
-                    ))}
-                  </div>
-                </div>
-              )}
-              {items.length > 0 ? (
-                <div className='news-feed'>
-                  {items.map((it, i) => (
-                    <div key={i} className='news-item'>
-                      <div className='news-item-head'>
-                        <span className={cn('news-badge', `nb-${it.sentiment_label}`)}>{slTxt(it.sentiment_label)}</span>
-                        <span className='news-tag'>{it.sector}</span>
-                      </div>
-                      <div className='news-title'>{it.title}</div>
-                      {it.preview ? <div className='news-preview'>{it.preview}</div> : null}
-                    </div>
-                  ))}
-                </div>
-              ) : (
-                <div className='news-note'>{N.in_pool ? '近期无直接关联新闻' : '该股近期未进入 CCTV 热门板块舆情；下方为全市场热点板块供参考'}</div>
-              )}
-              {(!items.length || !N.in_pool) && hot.length > 0 && (
-                <div className='news-markets'>
-                  <span className='news-markets-label'>全市场热点板块</span>
-                  <div className='news-chip-row'>
-                    {hot.slice(0, 8).map((s, i) => (
-                      <span key={i} className={cn('news-chip', `nc-${sl(s.sentiment)}`)}>
-                        {s.sector}{s.heat != null ? ` ${s.heat.toFixed(0)}` : ''}
-                      </span>
-                    ))}
-                  </div>
-                </div>
-              )}
-            </>
-          )
-        })()}
-      </div>
-    </>
-  )
-}
-
 function App() {
   const [activeView, setActiveView] = useState('overview')
   const [dashboard, setDashboard] = useState(null)
@@ -712,8 +389,9 @@ function App() {
   const [holdFilter, setHoldFilter] = useState('all') // 持仓成交筛选：all | win | loss
   const [excludedTrades, setExcludedTrades] = useState(0) // 后端剔除的异常成交数
   const [backtest, setBacktest] = useState(null)
-  const [analysis, setAnalysis] = useState(null)
-  const [analysisCode, setAnalysisCode] = useState('000001')
+  // 2026-09-29：原「个股分析」状态（analysis / analysisCode / openAnalysis 等）
+  // 已整体下架——重内存端点 /api/analysis 在云端 RENDER_LITE 下本就 503，
+  // 且唯一调用方是该面板本身；个股视角改为读 CI 舆情产物（日报页消息面）。
   // 2026-09-17：原「交互式选股」状态（candidateCodes / selectionParams / selectionScan /
   // fusionResult / backtestRun）已整体退役——网站不再自带扫描/融合/回测链路，
   // 选股结果一律读 CI 产出的融合清单（Daily-Action-List，见下方 dalRows）。
@@ -833,29 +511,6 @@ function App() {
     } catch { /* 忽略 */ }
   }
 
-  const [analysisLoading, setAnalysisLoading] = useState(false)
-  const [analysisError, setAnalysisError] = useState(null)
-
-  // 从列表/榜单点选股票 → 拉取分析并切换详情
-  async function openAnalysis(code) {
-    if (!code) return
-    setAnalysisCode(code)
-    setAnalysisLoading(true)
-    setAnalysisError(null)
-    try {
-      const r = await fetch(`/api/analysis/${code}`)
-      if (r.ok) {
-        setAnalysis(await r.json())
-      } else {
-        setAnalysisError(`服务器返回 ${r.status}`)
-      }
-    } catch (err) {
-      setAnalysisError('无法连接后端 API（离线模式或服务未启动）')
-    } finally {
-      setAnalysisLoading(false)
-    }
-  }
-
   useEffect(() => {
     if (!error) return
     const timer = setTimeout(() => setError(''), 5000)
@@ -935,30 +590,13 @@ function App() {
       setBacktest(b)
       setBackendDown(false) // 主数据成功 = 后端在线；尾部辅助接口失败不再误报「后端未启动」
       if (degraded.length) setError(`静态快照模式（后端暂不可达）：${degraded.join('、')}——数据为每日快照`)
-      // 辅助数据（个股分析）失败只降级提示，不影响主数据已就绪的事实
-      try {
-        // 个股分析请求独立短超时：Render 上可能很慢，不得吊住整个加载流程；
-        // 超时静默跳过（软失败），主数据不受影响
-        let auxFail = ''
-        const aCtl = new AbortController()
-        const aTo = setTimeout(() => aCtl.abort(), 30000)
-        try {
-          const an = await fetch(`/api/analysis/${analysisCode}`, { signal: aCtl.signal, cache: 'no-store' })
-          if (an.ok) setAnalysis(await an.json())
-          else if (!auxFail) auxFail = '个股分析(HTTP ' + an.status + ')'
-        } catch (e) { if (e.name !== 'AbortError' && !auxFail) auxFail = '个股分析(网络)' }
-        finally { clearTimeout(aTo) }
-        if (auxFail) setError('辅助数据加载失败（' + auxFail + '）——主数据正常，个股分析面板暂不可用')
-      } catch (e2) {
-        // aux 内部错误已在各段独立上报；此处兜底防抛出
-      }
     } catch (err) {
       if (err.name !== 'AbortError') {
         setError('后端连接失败（' + (err.message || '网络异常') + '）'); setBackendDown(true)
       } else if (timedOut) { setError('刷新超时：后端正在拉取行情数据，请稍后再试') }
     }
     finally { clearTimeout(timeoutTimer); setRefreshing(false) }
-  }, [analysisCode])
+  }, [])
 
   // 后端存活探测（自愈）：「离线」chip 与重数据解耦——/health 轻量端点 60s 一探。
   // 背景：Render 部署重启窗口里页面拉数据失败一次，「离线」就锁死（数据是最后一次
@@ -1078,29 +716,20 @@ function App() {
   const realtimePositions = portfolio?.realtime_positions ?? []
   const pnlSummary = portfolio?.pnl_summary ?? {}
   const latestBacktest = backtest?.latest ?? null
-  const analysisSignal = analysis?.signal ?? null
-  const analysisLatest = analysis?.latest ?? null
   // ── 选股结果唯一数据源：CI 融合清单（Daily-Action-List-<date>.csv）─────────────
   // 由 daily-pick.yml 产出的 12 个因子池 CSV → fusion 融合得到；网站只读不计算。
   // 优先用全量 rows（/api/artifacts/daily-action-list/full），回退到预览 rows。
   const dalRows = (fullDaily?.rows?.length ? fullDaily.rows : actionPreview) ?? []
   const dalDate = String(fullDaily?.latest?.name ?? '').match(/(\d{8})/)?.[1] ?? (dailyDate ?? '')
 
-  // 分析页主从列表数据源：CI 清单（带名称 + 综合评分）
+  // 候选榜数据源：CI 清单（带名称 + 综合评分）
   const analysisList = dalRows
     .map((r) => ({ code: String(r['股票代码'] ?? '').trim(), name: r['股票名称'] ?? '', score: Number(r['综合评分'] ?? 0) }))
     .filter((r) => r.code)
 
-  // 概览页「候选榜」：CI 清单按融合综合评分降序（点选跳分析页）
+  // 概览页「候选榜」：CI 清单按融合综合评分降序
   const rankRows = analysisList.slice().sort((x, y) => y.score - x.score)
   const rankMax = Math.max(1, ...rankRows.map((r) => r.score))
-
-  // 信号徽章配色（红涨绿跌语义）
-  const sigRaw = analysisSignal?.signal
-  const sigClass = !sigRaw ? 'neutral'
-    : /买|多|看多|bull/i.test(String(sigRaw)) ? 'up'
-    : /卖|空|看空|bear/i.test(String(sigRaw)) ? 'down'
-    : 'neutral'
 
   return (
     <>
@@ -1300,7 +929,6 @@ function App() {
                   <>
                     <DailyExpandableList
                       rows={actionPreview.slice(0, 5)}
-                      onCodeClick={(code) => { const c = String(code).trim(); if (c) { setAnalysisCode(c); setActiveView('analysis'); openAnalysis(c) } }}
                     />
                     {actionPreview.length > 5 ? (
                       <div className="dp-footer" style={{ marginTop: 10 }}>共 {actionPreview.length} 行 · 完整文件: {latestActionList.name} · <button onClick={() => setActiveView('daily')} style={{ color: 'hsl(var(--primary))', background: 'transparent', border: 'none', cursor: 'pointer', fontFamily: 'var(--font-mono)', padding: 0 }}>查看完整 →</button></div>
@@ -1317,11 +945,11 @@ function App() {
             </div>
 
             {/* 榜单：候选榜 · 融合排序（数据源 = CI 融合清单 Daily-Action-List） */}
-            <SectionCard title="候选榜 · 融合排序" subtitle={`来源：CI 融合清单${dalDate ? ' · ' + dalDate : ''} · 点选跳转分析页`} className="mt-4">
+            <SectionCard title="候选榜 · 融合排序" subtitle={`来源：CI 融合清单${dalDate ? ' · ' + dalDate : ''}`} className="mt-4">
               {rankRows.length > 0 ? (
                 <div className="rank-list">
                   {rankRows.map((r, i) => (
-                    <div key={r.code} className="rank-row" onClick={() => openAnalysis(r.code)}>
+                    <div key={r.code} className="rank-row">
                       <span className="rank-no">{i + 1}</span>
                       <span className="rank-code">{r.code}</span>
                       <span className="rank-name">{r.name}</span>
@@ -1553,414 +1181,11 @@ function App() {
           </>
         ) : null}
 
-        {activeView === 'analysis' ? (
-          <>
-            <div className="page-header">
-              <h2>个股分析</h2>
-              <p>选择或输入股票代码，查看多指标技术分析与信号解读</p>
-            </div>
-            <div className="analysis-single">
-              <SectionCard title="个股分析" className="max-w-none">
-                <div className="analysis-top" style={{ marginBottom: 16 }}>
-                  <div className="analysis-form">
-                    <input value={analysisCode} onChange={(e) => setAnalysisCode(e.target.value)}
-                      placeholder="输入股票代码，例如 000001"
-                      className="flex-1 h-10 rounded-lg bg-card border border-border px-3 text-foreground placeholder:text-muted-foreground"
-                      onKeyDown={(e) => e.key === 'Enter' && openAnalysis(analysisCode)} />
-                    <Button onClick={() => openAnalysis(analysisCode)} disabled={analysisLoading}>
-                      {analysisLoading ? '请求中...' : '加载分析'}
-                    </Button>
-                  </div>
-                </div>
-
-                {analysisError ? (
-                  <div style={{ padding: '14px 16px', background: 'hsl(var(--destructive) / 0.08)', borderRadius: '8px', color: 'hsl(var(--destructive))', fontSize: '0.85rem', marginBottom: 12 }}>
-                    ⚠️ {analysisError}
-                  </div>
-                ) : null}
-                {analysis ? (
-                  <>
-                    <div className="detail-head">
-                      <div className="detail-title">
-                        <span className="detail-code">{analysisCode}</span>
-                        <span className="detail-name">{analysis?.latest?.name ?? analysisList.find((i) => i.code === analysisCode)?.name ?? ''}</span>
-                      </div>
-                      <span className={cn('signal-badge', sigClass)} style={{ whiteSpace: 'nowrap' }}>{analysisSignal?.signal ?? '暂无信号'}</span>
-                    </div>
-
-                    <div className="comp-block-head" style={{ marginTop: 10 }}>
-                      <span className="comp-block-title">📈 技术面</span>
-                      <span className="comp-block-sub">RSI · MACD · KDJ · 均线 · 布林带</span>
-                    </div>
-                    {/* ── 多指标解读面板 ── */}
-                    {(() => {
-                        const L = analysisLatest ?? {}
-                        const M = analysis?.metrics ?? {}
-                        const rsi = L.rsi != null ? Number(L.rsi) : null
-                        const dif = L.dif != null ? Number(L.dif) : null
-                        const dea = L.dea != null ? Number(L.dea) : null
-                        const macdH = L.macd_hist != null ? Number(L.macd_hist) : null
-                        const kV = L.k_val != null ? Number(L.k_val) : null
-                        const dV = L.d_val != null ? Number(L.d_val) : null
-                        const jV = L.j_val != null ? Number(L.j_val) : null
-                        const close = L.close != null ? Number(L.close) : null
-                        const lower = L.lower != null ? Number(L.lower) : null
-                        const upper = L.upper != null ? Number(L.upper) : null
-                        const middle = L.middle != null ? Number(L.middle) : null
-                        const ma5 = L.ma5 != null ? Number(L.ma5) : null
-                        const ma10 = L.ma10 != null ? Number(L.ma10) : null
-                        const ma20 = L.ma20 != null ? Number(L.ma20) : null
-                        const ma60 = L.ma60 != null ? Number(L.ma60) : null
-                        const distLo = M.dist_to_lower_pct != null ? Number(M.dist_to_lower_pct) : null
-                        const distHi = M.dist_to_upper_pct != null ? Number(M.dist_to_upper_pct) : null
-                        const bw = M.bandwidth != null ? Number(M.bandwidth) : null
-
-                        // RSI 解读 —— 带具体数值区间和操作建议
-                        const rsiTxt = rsi == null ? '--'
-                          : rsi > 80 ? `严重超买（${rsi.toFixed(1)}），短期回调概率极高，建议减仓或观望`
-                          : rsi > 70 ? `超买区（${rsi.toFixed(1)}），动能偏强但接近高位，追高需谨慎`
-                          : rsi < 20 ? `严重超卖（${rsi.toFixed(1)}），超卖极值区域，可关注反弹机会`
-                          : rsi < 30 ? `超卖区（${rsi.toFixed(1)}），卖压释放充分，逢低布局时机`
-                          : rsi > 55 ? `偏强（${rsi.toFixed(1)}），多头略占优，持股待涨`
-                          : rsi < 45 ? `偏弱（${rsi.toFixed(1)}），空头主导，不宜急于入场`
-                          : `中性震荡（${rsi.toFixed(1)}），等待方向突破`
-                        // MACD 解读 —— 结合柱值大小、零轴位置、给出具体建议
-                        const macdAbs = macdH != null ? Math.abs(macdH) : 0
-                        const macdStrength = macdAbs > 0.15 ? '强' : macdAbs > 0.05 ? '中' : macdAbs > 0.01 ? '弱' : '极弱'
-                        const macdTxt = (dif == null || dea == null) ? '--'
-                          : dif > dea && macdH > 0 ? `金叉+红柱（柱值${macdH.toFixed(3)}，${macdStrength}）↑ DIF>${dea.toFixed(3)}，多头加速中，可持仓`
-                          : dif > dea && macdH <= 0 ? `多头但柱转绿（柱值${macdH.toFixed(3)}）⚠ DIF>DEA 但动能减弱，警惕拐头`
-                          : dif < dea && macdH < 0 ? `死叉+绿柱（柱值${macdH.toFixed(3)}，${macdStrength}）↓ DIF<${dea.toFixed(3)}，空头主导，宜观望`
-                          : dif < dea && macdH >= 0 ? `空头但柱转红（柱值${macdH.toFixed(3)}）⚠ DIF<DEA 但绿柱收窄，可能有反抽`
-                          : `DIF≈DEA（差值仅${Math.abs(dif-dea).toFixed(4)}），方向选择中`
-                        // KDJ 解读 —— 结合J值极端程度、KD间距、给出级别
-                        const kdjGap = kV != null && dV != null ? Math.abs(kV - dV).toFixed(1) : '--'
-                        const kdjTxt = (kV == null || dV == null) ? '--'
-                          : jV != null && jV > 110 ? `🔴 极端超买 J=${jV.toFixed(1)}>100，KD差${kdjGap}，强烈建议回避`
-                          : jV != null && jV > 100 ? `⚠️ 超买警戒 J=${jV.toFixed(1)}，短线获利盘重，注意止盈`
-                          : jV != null && jV < -10 ? `🟢 极端超卖 J=${jV.toFixed(1)}<0，KD差${kdjGap}，超跌反弹窗口`
-                          : jV != null && jV < 0 ? `⚠️ 超卖区 J=${jV.toFixed(1)}，卖压过度释放，可轻仓试探`
-                          : kV > dV + 5 ? `金叉偏强 K>D（差+${kdjGap}），J=${jV?.toFixed(1) ?? '--'}，短线偏多`
-                          : kV > dV ? `金叉形态 K>D（差+${kdjGap}），J=${jV?.toFixed(1) ?? '--'}，温和偏多`
-                          : kV + 5 < dV ? `死叉偏弱 K<D（差-${kdjGap}），J=${jV?.toFixed(1) ?? '--'}，短线承压`
-                          : kV < dV ? `死叉形态 K<D（差-${kdjGap}），J=${jV?.toFixed(1) ?? '--'}，偏空`
-                          : `K≈D 缠绕（K${kV.toFixed(1)}/D${dV.toFixed(1)}），方向不明`
-                        // 均线解读 —— 加入间距百分比、趋势强度、具体价位
-                        const ma5_10_gap = (ma5 != null && ma10 != null) ? ((ma5 / ma10 - 1) * 100).toFixed(2) : '--'
-                        const ma5_20_gap = (ma5 != null && ma20 != null) ? ((ma5 / ma20 - 1) * 100).toFixed(2) : '--'
-                        const maTxt = (ma5 == null || ma10 == null || ma20 == null) ? '--'
-                          : (() => {
-                            if (ma5 > ma10 && ma10 > ma20 && ma20 > (ma60 ?? 0)) {
-                              const extra = (ma60 != null && ma20 > ma60) ? '>MA60' : ''
-                              return '完美多头排列 ↑ MA5>MA10(+' + ma5_10_gap + '%)>MA20(+' + ma5_20_gap + '%' + extra + ')，趋势强劲'
-                            }
-                            if (ma5 < ma10 && ma10 < ma20 && (ma20 < (ma60 ?? 999))) {
-                              const extra = (ma60 != null && ma20 < ma60) ? '<MA60' : ''
-                              return '空头排列 ↓ MA5<MA10(' + ma5_10_gap + '%)<MA20(' + ma5_20_gap + '%' + extra + ')，全线压制'
-                            }
-                            if (ma5 > ma20) {
-                              const sub = (ma5 > ma10) ? ',MA5>MA10' : '但MA5<MA10'
-                              return '短期偏强 ↑ MA5在MA20上方(+' + ma5_20_gap + '%)' + sub + '，短线有支撑'
-                            }
-                            const sub2 = (ma5 < ma10) ? ',且MA5<MA10' : ''
-                            return '短期偏弱 ↓ MA5在MA20下方(' + ma5_20_gap + '%)' + sub2 + '，上方均线形成压力'
-                          })()
-                        // 价格位置解读 —— 加入盈亏比/风险收益评估
-                        const posTxt = (distLo == null && lower == null) ? '--'
-                          : close != null && lower != null && close < lower
-                            ? `⚠ 已跌破下轨（${(close/lower*100-100).toFixed(2)}%），超卖信号，但需警惕趋势性破位`
-                          : distLo != null && distLo < 2
-                            ? `🔴 极近下轨（仅距${distLo.toFixed(2)}%），止损风险极高，若未持仓可关注反弹`
-                          : distLo != null && distLo < 5
-                            ? `接近下轨支撑（距${distLo.toFixed(2)}%），布林下轨${lower?.toFixed(2) ?? '--'}附近有承接`
-                          : distHi != null && distHi > -2
-                            ? `🟢 极近上轨（距上轨仅${Math.abs(distHi).toFixed(2)}%），注意止盈，上轨${upper?.toFixed(2) ?? '--'}`
-                          : distHi != null && distHi > -5
-                            ? `接近上轨压力（距${Math.abs(distHi).toFixed(2)}%），上轨${upper?.toFixed(2) ?? '--'}可能受阻`
-                          : close != null && upper != null && close > upper
-                            ? `已突破上轨（+${((close/upper-1)*100).toFixed(2)}%），强势突破但谨防假突破回踩`
-                          : `位于布林带中部区间，距下轨${distLo!=null?`+${distLo.toFixed(2)}%`:'--'} / 距上轨${distHi!=null?`${distHi.toFixed(2)}%`:'--'}${bw != null ? ` · 带宽${bw.toFixed(1)}%${bw < 8 ? ' ⚠收窄→变盘在即' : bw > 25 ? ' 📐扩张→波动加大' : ''}` : ''}`
-                        // 带宽颜色
-                        const bwWarn = bw != null && bw < 8
-
-                        // ── 总体总结：综合 5 大指标多空力度 ──
-                        const scoreDetail = []
-                        let s = 0
-                        if (rsi != null) {
-                          if (rsi > 80) { s -= 2; scoreDetail.push(['RSI', '严重超买', 'bear']) }
-                          else if (rsi > 70) { s -= 1; scoreDetail.push(['RSI', '偏强高位', 'bear']) }
-                          else if (rsi < 20) { s += 2; scoreDetail.push(['RSI', '严重超卖', 'bull']) }
-                          else if (rsi < 30) { s += 1; scoreDetail.push(['RSI', '超卖区', 'bull']) }
-                          else if (rsi > 55) { s += 1; scoreDetail.push(['RSI', '偏强', 'bull']) }
-                          else if (rsi < 45) { s -= 1; scoreDetail.push(['RSI', '偏弱', 'bear']) }
-                          else scoreDetail.push(['RSI', '中性', 'neutral'])
-                        }
-                        if (dif != null && dea != null) {
-                          if (dif > dea && macdH > 0) { s += 2; scoreDetail.push(['MACD', '金叉红柱', 'bull']) }
-                          else if (dif > dea && macdH <= 0) { scoreDetail.push(['MACD', '多头动能弱', 'neutral']) }
-                          else if (dif < dea && macdH < 0) { s -= 2; scoreDetail.push(['MACD', '死叉绿柱', 'bear']) }
-                          else if (dif < dea && macdH >= 0) { scoreDetail.push(['MACD', '空头柱收窄', 'neutral']) }
-                          else scoreDetail.push(['MACD', '缠绕', 'neutral'])
-                        }
-                        if (kV != null && dV != null) {
-                          if (jV != null && jV > 100) { s -= 2; scoreDetail.push(['KDJ', '极端超买', 'bear']) }
-                          else if (jV != null && jV < 0) { s += 2; scoreDetail.push(['KDJ', '极端超卖', 'bull']) }
-                          else if (kV > dV) { s += 1; scoreDetail.push(['KDJ', '金叉', 'bull']) }
-                          else if (kV < dV) { s -= 1; scoreDetail.push(['KDJ', '死叉', 'bear']) }
-                          else scoreDetail.push(['KDJ', '中性', 'neutral'])
-                        }
-                        if (ma5 != null && ma10 != null && ma20 != null) {
-                          if (ma5 > ma10 && ma10 > ma20) { s += 2; scoreDetail.push(['均线', '多头排列', 'bull']) }
-                          else if (ma5 < ma10 && ma10 < ma20) { s -= 2; scoreDetail.push(['均线', '空头排列', 'bear']) }
-                          else if (ma5 > ma20) { s += 1; scoreDetail.push(['均线', '短期偏强', 'bull']) }
-                          else if (ma5 < ma20) { s -= 1; scoreDetail.push(['均线', '短期偏弱', 'bear']) }
-                          else scoreDetail.push(['均线', '中性', 'neutral'])
-                        }
-                        if (close != null && lower != null) {
-                          if (close < lower) { s += 1; scoreDetail.push(['布林', '跌破下轨', 'bull']) }
-                          else if (distLo != null && distLo < 2) { s += 1; scoreDetail.push(['布林', '极近下轨', 'bull']) }
-                          else if (distHi != null && distHi > -2) { s -= 1; scoreDetail.push(['布林', '极近上轨', 'bear']) }
-                          else if (distLo != null && distLo < 5) { scoreDetail.push(['布林', '近下轨', 'neutral']) }
-                          else if (distHi != null && distHi > -5) { scoreDetail.push(['布林', '近上轨', 'neutral']) }
-                          else scoreDetail.push(['布林', '中部', 'neutral'])
-                        }
-                        const bullN = scoreDetail.filter((x) => x[2] === 'bull').length
-                        const bearN = scoreDetail.filter((x) => x[2] === 'bear').length
-                        let verdict, verdictColor
-                        if (s >= 4) { verdict = '强烈看多'; verdictColor = 'bull' }
-                        else if (s >= 1) { verdict = '偏多'; verdictColor = 'bull' }
-                        else if (s <= -4) { verdict = '强烈看空'; verdictColor = 'bear' }
-                        else if (s <= -1) { verdict = '偏空'; verdictColor = 'bear' }
-                        else { verdict = '中性震荡'; verdictColor = 'neutral' }
-                        const nearUpper = distHi != null && distHi > -5
-                        const nearLower = distLo != null && distLo < 5
-                        const belowLower = close != null && lower != null && close < lower
-                        const aboveUpper = close != null && upper != null && close > upper
-                        let advice
-                        if (verdictColor === 'bull') {
-                          if (nearUpper || aboveUpper) advice = '技术面偏多，但价格已逼近/突破布林上轨，追高性价比低，建议等回踩中轨再介入'
-                          else if (nearLower || belowLower) advice = '多项指标看多且价格贴近布林下轨（超卖），安全边际较高，可逢低分批建仓，止损设于下轨下方'
-                          else advice = '技术面偏多，可持股或轻仓参与，以中轨为参考止盈、下轨为止损'
-                        } else if (verdictColor === 'bear') {
-                          if (nearLower || belowLower) advice = '技术面偏弱但价格已超卖（近下轨），或有技术反弹，不宜盲目杀跌，可等反抽减仓'
-                          else if (nearUpper || aboveUpper) advice = '多项指标转空且价格处于高位，风险较大，建议减仓回避'
-                          else advice = '技术面偏弱，控制仓位、以观望为主，反弹至中轨附近可考虑减仓'
-                        } else {
-                          advice = '多空信号交织、方向不明，建议观望，等待均线或 MACD 给出明确拐点'
-                        }
-
-                        return (
-                          <>
-                          <div className="analysis-summary">
-                            <div className="as-head">
-                              <span className="as-title">📋 总体总结</span>
-                              <span className={cn('as-verdict', `as-${verdictColor}`)}>{verdict}</span>
-                              <span className="as-score">综合强度 {s > 0 ? '+' : ''}{s} · 多 {bullN} / 空 {bearN}</span>
-                            </div>
-                            <div className="as-bars">
-                              {scoreDetail.map(([nm, txt, side]) => (
-                                <div key={nm} className={cn('as-bar', `as-${side}`)}>
-                                  <span className="as-bar-name">{nm}</span>
-                                  <span className="as-bar-txt">{txt}</span>
-                                </div>
-                              ))}
-                            </div>
-                            <div className="as-advice">💡 操作建议：{advice}</div>
-                          </div>
-                          <div className="ind-grid">
-                            {/* ① RSI */}
-                            <div className="ind-card">
-                              <span className="ind-label">RSI(14)</span>
-                              <span className={cn('ind-val', rsi > 70 ? 'text-up' : rsi < 30 ? 'text-down' : '')}>{rsi != null ? rsi.toFixed(1) : '--'}</span>
-                              {rsi != null ? (
-                                <div className="ind-gauge">
-                                  <div className="ig-track">
-                                    <div className="ig-zone ig-sold" style={{ width: '30%' }} />
-                                    <div className="ig-zone ig-neutral" style={{ width: '40%' }} />
-                                    <div className="ig-zone ig-bought" style={{ width: '30%' }} />
-                                    <div className="ig-fill" style={{ left: `${Math.min(100, Math.max(0, rsi))}%` }} />
-                                  </div>
-                                  <span className="ig-labels"><em>0</em><em>30</em><em>70</em><em>100</em></span>
-                                </div>
-                              ) : null}
-                              <span className="ind-txt">{rsiTxt}</span>
-                            </div>
-
-                            {/* ② MACD — 零轴柱状图 */}
-                            <div className="ind-card">
-                              <span className="ind-label">MACD(12,26,9)</span>
-                              <div className="ind-row-val">
-                                <span>DIF <strong className={cn(dif != null && dif > 0 ? 'text-up' : dif != null ? 'text-down' : '')}>{dif != null ? dif.toFixed(3) : '--'}</strong></span>
-                                <span>DEA <strong className={cn(dea != null && dea > 0 ? 'text-up' : dea != null ? 'text-down' : '')}>{dea != null ? dea.toFixed(3) : '--'}</strong></span>
-                                <span>柱 <strong className={cn(macdH != null && macdH > 0 ? 'text-up' : macdH != null ? 'text-down' : '')}>{macdH != null ? macdH.toFixed(3) : '--'}</strong></span>
-                              </div>
-                              {dif != null && dea != null ? (
-                                <div className="macd-viz">
-                                  <div className="macd-zero-line" />
-                                  <div className="macd-hist-bar">
-                                    <div className="macd-hist-fill" style={{
-                                      height: macdH != null ? `${Math.min(50, Math.abs(macdH) * 400)}%` : '0%',
-                                      bottom: macdH >= 0 ? '50%' : 'auto',
-                                      top: macdH < 0 ? '50%' : 'auto',
-                                      background: macdH >= 0 ? 'hsla(3, 80%, 50%, 0.75)' : 'hsla(157, 81%, 37%, 0.75)',
-                                    }} />
-                                  </div>
-                                  <div className="macd-marker" style={{ bottom: `${50 - Math.min(48, Math.max(-48, dif * 300))}%` }} title={`DIF ${dif.toFixed(3)}`}>
-                                    <div className="macd-m-dot macd-dif-dot" />
-                                  </div>
-                                  <div className="macd-marker" style={{ bottom: `${50 - Math.min(48, Math.max(-48, dea * 300))}%` }} title={`DEA ${dea.toFixed(3)}`}>
-                                    <div className="macd-m-dot macd-dea-dot" />
-                                  </div>
-                                  <div className="macd-viz-labels">
-                                    <span>DIF</span><span>0</span><span>DEA</span>
-                                  </div>
-                                </div>
-                              ) : null}
-                              <span className="ind-txt">{macdTxt}</span>
-                            </div>
-
-                            {/* ③ KDJ — 三线仪表盘 */}
-                            <div className="ind-card">
-                              <span className="ind-label">KDJ(9,3,3)</span>
-                              <div className="ind-row-val">
-                                <span>K <strong>{kV != null ? kV.toFixed(1) : '--'}</strong></span>
-                                <span>D <strong>{dV != null ? dV.toFixed(1) : '--'}</strong></span>
-                                <span>J <strong className={cn(jV != null && jV > 100 ? 'text-up' : jV != null && jV < 0 ? 'text-down' : '')}>{jV != null ? jV.toFixed(1) : '--'}</strong></span>
-                              </div>
-                              {kV != null && dV != null ? (
-                                <div className="kdj-gauge">
-                                  <div className="kg-track">
-                                    <div className="kg-zone kg-os" style={{ width: '20%' }} />
-                                    <div className="kg-zone kg-neutral" style={{ width: '60%' }} />
-                                    <div className="kg-zone kg-ob" style={{ width: '20%' }} />
-                                    {/* K pointer */}
-                                    <div className="kg-pointer" style={{ left: `${Math.min(100, Math.max(0, kV))}%` }} title={`K ${kV.toFixed(1)}`}>
-                                      <div className="kg-pin kg-k-pin" />
-                                    </div>
-                                    {/* D pointer */}
-                                    <div className="kg-pointer" style={{ left: `${Math.min(100, Math.max(0, dV))}%` }} title={`D ${dV.toFixed(1)}`}>
-                                      <div className="kg-pin kg-d-pin" />
-                                    </div>
-                                    {jV != null ? (
-                                      <div className={cn('kg-pointer', jV > 100 || jV < 0 ? 'kg-extreme' : '')} style={{ left: `${Math.min(100, Math.max(0, jV))}%` }} title={`J ${jV.toFixed(1)}`}>
-                                        <div className="kg-pin kg-j-pin" />
-                                      </div>
-                                    ) : null}
-                                  </div>
-                                  <div className="kg-labels"><em>0</em><em>20</em><em>80</em><em>100</em></div>
-                                </div>
-                              ) : null}
-                              <span className="ind-txt">{kdjTxt}</span>
-                            </div>
-
-                            {/* ④ 均线系统 — 排列梯形图 */}
-                            <div className="ind-card">
-                              <span className="ind-label">均线系统</span>
-                              <div className="ind-ma-row">
-                                <span className="ind-ma-item">MA5 <strong>{ma5 != null ? ma5.toFixed(2) : '--'}</strong></span>
-                                <span className="ind-ma-item">MA10 <strong>{ma10 != null ? ma10.toFixed(2) : '--'}</strong></span>
-                                <span className="ind-ma-item">MA20 <strong>{ma20 != null ? ma20.toFixed(2) : '--'}</strong></span>
-                                {ma60 != null ? <span className="ind-ma-item">MA60 <strong>{ma60.toFixed(2)}</strong></span> : null}
-                              </div>
-                              {(ma5 != null && ma10 != null && ma20 != null) ? (
-                                <div className="ma-ladder">
-                                  {[ma5, ma10, ma20].sort((a, b) => b - a).map((val, idx) => {
-                                    const labels = { [ma5]: 'MA5', [ma10]: 'MA10', [ma20]: 'MA20', [ma60 ?? 0]: 'MA60' }
-                                    const label = labels[val] || `M${idx}`
-                                    const colors = { [ma5]: '#3B82F6', [ma10]: '#8B5CF6', [ma20]: '#F59E0B', [ma60 ?? 0]: '#6B7280' }
-                                    const maxVal = Math.max(ma5, ma10, ma20, ma60 ?? 0)
-                                    const minVal = Math.min(ma5, ma10, ma20, ma60 ?? 0)
-                                    const range = maxVal - minVal || 1
-                                    return (
-                                      <div key={label} className="ma-ladder-row">
-                                        <span className="ma-ladder-label" style={{ color: colors[val] || 'inherit' }}>{label}</span>
-                                        <div className="ma-ladder-track">
-                                          <div className="ma-ladder-fill" style={{
-                                            width: `${((val - minVal) / range) * 100}%`,
-                                            background: colors[val] || 'hsl(var(--foreground))',
-                                          }} />
-                                        </div>
-                                        <span className="ma-ladder-val">{val.toFixed(2)}</span>
-                                      </div>
-                                    )
-                                  })}
-                                  {ma60 != null ? (
-                                    <div className="ma-ladder-row">
-                                      <span className="ma-ladder-label" style={{ color: '#6B7280' }}>MA60</span>
-                                      <div className="ma-ladder-track">
-                                        <div className="ma-ladder-fill" style={{
-                                          width: `${((ma60 - Math.min(ma5, ma10, ma20, ma60)) / (Math.max(ma5, ma10, ma20, ma60) - Math.min(ma5, ma10, ma20, ma60) || 1)) * 100}%`,
-                                          background: '#6B7280',
-                                        }} />
-                                      </div>
-                                      <span className="ma-ladder-val">{ma60.toFixed(2)}</span>
-                                    </div>
-                                  ) : null}
-                                </div>
-                              ) : null}
-                              {/* 均线排列箭头 */}
-                              {(ma5 != null && ma10 != null && ma20 != null) ? (
-                                <div className="ind-ma-arrows">
-                                  {ma5 > ma10 ? <span className="text-up">↑</span> : ma5 < ma10 ? <span className="text-down">↓</span> : <span>=</span>}
-                                  {ma10 > ma20 ? <span className="text-up">↑</span> : ma10 < ma20 ? <span className="text-down">↓</span> : <span>=</span>}
-                                  {ma20 > (ma60 ?? 0) ? <span className="text-up">↑</span> : ma20 < (ma60 ?? 999) ? <span className="text-down">↓</span> : <span>=</span>}
-                                </div>
-                              ) : null}
-                              <span className="ind-txt">{maTxt}</span>
-                            </div>
-
-                            {/* ⑤ 布林带价格位置 */}
-                            <div className="ind-card ind-card-wide">
-                              <span className="ind-label">布林带 · 价格位置</span>
-                              {close != null && lower != null && upper != null && middle != null ? (
-                                <>
-                                  <div className="ind-band-bar">
-                                    <div className="ibb-track">
-                                      <div className="ibb-lower" />
-                                      <div className="ibb-middle" />
-                                      <div className="ibb-upper" />
-                                      {/* price dot position: lower=0%, upper=100% */}
-                                      <div className="ibb-dot" style={{
-                                        left: `${Math.min(100, Math.max(0, ((close - lower) / (upper - lower)) * 100))}%`,
-                                        top: close > upper ? '-14px' : close < lower ? '22px' : '50%',
-                                        transform: 'translateX(-50%) translateY(-50%)',
-                                      }} />
-                                    </div>
-                                    <div className="ibb-labels">
-                                      <span>下轨 {lower.toFixed(2)}</span>
-                                      <span>中轨 {middle.toFixed(2)}</span>
-                                      <span>上轨 {upper.toFixed(2)}</span>
-                                    </div>
-                                  </div>
-                                  <div className="ind-pos-stats">
-                                    <span>收盘 <strong>{close.toFixed(2)}</strong></span>
-                                    {distLo != null ? <span>距下轨 <strong className={distLo < 5 ? 'text-down' : ''}>{distLo > 0 ? '+' : ''}{distLo.toFixed(2)}%</strong></span> : null}
-                                    {distHi != null ? <span>距上轨 <strong className={distHi > -5 ? 'text-up' : ''}>{distHi > 0 ? '+' : ''}{distHi.toFixed(2)}%</strong></span> : null}
-                                    {bw != null ? <span className={cn(bwWarn ? 'text-up font-medium' : '')}>带宽 {bw.toFixed(1)}%{bwWarn ? ' ⚠收窄' : ''}</span> : null}
-                                  </div>
-                                </>
-                              ) : null}
-                              <span className="ind-txt">{posTxt}</span>
-                            </div>
-                          </div>
-                          </>
-                        )
-                      })()}
-
-                      {/* ── 综合面：基本面 + 资金面 + 综合研判 ── */}
-                                            <ComprehensivePanel analysis={analysis} />
-                    </>
-                  ) : <div className="empty-state">选择或输入股票代码后点击「加载分析」</div>}
-                </SectionCard>
-            </div>
-          </>
-        ) : null}
-
         {activeView === 'daily' ? (
           <>
             <div className="page-header">
               <h2>每日策略信号日报</h2>
-              <p>邮件级摘要 · 全市场多策略信号汇总（点选任意标的跳转分析）</p>
+              <p>邮件级摘要 · 全市场多策略信号汇总</p>
             </div>
             {fullDaily?.rows?.length > 0 ? (() => {
               const rows = fullDaily.rows
@@ -2086,7 +1311,7 @@ function App() {
                           const priceDev = (buy && latest) ? ((latest / buy - 1) * 100) : null
 
                           return (
-                            <div key={r['股票代码']} className="top-row" onClick={() => { if (code && code !== '000000') { setAnalysisCode(code); setActiveView('analysis'); openAnalysis(code) } }}>
+                            <div key={r['股票代码']} className="top-row">
                               <div className="top-left">
                                 <span className={`top-no ${i < 3 ? 'top-no--medal' : ''}`}>{i + 1}</span>
                                 <div className="top-info">
@@ -2188,7 +1413,6 @@ function App() {
                   <SectionCard title={`完整信号明细 · ${total} 行`} subtitle={fullDaily.latest?.path ?? ''} className="max-w-none">
                     <DailyExpandableList
                       rows={rows}
-                      onCodeClick={(code) => { const c = String(code).trim(); if (c) { setAnalysisCode(c); setActiveView('analysis'); openAnalysis(c) } }}
                     />
                   </SectionCard>
                 </>

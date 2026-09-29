@@ -318,7 +318,6 @@ def test_frontend_annualize_multipliers_match_backend():
     for mmdd, mult in _ROE_ANNUALIZE_MULT.items():
         assert abs(eval(pairs[mmdd]) - mult) < 1e-9, f"{mmdd} 系数前后端不一致"
 
-    # 且 App.jsx 必须真的调用它（否则 helper 形同虚设）
-    app = (root / "frontend" / "src" / "App.jsx").read_text(encoding="utf-8")
-    assert re.search(r"annualizeRoe\(\s*\w+\s*,\s*F\?\.roe_period\s*\)", app), \
-        "App.jsx 未把 roe_period 传给 annualizeRoe"
+    # 2026-09-29「个股分析」面板整体下架（App.jsx 的 ComprehensivePanel 移除），
+    # 前端不再有 annualizeRoe 调用方，原「App.jsx 必须真的调用它」断言随之退役；
+    # 年化系数真源仍由上方 useScoringConfig.js ↔ 后端 _ROE_ANNUALIZE_MULT 对账守住。
