@@ -21,6 +21,8 @@ from __future__ import annotations
 
 import os
 import time
+
+_RETRY_TIME_BUDGET_S = 60  # 单 chunk 重试总时长预算（秒）
 from datetime import date, datetime, timezone, timedelta
 
 import pandas as pd
@@ -162,6 +164,9 @@ def fetch_historical_k(code, start: date, end: date, adjust: str = "qfq") -> pd.
     while cur <= e_d:
         chunk_end = min(cur + timedelta(days=_HK_HIST_CHUNK_DAYS), e_d)
         items: list = []
+        # 总时长预算（2026-09-29）：重试循环原无上限，API 长时间不可达时
+        # 退避睡眠会累积到分钟级（实测阻塞 pytest 与夜间管线 10 分钟+）。
+        chunk_t0 = time.time()
         for attempt in range(attempts):
             data = _get(
                 "/api/a-share/prices/historical",
@@ -171,6 +176,8 @@ def fetch_historical_k(code, start: date, end: date, adjust: str = "qfq") -> pd.
             items = (data or {}).get("item") or []
             if items:
                 break
+            if time.time() - chunk_t0 > _RETRY_TIME_BUDGET_S:
+                break  # 预算耗尽：按无数据处理（fail-soft），不再退避空耗
             if attempt + 1 < attempts:
                 time.sleep(0.5 * (attempt + 1))
         if items:
