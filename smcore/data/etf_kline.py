@@ -123,7 +123,7 @@ def load_etf_closes(codes: Optional[Iterable[str]] = None,
     """读取 ETF close 宽表；无缓存或 refresh 时联网抓取。"""
     if not refresh and ETF_CLOSE_PARQUET.exists():
         try:
-            wide = pd.read_parquet(ETF_CLOSE_PARQUET)
+            wide = pd.read_parquet(ETF_CLOSE_PARQUET, use_threads=False)
             if codes is not None:
                 keep = [c for c in codes if c in wide.columns]
                 wide = wide[keep]

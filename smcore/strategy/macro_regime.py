@@ -96,7 +96,7 @@ def load_macro_series(path: Optional[str] = None) -> Optional[pd.DataFrame]:
         if not p.exists():
             return None
         if str(p).endswith(".parquet"):
-            df = pd.read_parquet(p)
+            df = pd.read_parquet(p, use_threads=False)
         else:
             df = pd.read_csv(p)
         if df is None or df.empty or "date" not in df.columns:

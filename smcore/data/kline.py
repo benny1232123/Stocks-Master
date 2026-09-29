@@ -459,7 +459,7 @@ def flush_kline_writes() -> int:
     for pf, new_rows in pending.items():
         try:
             new_rows = new_rows.drop_duplicates(subset=["code", "date"], keep="last")
-            existing = pd.read_parquet(pf) if pf.exists() else None
+            existing = pd.read_parquet(pf, use_threads=False) if pf.exists() else None
             if existing is not None and not existing.empty:
                 touched = set(new_rows["code"].astype(str))
                 existing = existing[~existing["code"].astype(str).isin(touched)]
@@ -536,7 +536,7 @@ def write_kline_cache(df: pd.DataFrame, code, adjust: str = DEFAULT_ADJUST, base
             _prev = _BUCKET_PENDING.get(pf)
             _BUCKET_PENDING[pf] = out if _prev is None else pd.concat([_prev, out], ignore_index=True)
     if not _buffered:
-        existing = pd.read_parquet(pf) if pf.exists() else None
+        existing = pd.read_parquet(pf, use_threads=False) if pf.exists() else None
         if existing is not None and not existing.empty:
             existing = existing[existing["code"] != code6]
             merged = pd.concat([existing, out], ignore_index=True)
@@ -566,7 +566,7 @@ def list_kline_codes(adjust: str = DEFAULT_ADJUST, base_dir=None) -> list[str]:
     failed: list[str] = []
     for pf in sorted(base.glob(f"{adjust}_b*.parquet")):
         try:
-            c = pd.read_parquet(pf, columns=["code"])["code"].astype(str).unique().tolist()
+            c = pd.read_parquet(pf, columns=["code"], use_threads=False)["code"].astype(str).unique().tolist()
             codes.update(c)
         except Exception as exc:
             failed.append(pf.name)

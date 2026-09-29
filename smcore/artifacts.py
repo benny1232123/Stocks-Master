@@ -32,6 +32,23 @@ def _extract_date_tag(name: str) -> str | None:
     return m.group(1) if m else None
 
 
+def _csv_has_data_row(path: Path) -> bool:
+    """轻量判断 CSV 是否含至少一行数据（只读头部 4KB，数换行数）。
+
+    只有一行 = 仅表头（或空文件）→ False。带 BOM 的 utf-8 不影响换行计数。
+    """
+    try:
+        with open(path, "rb") as f:
+            head = f.read(4096)
+        if len(head) < 4096:
+            # CRLF/LF/CR 统一成 LF 再数行，否则表头一行的 CRLF 会被 \r+\n 数成 2 行
+            lines = head.replace(b"\r\n", b"\n").replace(b"\r", b"\n").count(b"\n")
+            return lines > 1
+        return True  # 头部即超 4KB，必然远超一行
+    except OSError:
+        return True  # 读不了就别拦，按旧行为放行
+
+
 def find_latest_file(pattern: str) -> ArtifactFile | None:
     """Find the newest file matching a glob pattern under stock_data/ and archive/.
 
@@ -55,8 +72,22 @@ def find_latest_file(pattern: str) -> ArtifactFile | None:
 
     # reverse=True：含日期者(priority=1)恒优先；同组内日期/ mtime 降序
     candidates.sort(key=lambda x: (x[0], x[1]), reverse=True)
-    _, _, mtime, latest_path = candidates[0]
 
+    # 空CSV不配当"最新"（2026-09-29）：archive/ 里的备份可能含只有表头的空清单
+    # （如 pre_menu_swap_20260927/DAL/Daily-Action-List-20260925.csv，周六空跑产物），
+    # 按日期排序它会压过真实的最新文件，端点/快照把"最新日报"选成空文件 —— 与
+    # /api/backtests/latest 的"空快照自我毒化"同型。故按新→旧跳过无数据行的空CSV，
+    # 全部为空时退回旧行为（返回最新那个），不改变"找不到"语义。
+    for _, _, mtime, latest_path in candidates:
+        if latest_path.suffix.lower() == ".csv" and not _csv_has_data_row(latest_path):
+            continue
+        return ArtifactFile(
+            name=latest_path.name,
+            path=str(latest_path.relative_to(PROJECT_ROOT)),
+            modified_at=mtime,
+        )
+
+    _, _, mtime, latest_path = candidates[0]
     return ArtifactFile(
         name=latest_path.name,
         path=str(latest_path.relative_to(PROJECT_ROOT)),

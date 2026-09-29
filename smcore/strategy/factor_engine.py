@@ -95,7 +95,7 @@ def load_matrices(cols: tuple[str, ...] = ("close", "high", "low", "amount"),
         raise SystemExit(f"no parquet under {kd}")
     frames = []
     for f in files:
-        d = pd.read_parquet(f)
+        d = pd.read_parquet(f, use_threads=False)
         d["date"] = pd.to_datetime(d["date"])
         d["code"] = d["code"].astype("category")
         if load_start:
