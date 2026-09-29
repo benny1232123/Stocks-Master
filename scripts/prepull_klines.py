@@ -75,6 +75,40 @@ def _held_codes() -> list[str]:
         return []
 
 
+def _bootstrap_universe() -> list[str]:
+    """冷启动宇宙引导（2026-09-29）：从 tracked 的候选池快照恢复全市场代码清单。
+
+    背景：k_data parquet 移出仓库跟踪（100535f，治 100MB 阻断）后，CI checkout
+    不再自带缓存桶，``list_kline_codes()`` 恒空（或只有上游探测步骤写入的个位数
+    代码）——而本脚本的宇宙来源恰是「缓存里已有哪些票」。没有引导源时整条
+    daily-pick 管线永远跑不起来。
+
+    引导源：stock_data/daily_cache/candidate_codes_*.pkl（全板块 ~3100 只候选池
+    快照，本地扫描产物随仓库提交）。⚠️ 该文件是 tracked 状态，勿删——删掉等于
+    拆掉 CI 冷启动的唯一宇宙来源。快照略滞后（新股/次新缺席）由后续本地扫描
+    提交新快照滚动更新，对因子计算影响可忽略（缺失者本就会被流动性门槛筛掉）。
+    """
+    import pickle
+    import re as _re
+
+    best: tuple[str, Path] | None = None
+    for p in sorted((ROOT / "stock_data" / "daily_cache").glob("candidate_codes_*.pkl")):
+        m = _re.search(r"(\d{4}-\d{2}-\d{2})", p.name)
+        tag = m.group(1) if m else ""
+        if best is None or tag >= best[0]:
+            best = (tag, p)
+    if best is None:
+        return []
+    try:
+        with open(best[1], "rb") as f:
+            data = pickle.load(f)
+        codes = [str(c).strip().zfill(6) for c in data if str(c).strip()]
+        return [c for c in codes if len(c) == 6 and c.isdigit()]
+    except Exception as exc:
+        print(f"[prepull] 引导快照读取失败 {best[1].name}（{type(exc).__name__}: {exc}）", file=sys.stderr)
+        return []
+
+
 def _stale_codes(codes: list[str], date_str: str) -> list[str]:
     """返回缓存尾部 bar **早于** date_str 的代码（含完全无数据者）。
 
@@ -200,8 +234,18 @@ def main() -> int:
     from smcore.data.kline import list_kline_codes
 
     codes = [c for c in list_kline_codes(base_dir=KDATA) if c]
+    # 冷启动引导（2026-09-29）：缓存宇宙低于门槛（k_data 已移出仓库跟踪，CI 每天
+    # 都是冷缓存）→ 合并 tracked 候选池快照，把「刷不出宇宙」变成「刷候选池宇宙」。
+    if len(codes) < int(args.min_codes):
+        boot = _bootstrap_universe()
+        if boot:
+            merged = sorted(set(codes) | set(boot))
+            print(f"::warning::[prepull] k_data 缓存宇宙仅 {len(codes)} 只（CI 冷启动/缓存"
+                  f"未随仓库分发）——从候选池快照引导 {len(boot)} 只，合并 {len(merged)} 只")
+            codes = merged
     if not codes:
-        print("::error::[prepull] k_data 宇宙为空——无法刷新（缓存文件缺失或全部读失败）")
+        print("::error::[prepull] k_data 宇宙为空——无法刷新（缓存文件缺失或全部读失败，"
+              "且无 candidate_codes_*.pkl 引导快照可用）")
         return 1
 
     chunks = [codes[i:i + args.chunk_size] for i in range(0, len(codes), args.chunk_size)]
