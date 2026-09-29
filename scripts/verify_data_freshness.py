@@ -78,8 +78,14 @@ def _prev_day_coverage(signal_date):
     load_start = (signal_date - timedelta(days=120)).strftime("%Y-%m-%d")
     try:
         close = fe.load_matrices(cols=("close",), load_start=load_start)["close"]
-    except Exception as exc:
-        print(f"  [缓存截面] 矩阵读取失败：{type(exc).__name__}: {exc}")
+    except (Exception, SystemExit) as exc:
+        # SystemExit 必须单列：load_matrices 在 k_data 无 parquet 时直接 SystemExit
+        # （BaseException，Exception 接不住）。2026-09-29 k_data parquet 移出仓库跟踪
+        # （100535f）后 CI 冷启动必然命中，①层是纯告警层，拦停会卡死整条每日管线
+        # ——冷启动截面以刷新后的 prepull_klines --min-codes 权威门控为准。
+        print(f"  [缓存截面] 读取失败或缓存为空：{type(exc).__name__}: {exc}")
+        print("::warning::k_data 缓存为空/不可读（CI 冷启动或缓存损坏）——"
+              "本层仅告警；今日截面有效性由刷新后的 prepull_klines --min-codes 门控兜底。")
         return None
     if close.empty:
         return None
