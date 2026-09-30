@@ -25,10 +25,10 @@ concurrency:
 jobs:
   daily-pick:
     runs-on: ubuntu-latest
-    # 步骤上限之和约 90(K线刷新) + 40(A批) + 55(回测) + 装依赖/清单/预热/快照 ≈ 230min：
-    # 旧值 90 会在数据源变慢时硬杀 job，当日产出全部丢失且提交步骤不执行；
-    # 2026-09-17 退役 5 遗留策略、改为「全宇宙 K 线刷新 + A 批生成」后重估为 240。
-    timeout-minutes: 240
+    # 步骤上限之和约 150(K线刷新·冷启动) + 40(A批) + 55(回测) + 装依赖/清单/预热/快照 ≈ 280min：
+    # 旧值 240 装不下冷启动日（k_data 移出 git 跟踪后全量重拉 ~115min）；暖缓存日实际 ~2h。
+    # 2026-09-29 随 k_data actions/cache 化重估为 330。
+    timeout-minutes: 330
     permissions:
       contents: write
       issues: write
@@ -116,6 +116,17 @@ jobs:
         if: steps.gate.outputs.ok == 'true'
         run: pip install "pypandoc<1.10" pytdx 2>/dev/null || pip install pytdx 2>/dev/null || true
 
+      - name: 恢复 k_data 缓存（跨 run 存活）
+        # k_data parquet 已移出 git 跟踪（100535f，治 100MB 阻断）→ CI 每天都是冷缓存。
+        # 用 actions/cache 承载：昨日刷新成果今日秒级恢复；全量冷拉只在缓存被逐出
+        # （7 天未用/容量淘汰）后发生一次，届时由 prepull 的候选池快照引导兜底合并。
+        if: steps.gate.outputs.ok == 'true'
+        uses: actions/cache/restore@v4
+        with:
+          path: stock_data/k_data
+          key: k_data-qfq-${{ github.run_id }}
+          restore-keys: k_data-qfq-
+
       - name: 数据新鲜度硬校验（信号日 bar 必须存在，防止用 D-1 数据出当日信号）
         if: steps.gate.outputs.ok == 'true'
         timeout-minutes: 5
@@ -126,10 +137,12 @@ jobs:
           python scripts/verify_data_freshness.py --signal-date ${{ steps.gate.outputs.today }}
 
       - name: K 线缓存刷新（全宇宙补齐到信号日，供 A 批因子使用）
+        id: kline_refresh
         if: steps.gate.outputs.ok == 'true'
-        # 实测 4380 只 ≈ 50min（fetch_daily_k 的尾部缺口段使每个交易日都要 1 次
-        # HTTP/只，属稳态成本而非首跑特例）→ 取 90min 留约 1.8× 余量。
-        timeout-minutes: 90
+        # 预算（2026-09-29 重估）：暖缓存只补尾部缺口 ≈ 50min（原实测）；冷启动全量
+        # 400 天重拉实测 3111 只 ≈ 115min（~2.2s/只）→ 取 150min。配合下方「刷新后
+        # 立即落 actions/cache」，冷启动是「缓存被逐出后最多一次」，日常回到暖路径。
+        timeout-minutes: 150
         env:
           KLINE_BACKEND: hithink
           HITHINK_FINANCE_API_KEY: ${{ secrets.HITHINK_FINANCE_API_KEY }}
@@ -142,6 +155,20 @@ jobs:
           python scripts/prepull_klines.py --date ${{ steps.gate.outputs.today }}
           echo "### K 线缓存刷新" >> $GITHUB_STEP_SUMMARY
           echo "✅ 全宇宙已补齐到信号日（覆盖度见上方日志）" >> $GITHUB_STEP_SUMMARY
+
+      - name: 保存 k_data 缓存（刷新后立即落盘）
+        # 立即保存而非等 post 阶段：后续 A 批/回测失败也不丢这次冷启动/刷新成果。
+        # ⚠️ 仅当刷新步骤真的执行过才保存——gate 跳过（已跑过/非窗口）的 run 里
+        # k_data 可能为空，绝不能让空缓存成为 restore-keys 命中的最新条目毒化次日恢复。
+        if: >-
+          always() &&
+          steps.kline_refresh.outcome != 'skipped' &&
+          steps.kline_refresh.outcome != 'cancelled'
+        continue-on-error: true
+        uses: actions/cache/save@v4
+        with:
+          path: stock_data/k_data
+          key: k_data-qfq-${{ github.run_id }}
 
       - name: 因子池 A 批选股（12 价格因子）
         id: factors
@@ -157,7 +184,7 @@ jobs:
           # A 批 12 因子：与 factor_zoo.TEMPLATES 逐字一致，1:1 复用 compute_factor
           python scripts/zoo_factor_strategy.py --date $TODAY
           echo "### 因子池 A 批产出" >> $GITHUB_STEP_SUMMARY
-          for L in PVCorr20 PVCorr60 CVAmt20 CVAmt60 Skew20 Skew60 VRatio20_120 VRatio10_60 DistLo10 DistLo60 Vol20 Illiq20; do
+          for L in PVCorr20 PVCorr60 CVAmt20 CVAmt60 Skew20 Skew60 VRatio20_120 VRatio10_60 DistLo10 DistLo60 MaxRet10 Illiq20; do
             F="stock_data/Stock-Selection-${L}-${TODAY}.csv"
             if [ -f "$F" ]; then
               N=$(tail -n +2 "$F" | wc -l)
@@ -385,7 +412,7 @@ jobs:
           # ⚠️ 只数文件是否存在，会把「写了表头但 0 票」的空表算作有产出 → 2026-09-17
           # 曾因此静默漏报：12 个空表 + 无 Daily-Action-List，却仍报 success。故必须数数据行。
           n_strat=0
-          for L in PVCorr20 PVCorr60 CVAmt20 CVAmt60 Skew20 Skew60 VRatio20_120 VRatio10_60 DistLo10 DistLo60 Vol20 Illiq20; do
+          for L in PVCorr20 PVCorr60 CVAmt20 CVAmt60 Skew20 Skew60 VRatio20_120 VRatio10_60 DistLo10 DistLo60 MaxRet10 Illiq20; do
             F="stock_data/Stock-Selection-${L}-${TODAY}.csv"
             if [ -f "$F" ]; then
               N=$(tail -n +2 "$F" | wc -l | tr -d ' ')
