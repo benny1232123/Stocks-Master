@@ -1,8 +1,8 @@
 {
  "latest": {
-  "name": "Multi-Backtest-20260924-summary.csv",
-  "path": "stock_data/Multi-Backtest-20260924-summary.csv",
-  "modified_at": 1790744509.6751451
+  "name": "Multi-Backtest-20260929-summary.csv",
+  "path": "stock_data/Multi-Backtest-20260929-summary.csv",
+  "modified_at": 1790781259.699986
  },
  "preview": {
   "columns": [
@@ -42,39 +42,39 @@
   ],
   "rows": [
    {
-    "num_trades": 8,
+    "num_trades": 0,
     "initial_capital": 100000.0,
-    "ending_total": 99077.49,
-    "total_return": -0.92,
-    "max_drawdown": -0.92,
-    "win_rate": 25.0,
-    "avg_return": -2.51,
-    "avg_win": 1.01,
-    "avg_loss": -3.68,
-    "profit_factor": 0.09,
-    "sharpe": -1.47,
-    "strategies": "DistLo10,DistLo60,MaxRet10,PVCorr20,PVCorr60,Skew20,Skew60,VRatio10_60,VRatio20_120",
+    "ending_total": 99836.57,
+    "total_return": -0.16,
+    "max_drawdown": -0.16,
+    "win_rate": 0.0,
+    "avg_return": 0.0,
+    "avg_win": 0.0,
+    "avg_loss": 0.0,
+    "profit_factor": 0.0,
+    "sharpe": -1.72,
+    "strategies": "CVAmt20,CVAmt60,DistLo10,DistLo60,Illiq20,MaxRet10,PVCorr60,Skew20,Skew60,VRatio10_60,VRatio20_120",
     "signal_mode": "forward",
-    "date": 20260924,
-    "run_date": 20260929,
-    "signal_start": "2026-09-24",
-    "signal_end": "2026-09-24",
-    "hold_days": 5,
+    "date": 20260929,
+    "run_date": 20260930,
+    "signal_start": "2026-09-29",
+    "signal_end": "2026-09-29",
+    "hold_days": 1,
     "exit_mode": "boll_upper_take+take6%+trailing5%+MA60break",
     "size_mode": "adaptive_weight(权重)",
     "vol_mode": "scaled_stop+pos0.8",
-    "dd_breaker_dd": 0.69,
+    "dd_breaker_dd": 0.78,
     "dd_breaker_extra_cash": 0,
     "capital_scale": 0.8,
     "cash_pct": 20.0,
     "stop_mode": "dal_boll(2.5σ,[4%,12%])",
     "signals_days": 1,
-    "codes_count": 15,
-    "start": "2026-09-24",
-    "end": "2026-09-29",
-    "bench_return": -2.12,
-    "bench_return_exposed": -1.69,
-    "excess_return": 0.77
+    "codes_count": 30,
+    "start": "2026-09-29",
+    "end": "2026-09-30",
+    "bench_return": 0.29,
+    "bench_return_exposed": 0.23,
+    "excess_return": -0.39
    }
   ]
  }
