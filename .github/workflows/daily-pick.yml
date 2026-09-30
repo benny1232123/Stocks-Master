@@ -350,6 +350,7 @@ jobs:
               ls stock_data/Multi-Backtest-*.csv >/dev/null 2>&1 && git add -f stock_data/Multi-Backtest-*.csv || true
               ls stock_data/Stock-Selection-*.csv >/dev/null 2>&1 && git add -f stock_data/Stock-Selection-*.csv || true
               [ -f stock_data/backtest_status.txt ] && git add -f stock_data/backtest_status.txt || true
+              [ -d stock_data/web_data/ ] && git add -f stock_data/web_data/ || true
               if git diff --cached --quiet; then
                 echo "无变更（冲突回退后为空），跳过推送"
               else
@@ -361,11 +362,20 @@ jobs:
                 fi
               fi
             fi
-            # 第3层（兜底）：force-with-lease（仅当远程自上次 fetch 后未变，不会误覆盖他人提交）
+            # 第3层（兜底）：force-with-lease——仅当远程 tip 是 CI 提交的祖先（即 CI
+            # 已包含远程全部提交）才允许重写。裸 --force-with-lease 在「pull --rebase
+            # 冲突失败但 fetch 已更新远程引用」时会拿到恰好匹配的 lease，把他人推在
+            # 其后的提交合法覆盖掉（2026-09-30 事故实录：吞掉 fea37b2/1ccece3）。
             if [ "$PUSH_OK" -eq 0 ]; then
               echo "[push] 前两层失败，使用 force-with-lease 兜底"
-              if git push --force-with-lease origin master 2>/dev/null; then
-                PUSH_OK=1; CI_SHA=$(git rev-parse HEAD)
+              git fetch origin master 2>/dev/null || true
+              REMOTE_TIP=$(git rev-parse origin/master 2>/dev/null || echo "")
+              if [ -n "$REMOTE_TIP" ] && git merge-base --is-ancestor "$REMOTE_TIP" HEAD 2>/dev/null; then
+                if git push --force-with-lease="refs/heads/master:$REMOTE_TIP" origin master 2>/dev/null; then
+                  PUSH_OK=1; CI_SHA=$(git rev-parse HEAD)
+                fi
+              else
+                echo "::warning::[push] 远程有本 CI 未包含的新提交，拒绝 force（防覆盖）；数据保留在 runner 产物中"
               fi
             fi
             # ── 落库校验：CI 提交是否真的在远程 master（防并发强推静默覆盖）──

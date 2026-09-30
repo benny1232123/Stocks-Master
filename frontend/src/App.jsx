@@ -397,7 +397,7 @@ function App() {
   // 选股结果一律读 CI 产出的融合清单（Daily-Action-List，见下方 dalRows）。
   const [dailyBacktests, setDailyBacktests] = useState([])
   const [dailySummary, setDailySummary] = useState(null)
-  const [summaryLookback, setSummaryLookback] = useState(20)  // 总体总结聚合窗口：20 / 40 / 250(近一年)
+  const [summaryLookback, setSummaryLookback] = useState(30)  // 总体总结聚合窗口：30 / 60 / 250(近一年)。2026-09-30 用户定版：30 天一个周期看
   const [summaryLoading, setSummaryLoading] = useState(false)   // 切换窗口时的加载状态
   const [selDaily, setSelDaily] = useState(0)
   const [btDateOpen, setBtDateOpen] = useState(false)    // 回测日期选择器是否展开
@@ -501,7 +501,7 @@ function App() {
     finally { setBtBatchLoading(null) }
   }
 
-  // 切换总体总结的聚合窗口（20 / 40 / 近一年）后重新拉取总体指标。
+  // 切换总体总结的聚合窗口（30 / 60 / 近一年）后重新拉取总体指标。
   // 接收显式 lookback：onClick 里 setSummaryLookback 是异步生效，若直接读闭包里的
   // summaryLookback 会拿到旧值，导致数据比选中的按钮慢一拍。
   async function reloadDailySummary(lookback = summaryLookback) {
@@ -1768,7 +1768,7 @@ function App() {
                     <div className="dbt-lookback" title="聚合窗口：纳入多少个最近信号日计算总体指标。选「近一年」可看长期样本外表现。">
                       <span className="dbt-lookback-label">统计窗口</span>
                       <div className="seg">
-                        {[{ v: 20, l: '近20' }, { v: 40, l: '近40' }, { v: 250, l: '近一年' }].map((o) => (
+                        {[{ v: 30, l: '近30' }, { v: 60, l: '近60' }, { v: 250, l: '近一年' }].map((o) => (
                           <button
                             key={o.v}
                             type="button"

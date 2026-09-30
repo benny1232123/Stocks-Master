@@ -493,9 +493,9 @@ def daily_latest_backtest() -> dict:
     files = sorted(_glob.glob(str(STOCK_DATA_DIR / "Multi-Backtest-*-summary.csv")), reverse=True)
     # 内存护栏（2026-09-12 OOM #2）：全量读取 84 天 × (summary+equity+trades) CSV
     # 会把 512MB 实例打爆。90 天全量读取在 512MB 实例上逼近内存上限（曾触发 OOM
-    # 重启循环）：网站默认展示最近 14 天；本地/需要更久时调大 BACKTEST_DAILY_LIST_DAYS。
-    # 2026-09-29 回填 281 批后选择器覆盖全年信号日，14 批以外的日期走 daily-batch 懒加载。
-    _max_days = int(os.environ.get("BACKTEST_DAILY_LIST_DAYS", "14"))
+    # 重启循环）：2026-09-30 用户定版「30 天一个周期看」→ 默认装载 30 批（14→30，
+    # 快照体积 ~4MB 仍远低于护栏）；更早的信号日走 daily-batch 懒加载。
+    _max_days = int(os.environ.get("BACKTEST_DAILY_LIST_DAYS", "30"))
     files = files[:_max_days]
     items = []
     excluded_total = 0
@@ -536,7 +536,7 @@ def daily_backtest_summary(lookback: int | None = None) -> dict:
     稀释均值，使总体指标更灵敏地反映近期策略表现。
 
     窗口 N 的取值（配置驱动，无 magic number）：
-      - 不传 lookback：沿用环境变量 BACKTEST_SUMMARY_LOOKBACK（默认 20）；
+      - 不传 lookback：沿用环境变量 BACKTEST_SUMMARY_LOOKBACK（默认 30）；
       - 传 >0 的整数：使用该值作为窗口（如 40 看更多信号日）；
       - 传 0：不限制，聚合全部已完成信号日（沿用旧的全部聚合行为）。
 
@@ -553,7 +553,7 @@ def daily_backtest_summary(lookback: int | None = None) -> dict:
     _MIN_STRATEGIES = int(os.environ.get("BACKTEST_MIN_STRATEGIES", "2"))
     # 总体总结只聚合「最近 N 个信号日」，避免被几十个已走完窗口的冻结旧批次稀释，
     # 让均值更灵敏地反映近期策略表现。设为 0 表示不限制（沿用旧的全部聚合行为）。
-    _ENV_LOOKBACK = int(os.environ.get("BACKTEST_SUMMARY_LOOKBACK", "20"))
+    _ENV_LOOKBACK = int(os.environ.get("BACKTEST_SUMMARY_LOOKBACK", "30"))  # 2026-09-30 用户定版：30 天一个周期看
     # 查询参数 lookback 覆盖环境变量：>0 取该值，0 表示全部（不截断）。
     _SUMMARY_LOOKBACK = _ENV_LOOKBACK
     if lookback is not None:

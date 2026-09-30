@@ -1,0 +1,30 @@
+name: 每日选股兜底触发
+
+# 背景（2026-09-30）：daily-pick 的 */20 高频 schedule 槽位连续三天被 GitHub 整体吞掉
+# （0928/0929/0930 实录），外部 cron-job.org 的 16:30 dispatch 也可能静默失效——
+# 管线本身已修到「触发即成功」（见 9197685），但触发链是最后的薄弱环节。
+# 本工作流用**稀疏**槽位经 API dispatch daily-pick（GITHUB_TOKEN 的 workflow_dispatch
+# 属于可触发下游工作流的例外事件）；gate 自带窗口自检 + 当日防重，重复触发无害：
+# 已跑过 → gate 秒级跳过；16:35 那枪失败 → 18:35 自动重试。
+on:
+  schedule:
+    - cron: "35 8 * * 1-5"    # 北京 16:35（cron-job.org 16:30 之后 5 分钟兜底）
+    - cron: "35 10 * * 1-5"   # 北京 18:35（第二Chance：数据源延迟 / 上一枪失败）
+  workflow_dispatch: {}
+
+permissions:
+  actions: write
+  contents: read
+
+jobs:
+  trigger:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: 派发每日选股
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_REPO: ${{ github.repository }}
+        run: |
+          gh workflow run "每日选股"
+          echo "已派发 每日选股（推送窗口 / 当日防重由其 gate 自行判定）"
