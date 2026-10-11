@@ -22,6 +22,10 @@ A 批 12 因子全部 0 票（只写出表头空表）→ ``Daily-Action-List`` 
 3. 用 ``factor_engine.load_matrices`` 读回矩阵，统计信号日那一行的非空代码数；
    低于 ``--min-codes`` → ``::error::`` + exit 1（触发失败告警）。
 
+⓪ 休市日闸门（2026-10-11）：信号日若是 A 股休市日（周末/法定节假日），当日根本没有
+   bar，刷新与覆盖度门控只会必然失败（``daily-holdings.yml`` 的「持仓 K 线定向刷新」
+   2026-10-07 就是这样被打红的）。故休市日直接跳过，返回 0。
+
 ⚠️ 为什么不用「每只一个子进程」：4380 只 × 解释器启动开销 ≈ 1–2 小时，CI 跑不完；
 分块（默认 100 只/块 ≈ 44 个子进程）在隔离性与总耗时之间取平衡。
 
@@ -197,6 +201,26 @@ def main() -> int:
     # 子进程分块模式
     if args._chunk:
         return _run_chunk([c for c in args._chunk.split(",") if c], start, end)
+
+    # ── 交易日闸门（2026-10-11）──
+    # 放在 --_chunk 早退之后：分块子进程由父进程判过，无需重复判。
+    # 休市日数据源没有当日 bar → 全宇宙刷新必然刷不到 → 末尾覆盖度门控报
+    # 「有效截面 0 < 门槛」exit 1；持仓定向模式则报「全部持仓都缺信号日 bar」exit 1
+    # （2026-10-07 daily-holdings 实录）。休市日无信号可产，直接跳过。
+    from smcore.data.trading_calendar import (
+        describe_closed,
+        is_trading_day,
+        prev_trading_day,
+        uncovered_notice,
+    )
+
+    _notice = uncovered_notice(sig.date())
+    if _notice:
+        print(f"::warning::[prepull] {_notice}")
+    if not is_trading_day(sig.date()):
+        print(f"[prepull] 信号日 {sig.date()} 为 A 股非交易日（{describe_closed(sig.date())}）→ "
+              f"跳过 K 线刷新（缓存维持上一交易日 {prev_trading_day(sig.date())}）")
+        return 0
 
     if args.codes:
         codes = [c.strip() for c in args.codes.split(",") if c.strip()]

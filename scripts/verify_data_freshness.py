@@ -5,7 +5,12 @@
 存在更新延迟；此前链路里"数据没到"会静默降级为用 D-1 收盘数据出"信号日=今天"
 的清单，产出文件照常落库，缺陷不以任何红色形式暴露，持续污染前向回测档案。
 
-本脚本两层（⚠️ 2026-09-17 A 批空产出事故后拆分，别再混为一谈）：
+本脚本三层（⚠️ 2026-09-17 A 批空产出事故后拆分，别再混为一谈；⓪ 层 2026-10-11 新增）：
+
+  ⓪ **交易日闸门**（离线，2026-10-11 新增，直接 `return 0`）
+     —— 信号日若是 A 股休市日（周末/法定节假日），数据源按定义没有当日 bar，本脚本会在
+     ② 层硬失败 → 整链 skip → 告警步骤开出「无策略产出」误报 issue（2026 国庆
+     #10/#11/#14/#15、中秋 09-25 等）。休市日直接跳过校验。gate 层已先挡一次，这里是兜底。
 
   ① **缓存截面健康度**（离线，永远打印，只 `::warning::` 不退出）
      —— 报告「**上一交易日**」在 `stock_data/k_data` 缓存里的有效截面 N/total
@@ -113,6 +118,20 @@ def main() -> int:
     if os.getenv("ALLOW_STALE_DATA", "").strip() == "1":
         print("[freshness] ALLOW_STALE_DATA=1 → 跳过新鲜度校验（手动补跑模式）")
         return 0
+
+    # ⓪ 交易日闸门（2026-10-11）：休市日没有当日 bar 是**定义**，不是故障。不挡掉的话
+    #    ② 层会 exit 1 → 整链 skip → 告警步骤开误报 issue。gate 层已先挡一次，此处兜底，
+    #    保证单独调用本脚本（如本地复现）也不会误报休市日。
+    from smcore.data.trading_calendar import describe_closed, is_trading_day, uncovered_notice
+
+    _notice = uncovered_notice(signal_date)
+    if _notice:
+        print(f"::warning::[freshness] {_notice}")
+    if not is_trading_day(signal_date):
+        print(f"[freshness] 信号日 {signal_date} 为 A 股非交易日（{describe_closed(signal_date)}），"
+              f"跳过新鲜度校验（休市日无当日 bar 属定义，不是数据源故障）")
+        return 0
+
     # ① 缓存上一交易日截面健康度（离线；永远打印，只告警不退出）——
     #    把"缓存是不是在悄悄塌"变成每次运行日志里都看得见的数字（2026-09-17 事故就是
     #    因为没人看得见 4363 → 35 → 19 → 1 这条曲线）。
