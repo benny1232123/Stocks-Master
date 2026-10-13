@@ -1,7 +1,7 @@
 {
   "signal_date": "20250804",
   "generated_at": "2026-09-28T00:07:33",
-  "regime": "震荡轮动",
+  "regime": "趋势上行",
   "regime_as_of": "20250804",
   "live_regime": "下行防御",
   "is_today": false,
@@ -10,5 +10,11 @@
     "enabled": false,
     "applied": false,
     "note": null
+  },
+  "regime_backfill": {
+    "at": "2026-10-13T13:11:43",
+    "from": "震荡轮动",
+    "to": "趋势上行",
+    "reason": "issue#13 C2: regime 与信号日重算值不一致，按信号日回填"
   }
 }

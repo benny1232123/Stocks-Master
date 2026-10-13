@@ -31,6 +31,10 @@ import pandas as pd
 # 会卡死整个 fuse_signals 流程 → 用 daemon 线程 + join(timeout) 兜底降级新浪。
 _HITHINK_FETCH_TIMEOUT = 20
 
+# 波动率分位的固定窗口（滚动 std 观测个数）。见 _profile_from_full_series 注释：
+# 必须固定，否则分位基数随数据源历史长度漂移，regime 结论会在边界日翻转。
+_VOL_PCTILE_WINDOW = 250
+
 # 三大宽基指数（baostock 代码）
 _HS300 = "sh.000300"
 _ZZ500 = "sh.000905"  # 中证500
@@ -172,16 +176,21 @@ def _fetch_index_series_sina(code: str) -> pd.DataFrame | None:
         import urllib.request
 
         sym = code.replace(".", "")  # sh.000300 -> sh000300
+        # datalen=1200（约 5 年）：regime 合成要 MA60 斜率窗（近 120 根）+
+        # 波动率分位窗（近 250 个滚动 std），as_of 切片后仍须满足；320 根
+        # 只回到 ~15 个月前，2025-09 中旬之前的信号日切片后不足 65 根直接
+        # 退化成真空"震荡轮动"（issue #13：与同花顺源结论相悖的根因之一）。
+        # 实测 1200 根 0.8s 返回；timeout 30s 留足余量。
         url = (
             "https://money.finance.sina.com.cn/quotes_service/api/json_v2.php/"
             "CN_MarketData.getKLineData?"
-            f"symbol={sym}&scale=240&ma=5&datalen=320"
+            f"symbol={sym}&scale=240&ma=5&datalen=1200"
         )
         req = urllib.request.Request(
             url,
             headers={"User-Agent": "Mozilla/5.0", "Referer": "https://finance.sina.com.cn"},
         )
-        raw = urllib.request.urlopen(req, timeout=15).read().decode("utf-8", "ignore")
+        raw = urllib.request.urlopen(req, timeout=30).read().decode("utf-8", "ignore")
         if "=" in raw[:20]:  # 个别返回形如 var jsonstr=...; 剥掉前缀
             raw = raw.split("=", 1)[1].strip().rstrip(";")
         arr = json.loads(raw)
@@ -280,10 +289,14 @@ def _profile_from_full_series(hs: "pd.DataFrame", zz500: Optional["pd.DataFrame"
     if vol_20 is None or vol_20 <= 0:
         return None
     ann_vol = vol_20 * (252 ** 0.5)
-    # 波动率分位（近 250 日滚动 std）
+    # 波动率分位（近 250 日滚动 std）——固定取最近 250 个滚动观测：
+    # 若用「全部可用历史」，分位基数长度随数据源而变（同花顺自 2022 起
+    # 1141 根 vs 新浪 1200 根），边界日会出现 0.668 vs 0.676 跨 0.67 阈值
+    # 的翻链（20260826 实测），使 regime 不再是 (closes, as_of) 的纯函数
+    # （issue #13）。docstring 声明即「近 250 日分布中的分位」，此处对齐规格。
     roll = rets.rolling(20).std().dropna() * (252 ** 0.5)
     if len(roll) >= 30:
-        vol_pctile = float((roll < ann_vol).mean())
+        vol_pctile = float((roll.tail(_VOL_PCTILE_WINDOW) < ann_vol).mean())
     else:
         vol_pctile = 0.5
     if vol_pctile < 0.33:
