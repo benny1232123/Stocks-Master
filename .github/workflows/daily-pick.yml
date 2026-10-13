@@ -42,7 +42,13 @@ jobs:
       # 缺失/不可用时会由 kline.py 回退链自动降级到 akshare/baostock，不会静默失败。
       HITHINK_FINANCE_API_KEY: ${{ secrets.HITHINK_FINANCE_API_KEY }}
     steps:
-      - name: 北京时间窗口自检 + 当天防重 + 信号日
+      # 检出**先于** gate（2026-10-11）：gate 要用仓库里的交易日历
+      # （scripts/check_trading_day.py → smcore/data/trading_calendar.py）挡掉休市日，
+      # 而 gate 之后的所有步骤都以 gate 的 ok 为条件。checkout 约 5s，对「跳过型」run
+      # 的成本可忽略；换来的是休市日不再把整链打成故障 + 误报 issue。
+      - uses: actions/checkout@v4
+
+      - name: 北京时间窗口自检 + 交易日闸门 + 当天防重 + 信号日
         id: gate
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -58,29 +64,69 @@ jobs:
             echo "手动补跑信号日: $TODAY"
           else
             NOW=$(TZ=Asia/Shanghai date +%H%M)
-            if [ "$NOW" -lt "1630" ]; then
-              # 凌晨/上午槽 TODAY 可能已是次日，必须挡掉避免用错误日期选股
-              echo "北京 $NOW 未到推送窗口（<16:30），空转跳过"
-              echo "ok=false" >> $GITHUB_OUTPUT
-              exit 0
-            fi
             TODAY=$(TZ=Asia/Shanghai date +%Y%m%d)
-            # 防重：当日 DAL 已落库（远程 git 有 Daily-Action-List-$TODAY.csv）= 今天已跑过
-            N=$(curl -s -H "Authorization: Bearer $GH_TOKEN" \
-                "https://api.github.com/repos/${{ github.repository }}/commits?path=stock_data/Daily-Action-List-${TODAY}.csv&per_page=1" \
-                | grep -c '"sha"' || true)
-            if [ "$N" -gt 0 ]; then
-              echo "当日 DAL 已落库（Daily-Action-List-$TODAY.csv），已跑过，跳过"
-              echo "ok=false" >> $GITHUB_OUTPUT
-              exit 0
+            # 防重助手：远程 git 是否已有该信号日的 DAL（= 该日已跑过）
+            dal_exists() {
+              curl -s -H "Authorization: Bearer $GH_TOKEN" \
+                "https://api.github.com/repos/${{ github.repository }}/commits?path=stock_data/Daily-Action-List-$1.csv&per_page=1" \
+                | grep -c '"sha"' || true
+            }
+            if [ "$NOW" -lt "1630" ]; then
+              # 凌晨/上午槽：当日 bar 不存在，本就不该产当日信号。但**不能一放了之**——
+              # GitHub 延迟 schedule/兜底槽位数小时是常态（实测 7~10h），延迟过北京零点后
+              # 旧逻辑直接空转，目标信号日彻底丢失且无告警（2026-10-12 实录：当天 3 次
+              # 运行全 9s「成功」，1012 选股静默缺席）。正确语义：候选 = 上一交易日，
+              # 其 DAL 缺失 → 跨零点补跑；已落库 → 才空转。
+              PREV=$(python3 scripts/check_trading_day.py --prev --date "$TODAY" 2>/dev/null || echo "")
+              if [ -z "$PREV" ]; then
+                PREV=$(TZ=Asia/Shanghai date -d "yesterday" +%Y%m%d)  # 日历异常 fail-open
+              fi
+              if [ "$(dal_exists "$PREV")" -gt 0 ]; then
+                echo "北京 $NOW 未到推送窗口；上一交易日 $PREV 清单已落库，空转跳过"
+                echo "ok=false" >> $GITHUB_OUTPUT
+                exit 0
+              fi
+              echo "北京 $NOW 未到推送窗口；上一交易日 $PREV 清单缺失 → 跨零点补跑信号日 $PREV"
+              TODAY="$PREV"
+            else
+              if [ "$(dal_exists "$TODAY")" -eq 0 ]; then
+                echo "进入推送窗口（北京 $NOW），信号日: $TODAY"
+              else
+                # 当日已落库 ≠ 今天无事可做：若上一交易日缺口（其槽位被吞/失败），
+                # 晚间槽优先补它，防多日连续吞槽把缺口滚雪球。
+                PREV=$(python3 scripts/check_trading_day.py --prev --date "$TODAY" 2>/dev/null || echo "")
+                if [ -n "$PREV" ] && [ "$(dal_exists "$PREV")" -eq 0 ]; then
+                  echo "当日清单已落库，但上一交易日 $PREV 缺失 → 优先补跑 $PREV"
+                  TODAY="$PREV"
+                else
+                  echo "当日 DAL 已落库（Daily-Action-List-$TODAY.csv），已跑过，跳过"
+                  echo "ok=false" >> $GITHUB_OUTPUT
+                  exit 0
+                fi
+              fi
             fi
-            echo "进入推送窗口（北京 $NOW），信号日: $TODAY"
           fi
+
+          # ── 交易日闸门（2026-10-11 新增）──
+          # 休市日（周末/法定节假日）数据源按定义没有当日 bar：链路会在「数据新鲜度硬校验」
+          # 处硬失败 → 其后步骤全 skip → 告警步骤以 always() 判「无策略产出」并开 issue。
+          # 2026 国庆（10-01~10-07）因此连开 4 条误报（#10/#11/#14/#15），中秋等也中过招。
+          # 休市日本来就没有信号可产，正确语义是**整链空转**而不是报故障。
+          # 退出码契约（scripts/check_trading_day.py）：0=交易日 / 10=休市 /
+          # 1=闸门自身异常 → fail-open，按交易日继续（绝不静默跳过真实交易日）。
+          TRADE_RC=0
+          python3 scripts/check_trading_day.py --date "$TODAY" || TRADE_RC=$?
+          if [ "$TRADE_RC" -eq 10 ]; then
+            echo "信号日 $TODAY 为 A 股非交易日（休市），整链空转、不告警"
+            echo "ok=false" >> $GITHUB_OUTPUT
+            exit 0
+          fi
+          if [ "$TRADE_RC" -ne 0 ]; then
+            echo "::warning::交易日闸门异常（rc=$TRADE_RC），按交易日继续（fail-open）"
+          fi
+
           echo "ok=true" >> $GITHUB_OUTPUT
           echo "today=$TODAY" >> $GITHUB_OUTPUT
-      - uses: actions/checkout@v4
-        if: steps.gate.outputs.ok == 'true'
-
       # 幂等自举：失败告警 issue 依赖 automated/daily-pick-failure label，
       # 缺失会导致 `gh issue create --label` 报 "could not add label" 而失败。
       - name: 确保告警 label 存在（幂等自举）
@@ -302,17 +348,20 @@ jobs:
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
           # 治本：只提交「被 git 跟踪、需跨 run 持久化」的缓存与产物。
-          # - stock_data/daily_cache/、stock_data/k_data/：预热看板 + 回测 K 线文件缓存，
-          #   用于下次 CI 暖启动（否则每次都是冷启动超时）。二者已在 git 中跟踪。
+          # - stock_data/daily_cache/：预热看板缓存 + candidate_codes 候选池快照（prepull
+          #   冷启动宇宙引导的唯一来源），已跟踪。
+          # - stock_data/k_data/：2026-09-30 起【不再入 git】（此前 <90MB 桶重提交 +
+          #   >90MB 跳过的半跟踪制把仓库养到 275MB 且持续膨胀，b00 桶曾破 100MB 阻断
+          #   自动提交）。K 线持久化现在完全交给 actions/cache（恢复/保存步骤）+
+          #   prepull 的候选池快照引导兜底，三层机制见 prepull_klines.py 头注。
           # - stock_data/cache/：在 .gitignore 显式忽略（本地临时态，如 realtime_snapshot.pkl；
-          #   strategy_cache 走 Supabase 云端，不用此目录），故【不提交】——此前正是它不存在
-          #   触发 pathspec 错误，把整个提交步骤 abort，连上面的 k_data 都提交不出去。
+          #   strategy_cache 走 Supabase 云端，不用此目录），故【不提交】。
           # 每个 add 先判路径存在，避免缺失路径再次触发 fatal exit 128。
           [ -d stock_data/daily_cache/ ] && git add -f stock_data/daily_cache/ || true
-          # 超过 90MB 的 parquet 会触发 GitHub 100MiB 硬限制、整单拒推（b00 桶已 100MB+）。
-          # 跳过大文件：其云端缓存靠增量拉取自愈（covers 检查发现陈旧即重拉）
-          [ -d stock_data/k_data/ ] && find stock_data/k_data -name '*.parquet' -size -90M -print0 | xargs -0 -r git add -f || true
           ls stock_data/Daily-Action-List-*.csv >/dev/null 2>&1 && git add -f stock_data/Daily-Action-List-*.csv || true
+          # meta.json 必须随 DAL 一起落库：C2 纪律校验读 meta.regime/regime_as_of，
+          # 漏提交 → 历史 DAL 无 meta → 软警告（issue #13：4 个 DAL 曾因此缺 meta）
+          ls stock_data/Daily-Action-List-*.meta.json >/dev/null 2>&1 && git add -f stock_data/Daily-Action-List-*.meta.json || true
           ls stock_data/Multi-Backtest-*.csv >/dev/null 2>&1 && git add -f stock_data/Multi-Backtest-*.csv || true
           ls stock_data/Stock-Selection-*.csv >/dev/null 2>&1 && git add -f stock_data/Stock-Selection-*.csv || true
           # 看板静态数据快照：Render 端点快照优先直读，网站首屏毫秒级
@@ -345,8 +394,10 @@ jobs:
               git checkout master 2>/dev/null || true
               # 重新 stage（可能被 reset 清掉了）
               [ -d stock_data/daily_cache/ ] && git add -f stock_data/daily_cache/ || true
-              [ -d stock_data/k_data/ ] && git add -f stock_data/k_data/ || true
               ls stock_data/Daily-Action-List-*.csv >/dev/null 2>&1 && git add -f stock_data/Daily-Action-List-*.csv || true
+          # meta.json 必须随 DAL 一起落库：C2 纪律校验读 meta.regime/regime_as_of，
+              # 漏提交 → 历史 DAL 无 meta → 软警告（issue #13：4 个 DAL 曾因此缺 meta）
+              ls stock_data/Daily-Action-List-*.meta.json >/dev/null 2>&1 && git add -f stock_data/Daily-Action-List-*.meta.json || true
               ls stock_data/Multi-Backtest-*.csv >/dev/null 2>&1 && git add -f stock_data/Multi-Backtest-*.csv || true
               ls stock_data/Stock-Selection-*.csv >/dev/null 2>&1 && git add -f stock_data/Stock-Selection-*.csv || true
               [ -f stock_data/backtest_status.txt ] && git add -f stock_data/backtest_status.txt || true
@@ -404,6 +455,17 @@ jobs:
             fi
           fi
 
+      - name: 自动收敛过期/误报告警 issue
+        # 告警只开不关 → issue 越积越多（2026-10-11 实测积压 9 条，其中 6 条最终靠人工在
+        # 09-30 批量关闭）。本步在每次运行收尾时按「标题里的信号日」判定：
+        #   休市日误报 → 关；交易日且清单已补齐 → 关；交易日仍缺清单 → 保留（真缺口）。
+        # always()：当天链路失败也要收敛历史告警；脚本内部 fail-soft，不会把当天判红。
+        if: always() && steps.gate.outputs.ok == 'true'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TODAY: ${{ steps.gate.outputs.today }}
+        run: python3 scripts/close_stale_pick_alarms.py --today "${TODAY:-$(date +%Y%m%d)}"
+
       - name: 失败告警（无候选且无策略产出时开 issue）
         # always(): 前置步骤失败（如 K 线刷新覆盖度不达标）时也必须告警——
         # 否则「红 build 但无人开 issue」，与本次事故的静默失败是同一类漏洞。
@@ -449,7 +511,7 @@ jobs:
             fi
             gh issue create --repo "${{ github.repository }}" \
               --title "$title" \
-              --body "信号日 **${TODAY}** 的 daily-pick 未生成任何策略产出文件，且 Daily-Action-List 为空/缺失。\n\n可能原因：\n- akshare/baostock 数据源在海外 Runner 不可用\n- 全部策略步骤异常退出\n- 网络/权限问题导致依赖安装失败\n\n请检查 [Actions 运行日志](https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }})。\n\n_本 issue 由 GitHub Actions 自动创建。_" \
+              --body "信号日 **${TODAY}** 的 daily-pick 未生成任何策略产出文件，且 Daily-Action-List 为空/缺失。\n\n可能原因：\n- akshare/baostock 数据源在海外 Runner 不可用\n- 全部策略步骤异常退出\n- 网络/权限问题导致依赖安装失败\n- **若该日本身是 A 股休市日**（法定节假日），说明交易日闸门未生效或该年份休市安排未收录（见 smcore/data/trading_calendar.py 的 HOLIDAY_RANGES，每年 11~12 月需补次年）\n\n请检查 [Actions 运行日志](https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }})。\n\n_本 issue 由 GitHub Actions 自动创建。_" \
               --label "automated,daily-pick-failure"
           else
             echo "[alert] 选股链路正常（策略文件=${n_strat}, 候选=${n_action}），无需告警"
