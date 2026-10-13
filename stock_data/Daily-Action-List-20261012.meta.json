@@ -1,0 +1,15 @@
+{
+  "signal_date": "20261012",
+  "generated_at": "2026-10-13T14:56:45",
+  "regime": "下行防御",
+  "regime_as_of": "20261012",
+  "live_regime": "下行防御",
+  "is_today": false,
+  "date_pinned": true,
+  "regime_backfill": {
+    "at": "2026-10-13T14:56:45",
+    "from": null,
+    "to": "下行防御",
+    "reason": "issue#13: 10-12 DAL meta 缺失（CI 提交步未落库），按信号日补建"
+  }
+}
