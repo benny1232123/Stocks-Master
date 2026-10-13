@@ -49,6 +49,36 @@ def test_analyze_no_days(monkeypatch):
     assert res["decayed"] == []
 
 
+def test_analyze_zero_sample_strategy_no_crash(monkeypatch):
+    """零样本策略 win_rate=None（_aggregate_excess n=0 口径）不得让监控崩。
+
+    2026-10-13 实录：illiq20 在 20261009 口径下近期 n=0 → win_rate=None →
+    main() 打印循环 TypeError，monitor.yml「策略衰减监控」步整体红，
+    衰减 issue 也无法刷新。本测试钉住 analyze/打印/正文三条路径均容忍 None。
+    """
+    days = [f"202601{i:02d}" for i in range(1, 16)]
+    monkeypatch.setattr(sdm, "_all_signal_days", lambda: days)
+
+    def fake_edge(cutoff, window=10):
+        if window >= 10:
+            return {
+                "theme": {"n": 8, "avg_return": -3.0, "win_rate": 30.0, "edge": -3.0},
+                # n=0 → _aggregate_excess 返回 win_rate=None
+                "illiq20": {"n": 0, "avg_return": 0.0, "win_rate": None, "edge": 0.0},
+            }
+        return {"theme": {"n": 20, "avg_return": -1.0, "win_rate": 40.0, "edge": -1.0}}
+
+    monkeypatch.setattr(sdm, "causal_edge", fake_edge)
+    res = sdm.analyze(recent_window=10)
+    assert res["strategies"]["illiq20"]["recent_win_rate"] is None
+    assert "illiq20" not in res["decayed"], "零样本不得判衰减"
+    assert "theme" in res["decayed"]
+    # issue 正文与打印路径都不得抛异常
+    body = sdm._format_issue_body(res)
+    assert "n/a" in body
+    sdm._format_issue_body(res)
+
+
 def test_issue_body_format(monkeypatch):
     days = [f"202601{i:02d}" for i in range(1, 16)]
     monkeypatch.setattr(sdm, "_all_signal_days", lambda: days)

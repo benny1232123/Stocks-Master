@@ -73,6 +73,9 @@ def main(argv=None) -> int:
     ap = argparse.ArgumentParser(description="A 股交易日闸门（退出码 0=交易日 / 10=休市）")
     ap.add_argument("--date", default="", help="待判定日期 YYYYMMDD（默认 = 今天）")
     ap.add_argument("--quiet", action="store_true", help="只输出一行结论，不打解释性日志")
+    ap.add_argument("--prev", action="store_true",
+                    help="只输出上一交易日 YYYYMMDD（供 daily-pick gate 跨零点补跑判定；"
+                         "配合 --date 可指定基准日）")
     args = ap.parse_args(argv)
 
     try:
@@ -83,6 +86,12 @@ def main(argv=None) -> int:
 
     try:
         cal = _load_calendar()
+        if args.prev:
+            # 机器可读模式：只打印上一交易日，供 gate 的「跨零点补跑」用。
+            # ⚠️ 必须屏蔽 uncovered_notice 的 ::warning:: 行——stdout 多一行
+            # 就会污染 gate 的 PREV 判据（2026-10-13 加固）。
+            print(cal.prev_trading_day(day).strftime("%Y%m%d"))
+            return RC_TRADING
         notice = cal.uncovered_notice(day)
         if notice:
             print(f"::warning::[trading-day] {notice}")
