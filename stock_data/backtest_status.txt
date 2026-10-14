@@ -1,5 +1,5 @@
 run_date=20261014
-eligible_signal_days=4
+eligible_signal_days=5
 generated=4
 skipped=11
 incomplete_skipped=0
