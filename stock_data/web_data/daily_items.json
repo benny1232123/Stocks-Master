@@ -5,15 +5,15 @@
    "summary": {
     "num_trades": 0,
     "initial_capital": 100000.0,
-    "ending_total": 100000.0,
-    "total_return": 0.0,
+    "ending_total": 100706.45,
+    "total_return": 0.71,
     "max_drawdown": 0.0,
     "win_rate": 0.0,
     "avg_return": 0.0,
     "avg_win": 0.0,
     "avg_loss": 0.0,
     "profit_factor": 0.0,
-    "sharpe": 0.0,
+    "sharpe": 1.77,
     "strategies": "CVAmt20,CVAmt60,DistLo10,DistLo60,MaxRet10,PVCorr20,PVCorr60,Skew20,Skew60,VRatio20_120",
     "signal_mode": "forward",
     "date": 20261013,
@@ -24,7 +24,7 @@
     "exit_mode": "boll_upper_take+take6%+trailing5%+MA60break",
     "size_mode": "adaptive_weight(权重)",
     "vol_mode": "scaled_stop+pos0.8",
-    "dd_breaker_dd": 0.92,
+    "dd_breaker_dd": 0.83,
     "dd_breaker_extra_cash": 0,
     "capital_scale": 0.8,
     "cash_pct": 20.0,
@@ -33,9 +33,9 @@
     "codes_count": 30,
     "start": "2026-10-13",
     "end": "2026-10-14",
-    "bench_return": 0.0,
-    "bench_return_exposed": 0.0,
-    "excess_return": 0.0
+    "bench_return": -1.36,
+    "bench_return_exposed": -1.09,
+    "excess_return": 1.8
    },
    "equity": [
     {
@@ -677,6 +677,14 @@
      "total": 100000.0,
      "peak": 100000.0,
      "drawdown": 0.0
+    },
+    {
+     "date": "2026-10-14",
+     "cash": 20266.45,
+     "holding_value": 80440.0,
+     "total": 100706.45,
+     "peak": 100706.45,
+     "drawdown": 0.0
     }
    ],
    "trades": []
@@ -684,17 +692,17 @@
   {
    "date": "20261012",
    "summary": {
-    "num_trades": 0,
+    "num_trades": 12,
     "initial_capital": 100000.0,
-    "ending_total": 99980.38,
-    "total_return": -0.02,
-    "max_drawdown": -0.02,
-    "win_rate": 0.0,
-    "avg_return": 0.0,
-    "avg_win": 0.0,
-    "avg_loss": 0.0,
-    "profit_factor": 0.0,
-    "sharpe": -1.79,
+    "ending_total": 99750.67,
+    "total_return": -0.25,
+    "max_drawdown": -0.25,
+    "win_rate": 50.0,
+    "avg_return": 0.39,
+    "avg_win": 3.44,
+    "avg_loss": -2.66,
+    "profit_factor": 1.29,
+    "sharpe": -1.92,
     "strategies": "CVAmt20,CVAmt60,DistLo10,DistLo60,MaxRet10,PVCorr20,PVCorr60,Skew20,Skew60,VRatio10_60,VRatio20_120",
     "signal_mode": "forward",
     "date": 20261012,
@@ -705,7 +713,7 @@
     "exit_mode": "boll_upper_take+take6%+trailing5%+MA60break",
     "size_mode": "adaptive_weight(权重)",
     "vol_mode": "scaled_stop+pos0.8",
-    "dd_breaker_dd": 0.9,
+    "dd_breaker_dd": 0.83,
     "dd_breaker_extra_cash": 0,
     "capital_scale": 0.8,
     "cash_pct": 20.0,
@@ -714,9 +722,9 @@
     "codes_count": 30,
     "start": "2026-10-12",
     "end": "2026-10-14",
-    "bench_return": -0.29,
-    "bench_return_exposed": -0.23,
-    "excess_return": 0.21
+    "bench_return": -1.64,
+    "bench_return_exposed": -1.31,
+    "excess_return": 1.06
    },
    "equity": [
     {
@@ -1358,24 +1366,165 @@
      "total": 99980.38,
      "peak": 100000.0,
      "drawdown": -0.0196199999999953
+    },
+    {
+     "date": "2026-10-14",
+     "cash": 85894.67,
+     "holding_value": 13856.0,
+     "total": 99750.67,
+     "peak": 100000.0,
+     "drawdown": -0.2493300000000017
     }
    ],
-   "trades": []
+   "trades": [
+    {
+     "code": 600285,
+     "buy_date": "2026-10-13",
+     "sell_date": "2026-10-14",
+     "buy_price": 20.0,
+     "sell_price": 21.099,
+     "qty": 100,
+     "return_pct": 5.49,
+     "exit_reason": "take_partial",
+     "name": "羚锐制药"
+    },
+    {
+     "code": 300416,
+     "buy_date": "2026-10-13",
+     "sell_date": "2026-10-14",
+     "buy_price": 13.013,
+     "sell_price": 12.827,
+     "qty": 700,
+     "return_pct": -1.43,
+     "exit_reason": "trend_break",
+     "name": "苏试试验"
+    },
+    {
+     "code": 1269,
+     "buy_date": "2026-10-13",
+     "sell_date": "2026-10-14",
+     "buy_price": 18.769,
+     "sell_price": 18.0,
+     "qty": 500,
+     "return_pct": -4.1,
+     "exit_reason": "stop_hard",
+     "name": "欧晶科技"
+    },
+    {
+     "code": 300129,
+     "buy_date": "2026-10-13",
+     "sell_date": "2026-10-14",
+     "buy_price": 7.518,
+     "sell_price": 7.133,
+     "qty": 1300,
+     "return_pct": -5.12,
+     "exit_reason": "trend_break",
+     "name": "泰胜风能"
+    },
+    {
+     "code": 600285,
+     "buy_date": "2026-10-13",
+     "sell_date": "2026-10-14",
+     "buy_price": 20.0,
+     "sell_price": 21.099,
+     "qty": 500,
+     "return_pct": 5.49,
+     "exit_reason": "take_pct",
+     "name": "羚锐制药"
+    },
+    {
+     "code": 1286,
+     "buy_date": "2026-10-13",
+     "sell_date": "2026-10-14",
+     "buy_price": 9.92,
+     "sell_price": 10.23,
+     "qty": 1300,
+     "return_pct": 3.12,
+     "exit_reason": "take_band",
+     "name": "陕西能源"
+    },
+    {
+     "code": 600839,
+     "buy_date": "2026-10-13",
+     "sell_date": "2026-10-14",
+     "buy_price": 6.386,
+     "sell_price": 6.264,
+     "qty": 700,
+     "return_pct": -1.92,
+     "exit_reason": "trend_break",
+     "name": "四川长虹"
+    },
+    {
+     "code": 100,
+     "buy_date": "2026-10-13",
+     "sell_date": "2026-10-14",
+     "buy_price": 4.484,
+     "sell_price": 4.456,
+     "qty": 300,
+     "return_pct": -0.65,
+     "exit_reason": "trend_break",
+     "name": "TCL科技"
+    },
+    {
+     "code": 895,
+     "buy_date": "2026-10-13",
+     "sell_date": "2026-10-14",
+     "buy_price": 23.423,
+     "sell_price": 23.926,
+     "qty": 100,
+     "return_pct": 2.15,
+     "exit_reason": "take_band",
+     "name": "双汇发展"
+    },
+    {
+     "code": 786,
+     "buy_date": "2026-10-13",
+     "sell_date": "2026-10-14",
+     "buy_price": 16.326,
+     "sell_price": 16.464,
+     "qty": 100,
+     "return_pct": 0.84,
+     "exit_reason": "trend_break",
+     "name": "北新建材"
+    },
+    {
+     "code": 600690,
+     "buy_date": "2026-10-13",
+     "sell_date": "2026-10-14",
+     "buy_price": 21.021,
+     "sell_price": 20.45,
+     "qty": 100,
+     "return_pct": -2.72,
+     "exit_reason": "trend_break",
+     "name": "海尔智家"
+    },
+    {
+     "code": 2383,
+     "buy_date": "2026-10-13",
+     "sell_date": "2026-10-14",
+     "buy_price": 7.207,
+     "sell_price": 7.463,
+     "qty": 100,
+     "return_pct": 3.54,
+     "exit_reason": "trend_break",
+     "name": "合众思壮"
+    }
+   ]
   },
   {
    "date": "20261009",
    "summary": {
-    "num_trades": 17,
+    "num_trades": 20,
     "initial_capital": 100000.0,
-    "ending_total": 98602.31,
-    "total_return": -1.4,
+    "ending_total": 99340.75,
+    "total_return": -0.66,
     "max_drawdown": -1.4,
-    "win_rate": 29.4,
-    "avg_return": -1.85,
-    "avg_win": 1.52,
+    "win_rate": 40.0,
+    "avg_return": -0.75,
+    "avg_win": 3.01,
     "avg_loss": -3.25,
-    "profit_factor": 0.19,
-    "sharpe": -1.36,
+    "profit_factor": 0.62,
+    "sharpe": -0.5,
     "strategies": "CVAmt20,CVAmt60,DistLo10,DistLo60,Illiq20,MaxRet10,PVCorr60,Skew60,VRatio10_60",
     "signal_mode": "forward",
     "date": 20261009,
@@ -1386,7 +1535,7 @@
     "exit_mode": "boll_upper_take+take6%+trailing5%+MA60break",
     "size_mode": "adaptive_weight(权重)",
     "vol_mode": "scaled_stop+pos0.8",
-    "dd_breaker_dd": 0.9,
+    "dd_breaker_dd": 0.83,
     "dd_breaker_extra_cash": 0,
     "capital_scale": 0.8,
     "cash_pct": 20.0,
@@ -1395,9 +1544,9 @@
     "codes_count": 30,
     "start": "2026-10-09",
     "end": "2026-10-14",
-    "bench_return": -0.96,
-    "bench_return_exposed": -0.77,
-    "excess_return": -0.63
+    "bench_return": -2.31,
+    "bench_return_exposed": -1.85,
+    "excess_return": 1.19
    },
    "equity": [
     {
@@ -3575,6 +3724,14 @@
      "total": 98602.31,
      "peak": 100000.0,
      "drawdown": -1.3976900000000023
+    },
+    {
+     "date": "2026-10-14",
+     "cash": 80166.75,
+     "holding_value": 19174.0,
+     "total": 99340.75,
+     "peak": 100000.0,
+     "drawdown": -0.65925
     }
    ],
    "trades": [
@@ -3764,6 +3921,39 @@
      "return_pct": -9.27,
      "exit_reason": "stop_hard",
      "name": "泰永长征"
+    },
+    {
+     "code": 600285,
+     "buy_date": "2026-10-12",
+     "sell_date": "2026-10-14",
+     "buy_price": 19.66,
+     "sell_price": 21.099,
+     "qty": 100,
+     "return_pct": 7.32,
+     "exit_reason": "take_partial",
+     "name": "羚锐制药"
+    },
+    {
+     "code": 600285,
+     "buy_date": "2026-10-12",
+     "sell_date": "2026-10-14",
+     "buy_price": 19.66,
+     "sell_price": 21.099,
+     "qty": 300,
+     "return_pct": 7.32,
+     "exit_reason": "take_pct",
+     "name": "羚锐制药"
+    },
+    {
+     "code": 600019,
+     "buy_date": "2026-10-12",
+     "sell_date": "2026-10-14",
+     "buy_price": 5.896,
+     "sell_price": 6.004,
+     "qty": 100,
+     "return_pct": 1.83,
+     "exit_reason": "take_band",
+     "name": "宝钢股份"
     }
    ]
   },
@@ -3772,15 +3962,15 @@
    "summary": {
     "num_trades": 21,
     "initial_capital": 100000.0,
-    "ending_total": 99068.88,
-    "total_return": -0.93,
+    "ending_total": 99131.88,
+    "total_return": -0.87,
     "max_drawdown": -1.47,
     "win_rate": 61.9,
     "avg_return": -0.35,
     "avg_win": 2.05,
     "avg_loss": -4.24,
     "profit_factor": 0.79,
-    "sharpe": -0.62,
+    "sharpe": -0.58,
     "strategies": "CVAmt60,DistLo10,DistLo60,MaxRet10,PVCorr60,Skew20,Skew60,VRatio10_60,VRatio20_120",
     "signal_mode": "forward",
     "date": 20261008,
@@ -3791,7 +3981,7 @@
     "exit_mode": "boll_upper_take+take6%+trailing5%+MA60break",
     "size_mode": "adaptive_weight(权重)",
     "vol_mode": "scaled_stop+pos0.8",
-    "dd_breaker_dd": 0.9,
+    "dd_breaker_dd": 0.83,
     "dd_breaker_extra_cash": 0,
     "capital_scale": 0.8,
     "cash_pct": 20.0,
@@ -3800,9 +3990,9 @@
     "codes_count": 30,
     "start": "2026-10-08",
     "end": "2026-10-14",
-    "bench_return": -0.8,
-    "bench_return_exposed": -0.64,
-    "excess_return": -0.29
+    "bench_return": -2.15,
+    "bench_return_exposed": -1.72,
+    "excess_return": 0.85
    },
    "equity": [
     {
@@ -5980,6 +6170,14 @@
      "total": 99068.88,
      "peak": 100546.49,
      "drawdown": -1.4695788982787967
+    },
+    {
+     "date": "2026-10-14",
+     "cash": 87266.88,
+     "holding_value": 11865.0,
+     "total": 99131.88,
+     "peak": 100546.49,
+     "drawdown": -1.4069213157018217
     }
    ],
    "trades": [
@@ -119312,15 +119510,15 @@
   "summary": {
    "num_trades": 0,
    "initial_capital": 100000.0,
-   "ending_total": 100000.0,
-   "total_return": 0.0,
+   "ending_total": 100706.45,
+   "total_return": 0.71,
    "max_drawdown": 0.0,
    "win_rate": 0.0,
    "avg_return": 0.0,
    "avg_win": 0.0,
    "avg_loss": 0.0,
    "profit_factor": 0.0,
-   "sharpe": 0.0,
+   "sharpe": 1.77,
    "strategies": "CVAmt20,CVAmt60,DistLo10,DistLo60,MaxRet10,PVCorr20,PVCorr60,Skew20,Skew60,VRatio20_120",
    "signal_mode": "forward",
    "date": 20261013,
@@ -119331,7 +119529,7 @@
    "exit_mode": "boll_upper_take+take6%+trailing5%+MA60break",
    "size_mode": "adaptive_weight(权重)",
    "vol_mode": "scaled_stop+pos0.8",
-   "dd_breaker_dd": 0.92,
+   "dd_breaker_dd": 0.83,
    "dd_breaker_extra_cash": 0,
    "capital_scale": 0.8,
    "cash_pct": 20.0,
@@ -119340,9 +119538,9 @@
    "codes_count": 30,
    "start": "2026-10-13",
    "end": "2026-10-14",
-   "bench_return": 0.0,
-   "bench_return_exposed": 0.0,
-   "excess_return": 0.0
+   "bench_return": -1.36,
+   "bench_return_exposed": -1.09,
+   "excess_return": 1.8
   },
   "equity": [
    {
@@ -119983,6 +120181,14 @@
     "holding_value": 0.0,
     "total": 100000.0,
     "peak": 100000.0,
+    "drawdown": 0.0
+   },
+   {
+    "date": "2026-10-14",
+    "cash": 20266.45,
+    "holding_value": 80440.0,
+    "total": 100706.45,
+    "peak": 100706.45,
     "drawdown": 0.0
    }
   ],
