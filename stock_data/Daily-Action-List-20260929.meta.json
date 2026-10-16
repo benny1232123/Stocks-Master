@@ -1,15 +1,15 @@
 {
   "signal_date": "20260929",
-  "generated_at": "2026-10-13T13:11:43",
+  "generated_at": "2026-10-16T23:44:39",
   "regime": "下行防御",
   "regime_as_of": "20260929",
   "live_regime": "下行防御",
   "is_today": false,
   "date_pinned": true,
   "regime_backfill": {
-    "at": "2026-10-13T13:11:43",
+    "at": "2026-10-16T23:44:39",
     "from": null,
     "to": "下行防御",
-    "reason": "issue#13 C2: 原 meta 缺失，按信号日补建"
+    "reason": "issue#13: regime 按信号日回填（原值可能为生成时刻状态/真空兜底/缺失）"
   }
 }
