@@ -2,7 +2,7 @@
  "latest": {
   "name": "Multi-Backtest-20261019-summary.csv",
   "path": "stock_data/Multi-Backtest-20261019-summary.csv",
-  "modified_at": 1792502443.0026429
+  "modified_at": 1792589186.0380688
  },
  "preview": {
   "columns": [
@@ -44,15 +44,15 @@
    {
     "num_trades": 0,
     "initial_capital": 100000.0,
-    "ending_total": 100000.0,
-    "total_return": 0.0,
-    "max_drawdown": 0.0,
+    "ending_total": 99718.5,
+    "total_return": -0.28,
+    "max_drawdown": -0.28,
     "win_rate": 0.0,
     "avg_return": 0.0,
     "avg_win": 0.0,
     "avg_loss": 0.0,
     "profit_factor": 0.0,
-    "sharpe": 0.0,
+    "sharpe": -1.77,
     "strategies": "CVAmt20,CVAmt60,DistLo10,DistLo60,MaxRet10,PVCorr20,PVCorr60,Skew20,Skew60,VRatio10_60,VRatio20_120",
     "signal_mode": "forward",
     "date": 20261019,
@@ -63,7 +63,7 @@
     "exit_mode": "boll_upper_take+take6%+trailing5%+MA60break",
     "size_mode": "adaptive_weight(权重)",
     "vol_mode": "scaled_stop+pos0.8",
-    "dd_breaker_dd": 0.77,
+    "dd_breaker_dd": 0.7,
     "dd_breaker_extra_cash": 0,
     "capital_scale": 0.8,
     "cash_pct": 20.0,
@@ -72,9 +72,9 @@
     "codes_count": 30,
     "start": "2026-10-19",
     "end": "2026-10-20",
-    "bench_return": 0.0,
-    "bench_return_exposed": 0.0,
-    "excess_return": 0.0
+    "bench_return": -0.54,
+    "bench_return_exposed": -0.43,
+    "excess_return": 0.15
    }
   ]
  }
