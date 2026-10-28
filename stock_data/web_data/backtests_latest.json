@@ -1,8 +1,8 @@
 {
  "latest": {
-  "name": "Multi-Backtest-20261023-summary.csv",
-  "path": "stock_data/Multi-Backtest-20261023-summary.csv",
-  "modified_at": 1793109492.58002
+  "name": "Multi-Backtest-20261026-summary.csv",
+  "path": "stock_data/Multi-Backtest-20261026-summary.csv",
+  "modified_at": 1793199074.2664893
  },
  "preview": {
   "columns": [
@@ -44,37 +44,37 @@
    {
     "num_trades": 0,
     "initial_capital": 100000.0,
-    "ending_total": 100741.19,
-    "total_return": 0.74,
-    "max_drawdown": 0.0,
+    "ending_total": 99043.53,
+    "total_return": -0.96,
+    "max_drawdown": -0.96,
     "win_rate": 0.0,
     "avg_return": 0.0,
     "avg_win": 0.0,
     "avg_loss": 0.0,
     "profit_factor": 0.0,
-    "sharpe": 1.76,
-    "strategies": "CVAmt20,CVAmt60,DistLo10,DistLo60,Illiq20,MaxRet10,PVCorr20,PVCorr60,Skew20,Skew60",
+    "sharpe": -1.77,
+    "strategies": "CVAmt20,CVAmt60,DistLo10,DistLo60,Illiq20,MaxRet10,PVCorr20,PVCorr60,Skew20,Skew60,VRatio10_60",
     "signal_mode": "forward",
-    "date": 20261023,
-    "run_date": 20261026,
-    "signal_start": "2026-10-23",
-    "signal_end": "2026-10-23",
-    "hold_days": 3,
+    "date": 20261026,
+    "run_date": 20261027,
+    "signal_start": "2026-10-26",
+    "signal_end": "2026-10-26",
+    "hold_days": 1,
     "exit_mode": "boll_upper_take+take6%+trailing5%+MA60break",
     "size_mode": "adaptive_weight(权重)",
-    "vol_mode": "scaled_stop+pos0.52",
-    "dd_breaker_dd": 0.73,
+    "vol_mode": "scaled_stop+pos0.8",
+    "dd_breaker_dd": 0.66,
     "dd_breaker_extra_cash": 0,
-    "capital_scale": 0.52,
-    "cash_pct": 48,
+    "capital_scale": 0.8,
+    "cash_pct": 20.0,
     "stop_mode": "dal_boll(2.5σ,[4%,12%])",
     "signals_days": 1,
     "codes_count": 30,
-    "start": "2026-10-23",
-    "end": "2026-10-26",
-    "bench_return": -0.04,
-    "bench_return_exposed": -0.02,
-    "excess_return": 0.76
+    "start": "2026-10-26",
+    "end": "2026-10-27",
+    "bench_return": -1.32,
+    "bench_return_exposed": -1.05,
+    "excess_return": 0.09
    }
   ]
  }
