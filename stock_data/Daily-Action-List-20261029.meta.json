@@ -1,0 +1,14 @@
+{
+  "signal_date": "20261029",
+  "generated_at": "2026-10-29T23:47:18",
+  "regime": "下行防御",
+  "regime_as_of": "20261029",
+  "live_regime": null,
+  "is_today": true,
+  "date_pinned": true,
+  "ml_integration": {
+    "enabled": false,
+    "applied": false,
+    "note": null
+  }
+}
