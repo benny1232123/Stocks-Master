@@ -1,8 +1,8 @@
 {
  "latest": {
-  "name": "Multi-Backtest-20261027-summary.csv",
-  "path": "stock_data/Multi-Backtest-20261027-summary.csv",
-  "modified_at": 1793285801.112147
+  "name": "Multi-Backtest-20261028-summary.csv",
+  "path": "stock_data/Multi-Backtest-20261028-summary.csv",
+  "modified_at": 1793371784.3683105
  },
  "preview": {
   "columns": [
@@ -44,8 +44,8 @@
    {
     "num_trades": 0,
     "initial_capital": 100000.0,
-    "ending_total": 100184.35,
-    "total_return": 0.18,
+    "ending_total": 100037.54,
+    "total_return": 0.04,
     "max_drawdown": 0.0,
     "win_rate": 0.0,
     "avg_return": 0.0,
@@ -53,28 +53,28 @@
     "avg_loss": 0.0,
     "profit_factor": 0.0,
     "sharpe": 1.76,
-    "strategies": "CVAmt20,CVAmt60,DistLo10,DistLo60,PVCorr20,PVCorr60,Skew20,Skew60,VRatio20_120",
+    "strategies": "CVAmt20,CVAmt60,DistLo10,DistLo60,MaxRet10,PVCorr20,PVCorr60,Skew20,Skew60,VRatio20_120",
     "signal_mode": "forward",
-    "date": 20261027,
-    "run_date": 20261028,
-    "signal_start": "2026-10-27",
-    "signal_end": "2026-10-27",
+    "date": 20261028,
+    "run_date": 20261029,
+    "signal_start": "2026-10-28",
+    "signal_end": "2026-10-28",
     "hold_days": 1,
     "exit_mode": "boll_upper_take+take6%+trailing5%+MA60break",
     "size_mode": "adaptive_weight(权重)",
-    "vol_mode": "scaled_stop+pos0.8",
-    "dd_breaker_dd": 0.6,
+    "vol_mode": "scaled_stop+pos0.72",
+    "dd_breaker_dd": 1.12,
     "dd_breaker_extra_cash": 0,
-    "capital_scale": 0.8,
-    "cash_pct": 20.0,
+    "capital_scale": 0.72,
+    "cash_pct": 28,
     "stop_mode": "dal_boll(2.5σ,[4%,12%])",
     "signals_days": 1,
-    "codes_count": 29,
-    "start": "2026-10-27",
-    "end": "2026-10-28",
-    "bench_return": 0.85,
-    "bench_return_exposed": 0.68,
-    "excess_return": -0.5
+    "codes_count": 19,
+    "start": "2026-10-28",
+    "end": "2026-10-29",
+    "bench_return": -1.03,
+    "bench_return_exposed": -0.74,
+    "excess_return": 0.78
    }
   ]
  }
