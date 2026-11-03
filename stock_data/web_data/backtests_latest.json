@@ -1,8 +1,8 @@
 {
  "latest": {
-  "name": "Multi-Backtest-20261029-summary.csv",
-  "path": "stock_data/Multi-Backtest-20261029-summary.csv",
-  "modified_at": 1793646655.7943683
+  "name": "Multi-Backtest-20261102-summary.csv",
+  "path": "stock_data/Multi-Backtest-20261102-summary.csv",
+  "modified_at": 1793720972.1572168
  },
  "preview": {
   "columns": [
@@ -44,37 +44,37 @@
    {
     "num_trades": 0,
     "initial_capital": 100000.0,
-    "ending_total": 99940.2,
-    "total_return": -0.06,
-    "max_drawdown": -0.06,
+    "ending_total": 100000.0,
+    "total_return": 0.0,
+    "max_drawdown": 0.0,
     "win_rate": 0.0,
     "avg_return": 0.0,
     "avg_win": 0.0,
     "avg_loss": 0.0,
     "profit_factor": 0.0,
-    "sharpe": -1.76,
-    "strategies": "CVAmt20,CVAmt60,DistLo10,DistLo60,MaxRet10,PVCorr20,PVCorr60,Skew20,Skew60,VRatio20_120",
+    "sharpe": 0.0,
+    "strategies": "CVAmt20,CVAmt60,DistLo10,DistLo60,MaxRet10,PVCorr20,PVCorr60,Skew20,Skew60,VRatio10_60,VRatio20_120",
     "signal_mode": "forward",
-    "date": 20261029,
-    "run_date": 20261030,
-    "signal_start": "2026-10-29",
-    "signal_end": "2026-10-29",
+    "date": 20261102,
+    "run_date": 20261103,
+    "signal_start": "2026-11-02",
+    "signal_end": "2026-11-02",
     "hold_days": 1,
     "exit_mode": "boll_upper_take+take6%+trailing5%+MA60break",
     "size_mode": "adaptive_weight(权重)",
-    "vol_mode": "scaled_stop+pos0.7",
-    "dd_breaker_dd": 1.02,
+    "vol_mode": "scaled_stop+pos0.8",
+    "dd_breaker_dd": 0.83,
     "dd_breaker_extra_cash": 0,
-    "capital_scale": 0.7,
-    "cash_pct": 30,
+    "capital_scale": 0.8,
+    "cash_pct": 20.0,
     "stop_mode": "dal_boll(2.5σ,[4%,12%])",
     "signals_days": 1,
-    "codes_count": 21,
-    "start": "2026-10-29",
-    "end": "2026-10-30",
-    "bench_return": -1.39,
-    "bench_return_exposed": -0.98,
-    "excess_return": 0.92
+    "codes_count": 30,
+    "start": "2026-11-02",
+    "end": "2026-11-03",
+    "bench_return": 0.0,
+    "bench_return_exposed": 0.0,
+    "excess_return": 0.0
    }
   ]
  }
