@@ -1,7 +1,7 @@
 {
  "items": [
   {
-   "date": "20261106",
+   "date": "20261109",
    "summary": {
     "num_trades": 0,
     "initial_capital": 100000.0,
@@ -14,17 +14,698 @@
     "avg_loss": 0.0,
     "profit_factor": 0.0,
     "sharpe": 0.0,
-    "strategies": "CVAmt20,CVAmt60,DistLo10,DistLo60,Illiq20,MaxRet10,PVCorr20,PVCorr60,Skew20,Skew60,VRatio10_60,VRatio20_120",
+    "strategies": "CVAmt20,CVAmt60,DistLo10,MaxRet10,PVCorr20,PVCorr60,Skew20,Skew60,VRatio10_60,VRatio20_120",
     "signal_mode": "forward",
-    "date": 20261106,
-    "run_date": 20261107,
-    "signal_start": "2026-11-06",
-    "signal_end": "2026-11-06",
+    "date": 20261109,
+    "run_date": 20261110,
+    "signal_start": "2026-11-09",
+    "signal_end": "2026-11-09",
     "hold_days": 1,
     "exit_mode": "boll_upper_take+take6%+trailing5%+MA60break",
     "size_mode": "adaptive_weight(权重)",
     "vol_mode": "scaled_stop+pos0.3",
-    "dd_breaker_dd": 0.63,
+    "dd_breaker_dd": 0.59,
+    "dd_breaker_extra_cash": 0,
+    "capital_scale": 0.3,
+    "cash_pct": 70.0,
+    "stop_mode": "dal_boll(2.5σ,[4%,12%])",
+    "signals_days": 1,
+    "codes_count": 19,
+    "start": "2026-11-09",
+    "end": "2026-11-10",
+    "bench_return": 0.0,
+    "bench_return_exposed": 0.0,
+    "excess_return": 0.0
+   },
+   "equity": [
+    {
+     "date": "2026-07-13",
+     "cash": 100000.0,
+     "holding_value": 0.0,
+     "total": 100000.0,
+     "peak": 100000.0,
+     "drawdown": 0.0
+    },
+    {
+     "date": "2026-07-14",
+     "cash": 100000.0,
+     "holding_value": 0.0,
+     "total": 100000.0,
+     "peak": 100000.0,
+     "drawdown": 0.0
+    },
+    {
+     "date": "2026-07-15",
+     "cash": 100000.0,
+     "holding_value": 0.0,
+     "total": 100000.0,
+     "peak": 100000.0,
+     "drawdown": 0.0
+    },
+    {
+     "date": "2026-07-16",
+     "cash": 100000.0,
+     "holding_value": 0.0,
+     "total": 100000.0,
+     "peak": 100000.0,
+     "drawdown": 0.0
+    },
+    {
+     "date": "2026-07-17",
+     "cash": 100000.0,
+     "holding_value": 0.0,
+     "total": 100000.0,
+     "peak": 100000.0,
+     "drawdown": 0.0
+    },
+    {
+     "date": "2026-07-20",
+     "cash": 100000.0,
+     "holding_value": 0.0,
+     "total": 100000.0,
+     "peak": 100000.0,
+     "drawdown": 0.0
+    },
+    {
+     "date": "2026-07-21",
+     "cash": 100000.0,
+     "holding_value": 0.0,
+     "total": 100000.0,
+     "peak": 100000.0,
+     "drawdown": 0.0
+    },
+    {
+     "date": "2026-07-22",
+     "cash": 100000.0,
+     "holding_value": 0.0,
+     "total": 100000.0,
+     "peak": 100000.0,
+     "drawdown": 0.0
+    },
+    {
+     "date": "2026-07-23",
+     "cash": 100000.0,
+     "holding_value": 0.0,
+     "total": 100000.0,
+     "peak": 100000.0,
+     "drawdown": 0.0
+    },
+    {
+     "date": "2026-07-24",
+     "cash": 100000.0,
+     "holding_value": 0.0,
+     "total": 100000.0,
+     "peak": 100000.0,
+     "drawdown": 0.0
+    },
+    {
+     "date": "2026-07-27",
+     "cash": 100000.0,
+     "holding_value": 0.0,
+     "total": 100000.0,
+     "peak": 100000.0,
+     "drawdown": 0.0
+    },
+    {
+     "date": "2026-07-28",
+     "cash": 100000.0,
+     "holding_value": 0.0,
+     "total": 100000.0,
+     "peak": 100000.0,
+     "drawdown": 0.0
+    },
+    {
+     "date": "2026-07-29",
+     "cash": 100000.0,
+     "holding_value": 0.0,
+     "total": 100000.0,
+     "peak": 100000.0,
+     "drawdown": 0.0
+    },
+    {
+     "date": "2026-07-30",
+     "cash": 100000.0,
+     "holding_value": 0.0,
+     "total": 100000.0,
+     "peak": 100000.0,
+     "drawdown": 0.0
+    },
+    {
+     "date": "2026-07-31",
+     "cash": 100000.0,
+     "holding_value": 0.0,
+     "total": 100000.0,
+     "peak": 100000.0,
+     "drawdown": 0.0
+    },
+    {
+     "date": "2026-08-03",
+     "cash": 100000.0,
+     "holding_value": 0.0,
+     "total": 100000.0,
+     "peak": 100000.0,
+     "drawdown": 0.0
+    },
+    {
+     "date": "2026-08-04",
+     "cash": 100000.0,
+     "holding_value": 0.0,
+     "total": 100000.0,
+     "peak": 100000.0,
+     "drawdown": 0.0
+    },
+    {
+     "date": "2026-08-05",
+     "cash": 100000.0,
+     "holding_value": 0.0,
+     "total": 100000.0,
+     "peak": 100000.0,
+     "drawdown": 0.0
+    },
+    {
+     "date": "2026-08-06",
+     "cash": 100000.0,
+     "holding_value": 0.0,
+     "total": 100000.0,
+     "peak": 100000.0,
+     "drawdown": 0.0
+    },
+    {
+     "date": "2026-08-07",
+     "cash": 100000.0,
+     "holding_value": 0.0,
+     "total": 100000.0,
+     "peak": 100000.0,
+     "drawdown": 0.0
+    },
+    {
+     "date": "2026-08-10",
+     "cash": 100000.0,
+     "holding_value": 0.0,
+     "total": 100000.0,
+     "peak": 100000.0,
+     "drawdown": 0.0
+    },
+    {
+     "date": "2026-08-11",
+     "cash": 100000.0,
+     "holding_value": 0.0,
+     "total": 100000.0,
+     "peak": 100000.0,
+     "drawdown": 0.0
+    },
+    {
+     "date": "2026-08-12",
+     "cash": 100000.0,
+     "holding_value": 0.0,
+     "total": 100000.0,
+     "peak": 100000.0,
+     "drawdown": 0.0
+    },
+    {
+     "date": "2026-08-13",
+     "cash": 100000.0,
+     "holding_value": 0.0,
+     "total": 100000.0,
+     "peak": 100000.0,
+     "drawdown": 0.0
+    },
+    {
+     "date": "2026-08-14",
+     "cash": 100000.0,
+     "holding_value": 0.0,
+     "total": 100000.0,
+     "peak": 100000.0,
+     "drawdown": 0.0
+    },
+    {
+     "date": "2026-08-17",
+     "cash": 100000.0,
+     "holding_value": 0.0,
+     "total": 100000.0,
+     "peak": 100000.0,
+     "drawdown": 0.0
+    },
+    {
+     "date": "2026-08-18",
+     "cash": 100000.0,
+     "holding_value": 0.0,
+     "total": 100000.0,
+     "peak": 100000.0,
+     "drawdown": 0.0
+    },
+    {
+     "date": "2026-08-19",
+     "cash": 100000.0,
+     "holding_value": 0.0,
+     "total": 100000.0,
+     "peak": 100000.0,
+     "drawdown": 0.0
+    },
+    {
+     "date": "2026-08-20",
+     "cash": 100000.0,
+     "holding_value": 0.0,
+     "total": 100000.0,
+     "peak": 100000.0,
+     "drawdown": 0.0
+    },
+    {
+     "date": "2026-08-21",
+     "cash": 100000.0,
+     "holding_value": 0.0,
+     "total": 100000.0,
+     "peak": 100000.0,
+     "drawdown": 0.0
+    },
+    {
+     "date": "2026-08-24",
+     "cash": 100000.0,
+     "holding_value": 0.0,
+     "total": 100000.0,
+     "peak": 100000.0,
+     "drawdown": 0.0
+    },
+    {
+     "date": "2026-08-25",
+     "cash": 100000.0,
+     "holding_value": 0.0,
+     "total": 100000.0,
+     "peak": 100000.0,
+     "drawdown": 0.0
+    },
+    {
+     "date": "2026-08-26",
+     "cash": 100000.0,
+     "holding_value": 0.0,
+     "total": 100000.0,
+     "peak": 100000.0,
+     "drawdown": 0.0
+    },
+    {
+     "date": "2026-08-27",
+     "cash": 100000.0,
+     "holding_value": 0.0,
+     "total": 100000.0,
+     "peak": 100000.0,
+     "drawdown": 0.0
+    },
+    {
+     "date": "2026-08-28",
+     "cash": 100000.0,
+     "holding_value": 0.0,
+     "total": 100000.0,
+     "peak": 100000.0,
+     "drawdown": 0.0
+    },
+    {
+     "date": "2026-08-31",
+     "cash": 100000.0,
+     "holding_value": 0.0,
+     "total": 100000.0,
+     "peak": 100000.0,
+     "drawdown": 0.0
+    },
+    {
+     "date": "2026-09-01",
+     "cash": 100000.0,
+     "holding_value": 0.0,
+     "total": 100000.0,
+     "peak": 100000.0,
+     "drawdown": 0.0
+    },
+    {
+     "date": "2026-09-02",
+     "cash": 100000.0,
+     "holding_value": 0.0,
+     "total": 100000.0,
+     "peak": 100000.0,
+     "drawdown": 0.0
+    },
+    {
+     "date": "2026-09-03",
+     "cash": 100000.0,
+     "holding_value": 0.0,
+     "total": 100000.0,
+     "peak": 100000.0,
+     "drawdown": 0.0
+    },
+    {
+     "date": "2026-09-04",
+     "cash": 100000.0,
+     "holding_value": 0.0,
+     "total": 100000.0,
+     "peak": 100000.0,
+     "drawdown": 0.0
+    },
+    {
+     "date": "2026-09-07",
+     "cash": 100000.0,
+     "holding_value": 0.0,
+     "total": 100000.0,
+     "peak": 100000.0,
+     "drawdown": 0.0
+    },
+    {
+     "date": "2026-09-08",
+     "cash": 100000.0,
+     "holding_value": 0.0,
+     "total": 100000.0,
+     "peak": 100000.0,
+     "drawdown": 0.0
+    },
+    {
+     "date": "2026-09-09",
+     "cash": 100000.0,
+     "holding_value": 0.0,
+     "total": 100000.0,
+     "peak": 100000.0,
+     "drawdown": 0.0
+    },
+    {
+     "date": "2026-09-10",
+     "cash": 100000.0,
+     "holding_value": 0.0,
+     "total": 100000.0,
+     "peak": 100000.0,
+     "drawdown": 0.0
+    },
+    {
+     "date": "2026-09-11",
+     "cash": 100000.0,
+     "holding_value": 0.0,
+     "total": 100000.0,
+     "peak": 100000.0,
+     "drawdown": 0.0
+    },
+    {
+     "date": "2026-09-14",
+     "cash": 100000.0,
+     "holding_value": 0.0,
+     "total": 100000.0,
+     "peak": 100000.0,
+     "drawdown": 0.0
+    },
+    {
+     "date": "2026-09-15",
+     "cash": 100000.0,
+     "holding_value": 0.0,
+     "total": 100000.0,
+     "peak": 100000.0,
+     "drawdown": 0.0
+    },
+    {
+     "date": "2026-09-16",
+     "cash": 100000.0,
+     "holding_value": 0.0,
+     "total": 100000.0,
+     "peak": 100000.0,
+     "drawdown": 0.0
+    },
+    {
+     "date": "2026-09-17",
+     "cash": 100000.0,
+     "holding_value": 0.0,
+     "total": 100000.0,
+     "peak": 100000.0,
+     "drawdown": 0.0
+    },
+    {
+     "date": "2026-09-18",
+     "cash": 100000.0,
+     "holding_value": 0.0,
+     "total": 100000.0,
+     "peak": 100000.0,
+     "drawdown": 0.0
+    },
+    {
+     "date": "2026-09-21",
+     "cash": 100000.0,
+     "holding_value": 0.0,
+     "total": 100000.0,
+     "peak": 100000.0,
+     "drawdown": 0.0
+    },
+    {
+     "date": "2026-09-22",
+     "cash": 100000.0,
+     "holding_value": 0.0,
+     "total": 100000.0,
+     "peak": 100000.0,
+     "drawdown": 0.0
+    },
+    {
+     "date": "2026-09-23",
+     "cash": 100000.0,
+     "holding_value": 0.0,
+     "total": 100000.0,
+     "peak": 100000.0,
+     "drawdown": 0.0
+    },
+    {
+     "date": "2026-09-24",
+     "cash": 100000.0,
+     "holding_value": 0.0,
+     "total": 100000.0,
+     "peak": 100000.0,
+     "drawdown": 0.0
+    },
+    {
+     "date": "2026-09-28",
+     "cash": 100000.0,
+     "holding_value": 0.0,
+     "total": 100000.0,
+     "peak": 100000.0,
+     "drawdown": 0.0
+    },
+    {
+     "date": "2026-09-29",
+     "cash": 100000.0,
+     "holding_value": 0.0,
+     "total": 100000.0,
+     "peak": 100000.0,
+     "drawdown": 0.0
+    },
+    {
+     "date": "2026-09-30",
+     "cash": 100000.0,
+     "holding_value": 0.0,
+     "total": 100000.0,
+     "peak": 100000.0,
+     "drawdown": 0.0
+    },
+    {
+     "date": "2026-10-08",
+     "cash": 100000.0,
+     "holding_value": 0.0,
+     "total": 100000.0,
+     "peak": 100000.0,
+     "drawdown": 0.0
+    },
+    {
+     "date": "2026-10-09",
+     "cash": 100000.0,
+     "holding_value": 0.0,
+     "total": 100000.0,
+     "peak": 100000.0,
+     "drawdown": 0.0
+    },
+    {
+     "date": "2026-10-12",
+     "cash": 100000.0,
+     "holding_value": 0.0,
+     "total": 100000.0,
+     "peak": 100000.0,
+     "drawdown": 0.0
+    },
+    {
+     "date": "2026-10-13",
+     "cash": 100000.0,
+     "holding_value": 0.0,
+     "total": 100000.0,
+     "peak": 100000.0,
+     "drawdown": 0.0
+    },
+    {
+     "date": "2026-10-14",
+     "cash": 100000.0,
+     "holding_value": 0.0,
+     "total": 100000.0,
+     "peak": 100000.0,
+     "drawdown": 0.0
+    },
+    {
+     "date": "2026-10-15",
+     "cash": 100000.0,
+     "holding_value": 0.0,
+     "total": 100000.0,
+     "peak": 100000.0,
+     "drawdown": 0.0
+    },
+    {
+     "date": "2026-10-16",
+     "cash": 100000.0,
+     "holding_value": 0.0,
+     "total": 100000.0,
+     "peak": 100000.0,
+     "drawdown": 0.0
+    },
+    {
+     "date": "2026-10-19",
+     "cash": 100000.0,
+     "holding_value": 0.0,
+     "total": 100000.0,
+     "peak": 100000.0,
+     "drawdown": 0.0
+    },
+    {
+     "date": "2026-10-20",
+     "cash": 100000.0,
+     "holding_value": 0.0,
+     "total": 100000.0,
+     "peak": 100000.0,
+     "drawdown": 0.0
+    },
+    {
+     "date": "2026-10-21",
+     "cash": 100000.0,
+     "holding_value": 0.0,
+     "total": 100000.0,
+     "peak": 100000.0,
+     "drawdown": 0.0
+    },
+    {
+     "date": "2026-10-22",
+     "cash": 100000.0,
+     "holding_value": 0.0,
+     "total": 100000.0,
+     "peak": 100000.0,
+     "drawdown": 0.0
+    },
+    {
+     "date": "2026-10-23",
+     "cash": 100000.0,
+     "holding_value": 0.0,
+     "total": 100000.0,
+     "peak": 100000.0,
+     "drawdown": 0.0
+    },
+    {
+     "date": "2026-10-26",
+     "cash": 100000.0,
+     "holding_value": 0.0,
+     "total": 100000.0,
+     "peak": 100000.0,
+     "drawdown": 0.0
+    },
+    {
+     "date": "2026-10-27",
+     "cash": 100000.0,
+     "holding_value": 0.0,
+     "total": 100000.0,
+     "peak": 100000.0,
+     "drawdown": 0.0
+    },
+    {
+     "date": "2026-10-28",
+     "cash": 100000.0,
+     "holding_value": 0.0,
+     "total": 100000.0,
+     "peak": 100000.0,
+     "drawdown": 0.0
+    },
+    {
+     "date": "2026-10-29",
+     "cash": 100000.0,
+     "holding_value": 0.0,
+     "total": 100000.0,
+     "peak": 100000.0,
+     "drawdown": 0.0
+    },
+    {
+     "date": "2026-10-30",
+     "cash": 100000.0,
+     "holding_value": 0.0,
+     "total": 100000.0,
+     "peak": 100000.0,
+     "drawdown": 0.0
+    },
+    {
+     "date": "2026-11-02",
+     "cash": 100000.0,
+     "holding_value": 0.0,
+     "total": 100000.0,
+     "peak": 100000.0,
+     "drawdown": 0.0
+    },
+    {
+     "date": "2026-11-03",
+     "cash": 100000.0,
+     "holding_value": 0.0,
+     "total": 100000.0,
+     "peak": 100000.0,
+     "drawdown": 0.0
+    },
+    {
+     "date": "2026-11-04",
+     "cash": 100000.0,
+     "holding_value": 0.0,
+     "total": 100000.0,
+     "peak": 100000.0,
+     "drawdown": 0.0
+    },
+    {
+     "date": "2026-11-05",
+     "cash": 100000.0,
+     "holding_value": 0.0,
+     "total": 100000.0,
+     "peak": 100000.0,
+     "drawdown": 0.0
+    },
+    {
+     "date": "2026-11-06",
+     "cash": 100000.0,
+     "holding_value": 0.0,
+     "total": 100000.0,
+     "peak": 100000.0,
+     "drawdown": 0.0
+    },
+    {
+     "date": "2026-11-09",
+     "cash": 100000.0,
+     "holding_value": 0.0,
+     "total": 100000.0,
+     "peak": 100000.0,
+     "drawdown": 0.0
+    }
+   ],
+   "trades": []
+  },
+  {
+   "date": "20261106",
+   "summary": {
+    "num_trades": 0,
+    "initial_capital": 100000.0,
+    "ending_total": 99778.34,
+    "total_return": -0.22,
+    "max_drawdown": -0.22,
+    "win_rate": 0.0,
+    "avg_return": 0.0,
+    "avg_win": 0.0,
+    "avg_loss": 0.0,
+    "profit_factor": 0.0,
+    "sharpe": -1.76,
+    "strategies": "CVAmt20,CVAmt60,DistLo10,DistLo60,Illiq20,MaxRet10,PVCorr20,PVCorr60,Skew20,Skew60,VRatio10_60,VRatio20_120",
+    "signal_mode": "forward",
+    "date": 20261106,
+    "run_date": 20261110,
+    "signal_start": "2026-11-06",
+    "signal_end": "2026-11-06",
+    "hold_days": 4,
+    "exit_mode": "boll_upper_take+take6%+trailing5%+MA60break",
+    "size_mode": "adaptive_weight(权重)",
+    "vol_mode": "scaled_stop+pos0.3",
+    "dd_breaker_dd": 0.59,
     "dd_breaker_extra_cash": 0,
     "capital_scale": 0.3,
     "cash_pct": 70.0,
@@ -32,10 +713,10 @@
     "signals_days": 1,
     "codes_count": 21,
     "start": "2026-11-06",
-    "end": "2026-11-07",
-    "bench_return": 0.0,
-    "bench_return_exposed": 0.0,
-    "excess_return": 0.0
+    "end": "2026-11-10",
+    "bench_return": 0.05,
+    "bench_return_exposed": 0.01,
+    "excess_return": -0.23
    },
    "equity": [
     {
@@ -685,6 +1366,14 @@
      "total": 100000.0,
      "peak": 100000.0,
      "drawdown": 0.0
+    },
+    {
+     "date": "2026-11-09",
+     "cash": 70238.34,
+     "holding_value": 29540.0,
+     "total": 99778.34,
+     "peak": 100000.0,
+     "drawdown": -0.22166000000000352
     }
    ],
    "trades": []
@@ -692,28 +1381,28 @@
   {
    "date": "20261105",
    "summary": {
-    "num_trades": 0,
+    "num_trades": 10,
     "initial_capital": 100000.0,
-    "ending_total": 100202.65,
-    "total_return": 0.2,
-    "max_drawdown": 0.0,
-    "win_rate": 0.0,
-    "avg_return": 0.0,
-    "avg_win": 0.0,
-    "avg_loss": 0.0,
-    "profit_factor": 0.0,
-    "sharpe": 1.76,
+    "ending_total": 100090.18,
+    "total_return": 0.09,
+    "max_drawdown": -0.11,
+    "win_rate": 70.0,
+    "avg_return": 0.7,
+    "avg_win": 1.38,
+    "avg_loss": -0.88,
+    "profit_factor": 3.67,
+    "sharpe": 0.68,
     "strategies": "CVAmt20,CVAmt60,DistLo10,DistLo60,MaxRet10,PVCorr20,PVCorr60,Skew20,Skew60,VRatio10_60,VRatio20_120",
     "signal_mode": "forward",
     "date": 20261105,
-    "run_date": 20261107,
+    "run_date": 20261110,
     "signal_start": "2026-11-05",
     "signal_end": "2026-11-05",
-    "hold_days": 2,
+    "hold_days": 5,
     "exit_mode": "boll_upper_take+take6%+trailing5%+MA60break",
     "size_mode": "adaptive_weight(权重)",
     "vol_mode": "scaled_stop+pos0.3",
-    "dd_breaker_dd": 0.63,
+    "dd_breaker_dd": 0.59,
     "dd_breaker_extra_cash": 0,
     "capital_scale": 0.3,
     "cash_pct": 70.0,
@@ -721,10 +1410,10 @@
     "signals_days": 1,
     "codes_count": 25,
     "start": "2026-11-05",
-    "end": "2026-11-07",
-    "bench_return": -1.44,
-    "bench_return_exposed": -0.43,
-    "excess_return": 0.63
+    "end": "2026-11-10",
+    "bench_return": -1.39,
+    "bench_return_exposed": -0.42,
+    "excess_return": 0.51
    },
    "equity": [
     {
@@ -1382,35 +2071,154 @@
      "total": 100202.65,
      "peak": 100202.65,
      "drawdown": 0.0
+    },
+    {
+     "date": "2026-11-09",
+     "cash": 88787.18,
+     "holding_value": 11303.0,
+     "total": 100090.18,
+     "peak": 100202.65,
+     "drawdown": -0.11224254049169474
     }
    ],
-   "trades": []
+   "trades": [
+    {
+     "code": 601997,
+     "buy_date": "2026-11-06",
+     "sell_date": "2026-11-09",
+     "buy_price": 5.786,
+     "sell_price": 5.914,
+     "qty": 500,
+     "return_pct": 2.22,
+     "exit_reason": "take_band",
+     "name": "贵阳银行"
+    },
+    {
+     "code": 2001,
+     "buy_date": "2026-11-06",
+     "sell_date": "2026-11-09",
+     "buy_price": 26.537,
+     "sell_price": 25.974,
+     "qty": 100,
+     "return_pct": -2.12,
+     "exit_reason": "trend_break",
+     "name": "新 和 成"
+    },
+    {
+     "code": 2120,
+     "buy_date": "2026-11-06",
+     "sell_date": "2026-11-09",
+     "buy_price": 6.266,
+     "sell_price": 6.314,
+     "qty": 400,
+     "return_pct": 0.76,
+     "exit_reason": "trend_break",
+     "name": "韵达股份"
+    },
+    {
+     "code": 601186,
+     "buy_date": "2026-11-06",
+     "sell_date": "2026-11-09",
+     "buy_price": 5.946,
+     "sell_price": 5.974,
+     "qty": 500,
+     "return_pct": 0.47,
+     "exit_reason": "trend_break",
+     "name": "中国铁建"
+    },
+    {
+     "code": 2736,
+     "buy_date": "2026-11-06",
+     "sell_date": "2026-11-09",
+     "buy_price": 8.959,
+     "sell_price": 8.981,
+     "qty": 100,
+     "return_pct": 0.25,
+     "exit_reason": "trend_break",
+     "name": "国信证券"
+    },
+    {
+     "code": 601128,
+     "buy_date": "2026-11-06",
+     "sell_date": "2026-11-09",
+     "buy_price": 6.286,
+     "sell_price": 6.434,
+     "qty": 200,
+     "return_pct": 2.34,
+     "exit_reason": "take_band",
+     "name": "常熟银行"
+    },
+    {
+     "code": 600461,
+     "buy_date": "2026-11-06",
+     "sell_date": "2026-11-09",
+     "buy_price": 8.599,
+     "sell_price": 8.561,
+     "qty": 100,
+     "return_pct": -0.43,
+     "exit_reason": "trend_break",
+     "name": "洪城环境"
+    },
+    {
+     "code": 601225,
+     "buy_date": "2026-11-06",
+     "sell_date": "2026-11-09",
+     "buy_price": 25.646,
+     "sell_price": 26.513,
+     "qty": 100,
+     "return_pct": 3.38,
+     "exit_reason": "trend_break",
+     "name": "陕西煤业"
+    },
+    {
+     "code": 600909,
+     "buy_date": "2026-11-06",
+     "sell_date": "2026-11-09",
+     "buy_price": 6.807,
+     "sell_price": 6.823,
+     "qty": 100,
+     "return_pct": 0.24,
+     "exit_reason": "trend_break",
+     "name": "华安证券"
+    },
+    {
+     "code": 601600,
+     "buy_date": "2026-11-06",
+     "sell_date": "2026-11-09",
+     "buy_price": 8.619,
+     "sell_price": 8.611,
+     "qty": 100,
+     "return_pct": -0.08,
+     "exit_reason": "trend_break",
+     "name": "中国铝业"
+    }
+   ]
   },
   {
    "date": "20261104",
    "summary": {
-    "num_trades": 6,
+    "num_trades": 8,
     "initial_capital": 100000.0,
-    "ending_total": 100026.9,
-    "total_return": 0.03,
-    "max_drawdown": -0.01,
-    "win_rate": 50.0,
-    "avg_return": -1.03,
-    "avg_win": 1.42,
+    "ending_total": 99980.25,
+    "total_return": -0.02,
+    "max_drawdown": -0.06,
+    "win_rate": 62.5,
+    "avg_return": 0.24,
+    "avg_win": 2.47,
     "avg_loss": -3.47,
-    "profit_factor": 0.41,
-    "sharpe": 1.1,
+    "profit_factor": 1.19,
+    "sharpe": -0.54,
     "strategies": "CVAmt20,CVAmt60,DistLo10,DistLo60,MaxRet10,PVCorr20,PVCorr60,Skew20,Skew60,VRatio10_60,VRatio20_120",
     "signal_mode": "forward",
     "date": 20261104,
-    "run_date": 20261107,
+    "run_date": 20261110,
     "signal_start": "2026-11-04",
     "signal_end": "2026-11-04",
-    "hold_days": 3,
+    "hold_days": 6,
     "exit_mode": "boll_upper_take+take6%+trailing5%+MA60break",
     "size_mode": "adaptive_weight(权重)",
     "vol_mode": "scaled_stop+pos0.3",
-    "dd_breaker_dd": 0.63,
+    "dd_breaker_dd": 0.59,
     "dd_breaker_extra_cash": 0,
     "capital_scale": 0.3,
     "cash_pct": 70.0,
@@ -1418,10 +2226,10 @@
     "signals_days": 1,
     "codes_count": 23,
     "start": "2026-11-04",
-    "end": "2026-11-07",
-    "bench_return": -1.15,
-    "bench_return_exposed": -0.34,
-    "excess_return": 0.37
+    "end": "2026-11-10",
+    "bench_return": -1.1,
+    "bench_return_exposed": -0.33,
+    "excess_return": 0.31
    },
    "equity": [
     {
@@ -2087,6 +2895,14 @@
      "total": 100026.9,
      "peak": 100040.38,
      "drawdown": -0.01347455897309714
+    },
+    {
+     "date": "2026-11-09",
+     "cash": 84302.25,
+     "holding_value": 15678.0,
+     "total": 99980.25,
+     "peak": 100040.38,
+     "drawdown": -0.06010572930651068
     }
    ],
    "trades": [
@@ -2155,34 +2971,56 @@
      "return_pct": -5.52,
      "exit_reason": "stop_hard",
      "name": "中煤能源"
+    },
+    {
+     "code": 2867,
+     "buy_date": "2026-11-05",
+     "sell_date": "2026-11-09",
+     "buy_price": 11.311,
+     "sell_price": 11.848,
+     "qty": 100,
+     "return_pct": 4.75,
+     "exit_reason": "take_partial",
+     "name": "周大生"
+    },
+    {
+     "code": 601009,
+     "buy_date": "2026-11-05",
+     "sell_date": "2026-11-09",
+     "buy_price": 12.072,
+     "sell_price": 12.478,
+     "qty": 100,
+     "return_pct": 3.36,
+     "exit_reason": "take_band",
+     "name": "南京银行"
     }
    ]
   },
   {
    "date": "20261103",
    "summary": {
-    "num_trades": 5,
+    "num_trades": 6,
     "initial_capital": 100000.0,
-    "ending_total": 101092.8,
-    "total_return": 1.09,
-    "max_drawdown": 0.0,
+    "ending_total": 100909.35,
+    "total_return": 0.91,
+    "max_drawdown": -0.18,
     "win_rate": 100.0,
-    "avg_return": 2.14,
-    "avg_win": 2.14,
+    "avg_return": 2.74,
+    "avg_win": 2.74,
     "avg_loss": 0.0,
     "profit_factor": 99.99,
-    "sharpe": 2.95,
+    "sharpe": 2.34,
     "strategies": "CVAmt20,CVAmt60,PVCorr20,PVCorr60,Skew20,Skew60,VRatio10_60,VRatio20_120",
     "signal_mode": "forward",
     "date": 20261103,
-    "run_date": 20261107,
+    "run_date": 20261110,
     "signal_start": "2026-11-03",
     "signal_end": "2026-11-03",
-    "hold_days": 4,
+    "hold_days": 7,
     "exit_mode": "boll_upper_take+take6%+trailing5%+MA60break",
     "size_mode": "adaptive_weight(权重)",
     "vol_mode": "scaled_stop+pos0.8",
-    "dd_breaker_dd": 0.63,
+    "dd_breaker_dd": 0.59,
     "dd_breaker_extra_cash": 0,
     "capital_scale": 0.8,
     "cash_pct": 20.0,
@@ -2190,10 +3028,10 @@
     "signals_days": 1,
     "codes_count": 18,
     "start": "2026-11-03",
-    "end": "2026-11-07",
-    "bench_return": 1.13,
-    "bench_return_exposed": 0.91,
-    "excess_return": 0.18
+    "end": "2026-11-10",
+    "bench_return": 1.18,
+    "bench_return_exposed": 0.94,
+    "excess_return": -0.03
    },
    "equity": [
     {
@@ -2867,6 +3705,14 @@
      "total": 101092.8,
      "peak": 101092.8,
      "drawdown": 0.0
+    },
+    {
+     "date": "2026-11-09",
+     "cash": 55621.35,
+     "holding_value": 45288.0,
+     "total": 100909.35,
+     "peak": 101092.8,
+     "drawdown": -0.1814669293955624
     }
    ],
    "trades": [
@@ -2924,6 +3770,17 @@
      "return_pct": 4.17,
      "exit_reason": "take_partial",
      "name": "周大生"
+    },
+    {
+     "code": 2867,
+     "buy_date": "2026-11-04",
+     "sell_date": "2026-11-09",
+     "buy_price": 11.201,
+     "sell_price": 11.848,
+     "qty": 700,
+     "return_pct": 5.78,
+     "exit_reason": "take_partial_final",
+     "name": "周大生"
     }
    ]
   },
@@ -2932,26 +3789,26 @@
    "summary": {
     "num_trades": 23,
     "initial_capital": 100000.0,
-    "ending_total": 101308.4,
-    "total_return": 1.31,
+    "ending_total": 101375.4,
+    "total_return": 1.38,
     "max_drawdown": -0.04,
     "win_rate": 87.0,
     "avg_return": 2.48,
     "avg_win": 3.41,
     "avg_loss": -3.7,
     "profit_factor": 6.14,
-    "sharpe": 2.14,
+    "sharpe": 2.23,
     "strategies": "CVAmt20,CVAmt60,DistLo10,DistLo60,MaxRet10,PVCorr20,PVCorr60,Skew20,Skew60,VRatio10_60,VRatio20_120",
     "signal_mode": "forward",
     "date": 20261102,
-    "run_date": 20261107,
+    "run_date": 20261110,
     "signal_start": "2026-11-02",
     "signal_end": "2026-11-02",
-    "hold_days": 5,
+    "hold_days": 8,
     "exit_mode": "boll_upper_take+take6%+trailing5%+MA60break",
     "size_mode": "adaptive_weight(权重)",
     "vol_mode": "scaled_stop+pos0.8",
-    "dd_breaker_dd": 0.63,
+    "dd_breaker_dd": 0.59,
     "dd_breaker_extra_cash": 0,
     "capital_scale": 0.8,
     "cash_pct": 20.0,
@@ -2959,10 +3816,10 @@
     "signals_days": 1,
     "codes_count": 30,
     "start": "2026-11-02",
-    "end": "2026-11-07",
-    "bench_return": 0.93,
-    "bench_return_exposed": 0.74,
-    "excess_return": 0.57
+    "end": "2026-11-10",
+    "bench_return": 0.98,
+    "bench_return_exposed": 0.78,
+    "excess_return": 0.6
    },
    "equity": [
     {
@@ -3636,6 +4493,14 @@
      "total": 101308.4,
      "peak": 101328.23,
      "drawdown": -0.019570064531870088
+    },
+    {
+     "date": "2026-11-09",
+     "cash": 90378.4,
+     "holding_value": 10997.0,
+     "total": 101375.4,
+     "peak": 101375.4,
+     "drawdown": 0.0
     }
    ],
    "trades": [
@@ -3899,26 +4764,26 @@
    "summary": {
     "num_trades": 16,
     "initial_capital": 100000.0,
-    "ending_total": 102162.07,
-    "total_return": 2.16,
+    "ending_total": 102248.07,
+    "total_return": 2.25,
     "max_drawdown": -0.02,
     "win_rate": 93.8,
     "avg_return": 4.16,
     "avg_win": 4.49,
     "avg_loss": -0.78,
     "profit_factor": 86.4,
-    "sharpe": 2.26,
+    "sharpe": 2.34,
     "strategies": "CVAmt20,CVAmt60,DistLo10,DistLo60,MaxRet10,PVCorr20,PVCorr60,Skew20,Skew60,VRatio10_60,VRatio20_120",
     "signal_mode": "forward",
     "date": 20261030,
-    "run_date": 20261107,
+    "run_date": 20261110,
     "signal_start": "2026-10-30",
     "signal_end": "2026-10-30",
-    "hold_days": 8,
+    "hold_days": 11,
     "exit_mode": "boll_upper_take+take6%+trailing5%+MA60break",
     "size_mode": "adaptive_weight(权重)",
     "vol_mode": "scaled_stop+pos0.8",
-    "dd_breaker_dd": 0.63,
+    "dd_breaker_dd": 0.59,
     "dd_breaker_extra_cash": 0,
     "capital_scale": 0.8,
     "cash_pct": 20,
@@ -3926,10 +4791,10 @@
     "signals_days": 1,
     "codes_count": 21,
     "start": "2026-10-30",
-    "end": "2026-11-07",
-    "bench_return": 1.73,
-    "bench_return_exposed": 1.38,
-    "excess_return": 0.78
+    "end": "2026-11-10",
+    "bench_return": 1.77,
+    "bench_return_exposed": 1.42,
+    "excess_return": 0.83
    },
    "equity": [
     {
@@ -4618,6 +5483,14 @@
      "holding_value": 11115.0,
      "total": 102162.07,
      "peak": 102162.07,
+     "drawdown": 0.0
+    },
+    {
+     "date": "2026-11-09",
+     "cash": 91047.07,
+     "holding_value": 11201.0,
+     "total": 102248.07,
+     "peak": 102248.07,
      "drawdown": 0.0
     }
    ],
@@ -38343,843 +39216,10 @@
      "name": "华脉科技"
     }
    ]
-  },
-  {
-   "date": "20260918",
-   "summary": {
-    "num_trades": 5,
-    "initial_capital": 100000.0,
-    "ending_total": 100024.76,
-    "total_return": 0.02,
-    "max_drawdown": -1.09,
-    "win_rate": 40.0,
-    "avg_return": -0.63,
-    "avg_win": 1.22,
-    "avg_loss": -1.86,
-    "profit_factor": 0.44,
-    "sharpe": 0.04,
-    "strategies": "DistLo10,DistLo60,MaxRet10,PVCorr60,Skew60,VRatio10_60,VRatio20_120",
-    "signal_mode": "forward",
-    "date": 20260918,
-    "run_date": 20260929,
-    "signal_start": "2026-09-18",
-    "signal_end": "2026-09-18",
-    "hold_days": 11,
-    "exit_mode": "boll_upper_take+take6%+trailing5%+MA60break",
-    "size_mode": "adaptive_weight(权重)",
-    "vol_mode": "scaled_stop+pos0.8",
-    "dd_breaker_dd": 0.78,
-    "dd_breaker_extra_cash": 0,
-    "capital_scale": 0.8,
-    "cash_pct": 20.0,
-    "stop_mode": "dal_boll(2.5σ,[4%,12%])",
-    "signals_days": 1,
-    "codes_count": 10,
-    "start": "2026-09-18",
-    "end": "2026-09-29",
-    "bench_return": -3.6,
-    "bench_return_exposed": -2.88,
-    "excess_return": 2.9
-   },
-   "equity": [
-    {
-     "date": "2026-05-21",
-     "cash": 100000.0,
-     "holding_value": 0.0,
-     "total": 100000.0,
-     "peak": 100000.0,
-     "drawdown": 0.0
-    },
-    {
-     "date": "2026-05-22",
-     "cash": 100000.0,
-     "holding_value": 0.0,
-     "total": 100000.0,
-     "peak": 100000.0,
-     "drawdown": 0.0
-    },
-    {
-     "date": "2026-05-25",
-     "cash": 100000.0,
-     "holding_value": 0.0,
-     "total": 100000.0,
-     "peak": 100000.0,
-     "drawdown": 0.0
-    },
-    {
-     "date": "2026-05-26",
-     "cash": 100000.0,
-     "holding_value": 0.0,
-     "total": 100000.0,
-     "peak": 100000.0,
-     "drawdown": 0.0
-    },
-    {
-     "date": "2026-05-27",
-     "cash": 100000.0,
-     "holding_value": 0.0,
-     "total": 100000.0,
-     "peak": 100000.0,
-     "drawdown": 0.0
-    },
-    {
-     "date": "2026-05-28",
-     "cash": 100000.0,
-     "holding_value": 0.0,
-     "total": 100000.0,
-     "peak": 100000.0,
-     "drawdown": 0.0
-    },
-    {
-     "date": "2026-05-29",
-     "cash": 100000.0,
-     "holding_value": 0.0,
-     "total": 100000.0,
-     "peak": 100000.0,
-     "drawdown": 0.0
-    },
-    {
-     "date": "2026-06-01",
-     "cash": 100000.0,
-     "holding_value": 0.0,
-     "total": 100000.0,
-     "peak": 100000.0,
-     "drawdown": 0.0
-    },
-    {
-     "date": "2026-06-02",
-     "cash": 100000.0,
-     "holding_value": 0.0,
-     "total": 100000.0,
-     "peak": 100000.0,
-     "drawdown": 0.0
-    },
-    {
-     "date": "2026-06-03",
-     "cash": 100000.0,
-     "holding_value": 0.0,
-     "total": 100000.0,
-     "peak": 100000.0,
-     "drawdown": 0.0
-    },
-    {
-     "date": "2026-06-04",
-     "cash": 100000.0,
-     "holding_value": 0.0,
-     "total": 100000.0,
-     "peak": 100000.0,
-     "drawdown": 0.0
-    },
-    {
-     "date": "2026-06-05",
-     "cash": 100000.0,
-     "holding_value": 0.0,
-     "total": 100000.0,
-     "peak": 100000.0,
-     "drawdown": 0.0
-    },
-    {
-     "date": "2026-06-08",
-     "cash": 100000.0,
-     "holding_value": 0.0,
-     "total": 100000.0,
-     "peak": 100000.0,
-     "drawdown": 0.0
-    },
-    {
-     "date": "2026-06-09",
-     "cash": 100000.0,
-     "holding_value": 0.0,
-     "total": 100000.0,
-     "peak": 100000.0,
-     "drawdown": 0.0
-    },
-    {
-     "date": "2026-06-10",
-     "cash": 100000.0,
-     "holding_value": 0.0,
-     "total": 100000.0,
-     "peak": 100000.0,
-     "drawdown": 0.0
-    },
-    {
-     "date": "2026-06-11",
-     "cash": 100000.0,
-     "holding_value": 0.0,
-     "total": 100000.0,
-     "peak": 100000.0,
-     "drawdown": 0.0
-    },
-    {
-     "date": "2026-06-12",
-     "cash": 100000.0,
-     "holding_value": 0.0,
-     "total": 100000.0,
-     "peak": 100000.0,
-     "drawdown": 0.0
-    },
-    {
-     "date": "2026-06-15",
-     "cash": 100000.0,
-     "holding_value": 0.0,
-     "total": 100000.0,
-     "peak": 100000.0,
-     "drawdown": 0.0
-    },
-    {
-     "date": "2026-06-16",
-     "cash": 100000.0,
-     "holding_value": 0.0,
-     "total": 100000.0,
-     "peak": 100000.0,
-     "drawdown": 0.0
-    },
-    {
-     "date": "2026-06-17",
-     "cash": 100000.0,
-     "holding_value": 0.0,
-     "total": 100000.0,
-     "peak": 100000.0,
-     "drawdown": 0.0
-    },
-    {
-     "date": "2026-06-18",
-     "cash": 100000.0,
-     "holding_value": 0.0,
-     "total": 100000.0,
-     "peak": 100000.0,
-     "drawdown": 0.0
-    },
-    {
-     "date": "2026-06-22",
-     "cash": 100000.0,
-     "holding_value": 0.0,
-     "total": 100000.0,
-     "peak": 100000.0,
-     "drawdown": 0.0
-    },
-    {
-     "date": "2026-06-23",
-     "cash": 100000.0,
-     "holding_value": 0.0,
-     "total": 100000.0,
-     "peak": 100000.0,
-     "drawdown": 0.0
-    },
-    {
-     "date": "2026-06-24",
-     "cash": 100000.0,
-     "holding_value": 0.0,
-     "total": 100000.0,
-     "peak": 100000.0,
-     "drawdown": 0.0
-    },
-    {
-     "date": "2026-06-25",
-     "cash": 100000.0,
-     "holding_value": 0.0,
-     "total": 100000.0,
-     "peak": 100000.0,
-     "drawdown": 0.0
-    },
-    {
-     "date": "2026-06-26",
-     "cash": 100000.0,
-     "holding_value": 0.0,
-     "total": 100000.0,
-     "peak": 100000.0,
-     "drawdown": 0.0
-    },
-    {
-     "date": "2026-06-29",
-     "cash": 100000.0,
-     "holding_value": 0.0,
-     "total": 100000.0,
-     "peak": 100000.0,
-     "drawdown": 0.0
-    },
-    {
-     "date": "2026-06-30",
-     "cash": 100000.0,
-     "holding_value": 0.0,
-     "total": 100000.0,
-     "peak": 100000.0,
-     "drawdown": 0.0
-    },
-    {
-     "date": "2026-07-01",
-     "cash": 100000.0,
-     "holding_value": 0.0,
-     "total": 100000.0,
-     "peak": 100000.0,
-     "drawdown": 0.0
-    },
-    {
-     "date": "2026-07-02",
-     "cash": 100000.0,
-     "holding_value": 0.0,
-     "total": 100000.0,
-     "peak": 100000.0,
-     "drawdown": 0.0
-    },
-    {
-     "date": "2026-07-03",
-     "cash": 100000.0,
-     "holding_value": 0.0,
-     "total": 100000.0,
-     "peak": 100000.0,
-     "drawdown": 0.0
-    },
-    {
-     "date": "2026-07-06",
-     "cash": 100000.0,
-     "holding_value": 0.0,
-     "total": 100000.0,
-     "peak": 100000.0,
-     "drawdown": 0.0
-    },
-    {
-     "date": "2026-07-07",
-     "cash": 100000.0,
-     "holding_value": 0.0,
-     "total": 100000.0,
-     "peak": 100000.0,
-     "drawdown": 0.0
-    },
-    {
-     "date": "2026-07-08",
-     "cash": 100000.0,
-     "holding_value": 0.0,
-     "total": 100000.0,
-     "peak": 100000.0,
-     "drawdown": 0.0
-    },
-    {
-     "date": "2026-07-09",
-     "cash": 100000.0,
-     "holding_value": 0.0,
-     "total": 100000.0,
-     "peak": 100000.0,
-     "drawdown": 0.0
-    },
-    {
-     "date": "2026-07-10",
-     "cash": 100000.0,
-     "holding_value": 0.0,
-     "total": 100000.0,
-     "peak": 100000.0,
-     "drawdown": 0.0
-    },
-    {
-     "date": "2026-07-13",
-     "cash": 100000.0,
-     "holding_value": 0.0,
-     "total": 100000.0,
-     "peak": 100000.0,
-     "drawdown": 0.0
-    },
-    {
-     "date": "2026-07-14",
-     "cash": 100000.0,
-     "holding_value": 0.0,
-     "total": 100000.0,
-     "peak": 100000.0,
-     "drawdown": 0.0
-    },
-    {
-     "date": "2026-07-15",
-     "cash": 100000.0,
-     "holding_value": 0.0,
-     "total": 100000.0,
-     "peak": 100000.0,
-     "drawdown": 0.0
-    },
-    {
-     "date": "2026-07-16",
-     "cash": 100000.0,
-     "holding_value": 0.0,
-     "total": 100000.0,
-     "peak": 100000.0,
-     "drawdown": 0.0
-    },
-    {
-     "date": "2026-07-17",
-     "cash": 100000.0,
-     "holding_value": 0.0,
-     "total": 100000.0,
-     "peak": 100000.0,
-     "drawdown": 0.0
-    },
-    {
-     "date": "2026-07-20",
-     "cash": 100000.0,
-     "holding_value": 0.0,
-     "total": 100000.0,
-     "peak": 100000.0,
-     "drawdown": 0.0
-    },
-    {
-     "date": "2026-07-21",
-     "cash": 100000.0,
-     "holding_value": 0.0,
-     "total": 100000.0,
-     "peak": 100000.0,
-     "drawdown": 0.0
-    },
-    {
-     "date": "2026-07-22",
-     "cash": 100000.0,
-     "holding_value": 0.0,
-     "total": 100000.0,
-     "peak": 100000.0,
-     "drawdown": 0.0
-    },
-    {
-     "date": "2026-07-23",
-     "cash": 100000.0,
-     "holding_value": 0.0,
-     "total": 100000.0,
-     "peak": 100000.0,
-     "drawdown": 0.0
-    },
-    {
-     "date": "2026-07-24",
-     "cash": 100000.0,
-     "holding_value": 0.0,
-     "total": 100000.0,
-     "peak": 100000.0,
-     "drawdown": 0.0
-    },
-    {
-     "date": "2026-07-27",
-     "cash": 100000.0,
-     "holding_value": 0.0,
-     "total": 100000.0,
-     "peak": 100000.0,
-     "drawdown": 0.0
-    },
-    {
-     "date": "2026-07-28",
-     "cash": 100000.0,
-     "holding_value": 0.0,
-     "total": 100000.0,
-     "peak": 100000.0,
-     "drawdown": 0.0
-    },
-    {
-     "date": "2026-07-29",
-     "cash": 100000.0,
-     "holding_value": 0.0,
-     "total": 100000.0,
-     "peak": 100000.0,
-     "drawdown": 0.0
-    },
-    {
-     "date": "2026-07-30",
-     "cash": 100000.0,
-     "holding_value": 0.0,
-     "total": 100000.0,
-     "peak": 100000.0,
-     "drawdown": 0.0
-    },
-    {
-     "date": "2026-07-31",
-     "cash": 100000.0,
-     "holding_value": 0.0,
-     "total": 100000.0,
-     "peak": 100000.0,
-     "drawdown": 0.0
-    },
-    {
-     "date": "2026-08-03",
-     "cash": 100000.0,
-     "holding_value": 0.0,
-     "total": 100000.0,
-     "peak": 100000.0,
-     "drawdown": 0.0
-    },
-    {
-     "date": "2026-08-04",
-     "cash": 100000.0,
-     "holding_value": 0.0,
-     "total": 100000.0,
-     "peak": 100000.0,
-     "drawdown": 0.0
-    },
-    {
-     "date": "2026-08-05",
-     "cash": 100000.0,
-     "holding_value": 0.0,
-     "total": 100000.0,
-     "peak": 100000.0,
-     "drawdown": 0.0
-    },
-    {
-     "date": "2026-08-06",
-     "cash": 100000.0,
-     "holding_value": 0.0,
-     "total": 100000.0,
-     "peak": 100000.0,
-     "drawdown": 0.0
-    },
-    {
-     "date": "2026-08-07",
-     "cash": 100000.0,
-     "holding_value": 0.0,
-     "total": 100000.0,
-     "peak": 100000.0,
-     "drawdown": 0.0
-    },
-    {
-     "date": "2026-08-10",
-     "cash": 100000.0,
-     "holding_value": 0.0,
-     "total": 100000.0,
-     "peak": 100000.0,
-     "drawdown": 0.0
-    },
-    {
-     "date": "2026-08-11",
-     "cash": 100000.0,
-     "holding_value": 0.0,
-     "total": 100000.0,
-     "peak": 100000.0,
-     "drawdown": 0.0
-    },
-    {
-     "date": "2026-08-12",
-     "cash": 100000.0,
-     "holding_value": 0.0,
-     "total": 100000.0,
-     "peak": 100000.0,
-     "drawdown": 0.0
-    },
-    {
-     "date": "2026-08-13",
-     "cash": 100000.0,
-     "holding_value": 0.0,
-     "total": 100000.0,
-     "peak": 100000.0,
-     "drawdown": 0.0
-    },
-    {
-     "date": "2026-08-14",
-     "cash": 100000.0,
-     "holding_value": 0.0,
-     "total": 100000.0,
-     "peak": 100000.0,
-     "drawdown": 0.0
-    },
-    {
-     "date": "2026-08-17",
-     "cash": 100000.0,
-     "holding_value": 0.0,
-     "total": 100000.0,
-     "peak": 100000.0,
-     "drawdown": 0.0
-    },
-    {
-     "date": "2026-08-18",
-     "cash": 100000.0,
-     "holding_value": 0.0,
-     "total": 100000.0,
-     "peak": 100000.0,
-     "drawdown": 0.0
-    },
-    {
-     "date": "2026-08-19",
-     "cash": 100000.0,
-     "holding_value": 0.0,
-     "total": 100000.0,
-     "peak": 100000.0,
-     "drawdown": 0.0
-    },
-    {
-     "date": "2026-08-20",
-     "cash": 100000.0,
-     "holding_value": 0.0,
-     "total": 100000.0,
-     "peak": 100000.0,
-     "drawdown": 0.0
-    },
-    {
-     "date": "2026-08-21",
-     "cash": 100000.0,
-     "holding_value": 0.0,
-     "total": 100000.0,
-     "peak": 100000.0,
-     "drawdown": 0.0
-    },
-    {
-     "date": "2026-08-24",
-     "cash": 100000.0,
-     "holding_value": 0.0,
-     "total": 100000.0,
-     "peak": 100000.0,
-     "drawdown": 0.0
-    },
-    {
-     "date": "2026-08-25",
-     "cash": 100000.0,
-     "holding_value": 0.0,
-     "total": 100000.0,
-     "peak": 100000.0,
-     "drawdown": 0.0
-    },
-    {
-     "date": "2026-08-26",
-     "cash": 100000.0,
-     "holding_value": 0.0,
-     "total": 100000.0,
-     "peak": 100000.0,
-     "drawdown": 0.0
-    },
-    {
-     "date": "2026-08-27",
-     "cash": 100000.0,
-     "holding_value": 0.0,
-     "total": 100000.0,
-     "peak": 100000.0,
-     "drawdown": 0.0
-    },
-    {
-     "date": "2026-08-28",
-     "cash": 100000.0,
-     "holding_value": 0.0,
-     "total": 100000.0,
-     "peak": 100000.0,
-     "drawdown": 0.0
-    },
-    {
-     "date": "2026-08-31",
-     "cash": 100000.0,
-     "holding_value": 0.0,
-     "total": 100000.0,
-     "peak": 100000.0,
-     "drawdown": 0.0
-    },
-    {
-     "date": "2026-09-01",
-     "cash": 100000.0,
-     "holding_value": 0.0,
-     "total": 100000.0,
-     "peak": 100000.0,
-     "drawdown": 0.0
-    },
-    {
-     "date": "2026-09-02",
-     "cash": 100000.0,
-     "holding_value": 0.0,
-     "total": 100000.0,
-     "peak": 100000.0,
-     "drawdown": 0.0
-    },
-    {
-     "date": "2026-09-03",
-     "cash": 100000.0,
-     "holding_value": 0.0,
-     "total": 100000.0,
-     "peak": 100000.0,
-     "drawdown": 0.0
-    },
-    {
-     "date": "2026-09-04",
-     "cash": 100000.0,
-     "holding_value": 0.0,
-     "total": 100000.0,
-     "peak": 100000.0,
-     "drawdown": 0.0
-    },
-    {
-     "date": "2026-09-07",
-     "cash": 100000.0,
-     "holding_value": 0.0,
-     "total": 100000.0,
-     "peak": 100000.0,
-     "drawdown": 0.0
-    },
-    {
-     "date": "2026-09-08",
-     "cash": 100000.0,
-     "holding_value": 0.0,
-     "total": 100000.0,
-     "peak": 100000.0,
-     "drawdown": 0.0
-    },
-    {
-     "date": "2026-09-09",
-     "cash": 100000.0,
-     "holding_value": 0.0,
-     "total": 100000.0,
-     "peak": 100000.0,
-     "drawdown": 0.0
-    },
-    {
-     "date": "2026-09-10",
-     "cash": 100000.0,
-     "holding_value": 0.0,
-     "total": 100000.0,
-     "peak": 100000.0,
-     "drawdown": 0.0
-    },
-    {
-     "date": "2026-09-11",
-     "cash": 100000.0,
-     "holding_value": 0.0,
-     "total": 100000.0,
-     "peak": 100000.0,
-     "drawdown": 0.0
-    },
-    {
-     "date": "2026-09-14",
-     "cash": 100000.0,
-     "holding_value": 0.0,
-     "total": 100000.0,
-     "peak": 100000.0,
-     "drawdown": 0.0
-    },
-    {
-     "date": "2026-09-15",
-     "cash": 100000.0,
-     "holding_value": 0.0,
-     "total": 100000.0,
-     "peak": 100000.0,
-     "drawdown": 0.0
-    },
-    {
-     "date": "2026-09-16",
-     "cash": 100000.0,
-     "holding_value": 0.0,
-     "total": 100000.0,
-     "peak": 100000.0,
-     "drawdown": 0.0
-    },
-    {
-     "date": "2026-09-17",
-     "cash": 100000.0,
-     "holding_value": 0.0,
-     "total": 100000.0,
-     "peak": 100000.0,
-     "drawdown": 0.0
-    },
-    {
-     "date": "2026-09-18",
-     "cash": 100000.0,
-     "holding_value": 0.0,
-     "total": 100000.0,
-     "peak": 100000.0,
-     "drawdown": 0.0
-    },
-    {
-     "date": "2026-09-21",
-     "cash": 20581.7,
-     "holding_value": 79861.0,
-     "total": 100442.7,
-     "peak": 100442.7,
-     "drawdown": 0.0
-    },
-    {
-     "date": "2026-09-22",
-     "cash": 45322.53,
-     "holding_value": 55183.0,
-     "total": 100505.53,
-     "peak": 100505.53,
-     "drawdown": 0.0
-    },
-    {
-     "date": "2026-09-23",
-     "cash": 57155.75,
-     "holding_value": 42346.0,
-     "total": 99501.75,
-     "peak": 100505.53,
-     "drawdown": -0.9987311145963798
-    },
-    {
-     "date": "2026-09-24",
-     "cash": 66388.87,
-     "holding_value": 33102.0,
-     "total": 99490.87,
-     "peak": 100505.53,
-     "drawdown": -1.0095563895837407
-    },
-    {
-     "date": "2026-09-28",
-     "cash": 74919.76,
-     "holding_value": 24490.0,
-     "total": 99409.76,
-     "peak": 100505.53,
-     "drawdown": -1.0902584166264324
-    },
-    {
-     "date": "2026-09-29",
-     "cash": 74919.76,
-     "holding_value": 25105.0,
-     "total": 100024.76,
-     "peak": 100505.53,
-     "drawdown": -0.4783517882050909
-    }
-   ],
-   "trades": [
-    {
-     "code": 601059,
-     "buy_date": "2026-09-21",
-     "sell_date": "2026-09-22",
-     "buy_price": 15.576,
-     "sell_price": 15.544,
-     "qty": 700,
-     "return_pct": -0.2,
-     "exit_reason": "trend_break",
-     "name": "信达证券"
-    },
-    {
-     "code": 300590,
-     "buy_date": "2026-09-21",
-     "sell_date": "2026-09-22",
-     "buy_price": 11.471,
-     "sell_price": 11.568,
-     "qty": 1200,
-     "return_pct": 0.85,
-     "exit_reason": "take_band",
-     "name": "移为通信"
-    },
-    {
-     "code": 728,
-     "buy_date": "2026-09-21",
-     "sell_date": "2026-09-23",
-     "buy_price": 7.497,
-     "sell_price": 7.403,
-     "qty": 1600,
-     "return_pct": -1.27,
-     "exit_reason": "trend_break",
-     "name": "国元证券"
-    },
-    {
-     "code": 600023,
-     "buy_date": "2026-09-21",
-     "sell_date": "2026-09-24",
-     "buy_price": 5.055,
-     "sell_price": 5.135,
-     "qty": 1800,
-     "return_pct": 1.58,
-     "exit_reason": "take_band",
-     "name": "浙能电力"
-    },
-    {
-     "code": 600516,
-     "buy_date": "2026-09-21",
-     "sell_date": "2026-09-28",
-     "buy_price": 5.566,
-     "sell_price": 5.338,
-     "qty": 1600,
-     "return_pct": -4.1,
-     "exit_reason": "stop_hard",
-     "name": "方大炭素"
-    }
-   ]
   }
  ],
  "latest": {
-  "date": "20261106",
+  "date": "20261109",
   "summary": {
    "num_trades": 0,
    "initial_capital": 100000.0,
@@ -39192,46 +39232,30 @@
    "avg_loss": 0.0,
    "profit_factor": 0.0,
    "sharpe": 0.0,
-   "strategies": "CVAmt20,CVAmt60,DistLo10,DistLo60,Illiq20,MaxRet10,PVCorr20,PVCorr60,Skew20,Skew60,VRatio10_60,VRatio20_120",
+   "strategies": "CVAmt20,CVAmt60,DistLo10,MaxRet10,PVCorr20,PVCorr60,Skew20,Skew60,VRatio10_60,VRatio20_120",
    "signal_mode": "forward",
-   "date": 20261106,
-   "run_date": 20261107,
-   "signal_start": "2026-11-06",
-   "signal_end": "2026-11-06",
+   "date": 20261109,
+   "run_date": 20261110,
+   "signal_start": "2026-11-09",
+   "signal_end": "2026-11-09",
    "hold_days": 1,
    "exit_mode": "boll_upper_take+take6%+trailing5%+MA60break",
    "size_mode": "adaptive_weight(权重)",
    "vol_mode": "scaled_stop+pos0.3",
-   "dd_breaker_dd": 0.63,
+   "dd_breaker_dd": 0.59,
    "dd_breaker_extra_cash": 0,
    "capital_scale": 0.3,
    "cash_pct": 70.0,
    "stop_mode": "dal_boll(2.5σ,[4%,12%])",
    "signals_days": 1,
-   "codes_count": 21,
-   "start": "2026-11-06",
-   "end": "2026-11-07",
+   "codes_count": 19,
+   "start": "2026-11-09",
+   "end": "2026-11-10",
    "bench_return": 0.0,
    "bench_return_exposed": 0.0,
    "excess_return": 0.0
   },
   "equity": [
-   {
-    "date": "2026-07-09",
-    "cash": 100000.0,
-    "holding_value": 0.0,
-    "total": 100000.0,
-    "peak": 100000.0,
-    "drawdown": 0.0
-   },
-   {
-    "date": "2026-07-10",
-    "cash": 100000.0,
-    "holding_value": 0.0,
-    "total": 100000.0,
-    "peak": 100000.0,
-    "drawdown": 0.0
-   },
    {
     "date": "2026-07-13",
     "cash": 100000.0,
@@ -39858,6 +39882,14 @@
    },
    {
     "date": "2026-11-06",
+    "cash": 100000.0,
+    "holding_value": 0.0,
+    "total": 100000.0,
+    "peak": 100000.0,
+    "drawdown": 0.0
+   },
+   {
+    "date": "2026-11-09",
     "cash": 100000.0,
     "holding_value": 0.0,
     "total": 100000.0,
