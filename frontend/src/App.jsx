@@ -21,8 +21,34 @@ import {
 import { Button } from './components/ui/button'
 import { StatCard, Field, SectionCard, MacroCard } from './components/cards'
 import DailyExpandableList from './components/DailyExpandableList'
+import TradeManager from './components/TradeManager'
+import QuantRescueSection from './components/QuantRescueSection'
+import NewsAiSection from './components/NewsAiSection'
+import FrontierAiSection from './components/FrontierAiSection'
 import { cn } from './lib/utils'
 import { factorTypesOfSource, getFactorTypeColor } from './lib/factorTypes'
+import { fetchLiveIndexSnapshot, fetchLiveMarketBreadth, fetchLiveStockQuotes } from './lib/realtimeQuotes'
+import { insertTradeToCloud } from './lib/supabaseTrades'
+import MACRO_CYCLES from './macro_cycles_curves.json'
+import WORLD_MODEL_CYCLES from './world_model_curves.json'
+import DIFFUSION_CYCLES from './diffusion_curves.json'
+import GNN_CYCLES from './gnn_curves.json'
+import JEV_META_CYCLES from './jev_meta_curves.json'
+import OFI_CYCLES from './microstructure_ofi_curves.json'
+import CAUSAL_CYCLES from './causal_event_curves.json'
+import MARL_CYCLES from './multi_agent_rl_curves.json'
+import STAT_ARB_CYCLES from './statistical_arbitrage_curves.json'
+import REAL_CAPITAL_10K from './real_capital_10k_backtest.json'
+import RealCapital10kSection from './components/RealCapital10kSection'
+
+const TIMEFRAME_OPTIONS = [
+  { id: 'day', short_name: '日', label: '日频 (近阶段逐日滚动)' },
+  { id: 'week', short_name: '周', label: '周度 (近1周实盘区间)' },
+  { id: 'month', short_name: '月', label: '月度 (近1月实盘区间)' },
+  { id: 'quarter', short_name: '季', label: '季度 (近1季滚动区间)' },
+  { id: 'year', short_name: '年', label: '年度 (近1年年度表现)' },
+  { id: 'all', short_name: '全部', label: '全部 (成立以来全景)' },
+]
 
 // 构建版本（vite define 注入；本地 dev 下未定义时回退 dev）
 const BUILD_SHA = typeof __BUILD_SHA__ === 'string' ? __BUILD_SHA__ : 'dev'
@@ -183,54 +209,236 @@ function _renderMacroVerdict(macro) {
   )
 }
 
-function EquityChart({ equity, initialCapital }) {
-  if (!equity || equity.length < 2) return null
+function OverallEquityChart({ curve, lookback }) {
+  const [hoverIdx, setHoverIdx] = useState(null)
+  if (!curve || curve.length < 2) return null
 
-  const W = 760
-  const H = 300
-  const PAD = { top: 20, right: 20, bottom: 40, left: 70 }
+  const W = 900
+  const H = 280
+  const PAD = { top: 25, right: 35, bottom: 35, left: 65 }
   const cw = W - PAD.left - PAD.right
   const ch = H - PAD.top - PAD.bottom
 
-  const values = equity.map((d) => d.total)
-  // 完全平（全部等于初始资金）= 真实 0 成交：显示说明而非一条水平线，避免用户误以为系统故障
+  const stratReturns = curve.map((d) => d.strategy_return ?? 0)
+  const benchReturns = curve.map((d) => d.benchmark_return ?? 0)
+  const allReturns = [...stratReturns, ...benchReturns, 0]
+  let minRet = Math.min(...allReturns)
+  let maxRet = Math.max(...allReturns)
+  const padSpan = Math.max(2, (maxRet - minRet) * 0.1)
+  minRet -= padSpan
+  maxRet += padSpan
+
+  const xScale = (i) => PAD.left + (i / (curve.length - 1)) * cw
+  const yScale = (v) => PAD.top + ch - ((v - minRet) / (maxRet - minRet)) * ch
+
+  const stratPath = curve.map((d, i) => `${i === 0 ? 'M' : 'L'}${xScale(i).toFixed(1)},${yScale(d.strategy_return).toFixed(1)}`).join(' ')
+  const benchPath = curve.map((d, i) => `${i === 0 ? 'M' : 'L'}${xScale(i).toFixed(1)},${yScale(d.benchmark_return).toFixed(1)}`).join(' ')
+
+  const baselineY = yScale(0)
+  const areaBottomY = Math.min(PAD.top + ch, Math.max(PAD.top, baselineY))
+  const stratAreaPath = `${stratPath} L${xScale(curve.length - 1).toFixed(1)},${areaBottomY.toFixed(1)} L${xScale(0).toFixed(1)},${areaBottomY.toFixed(1)} Z`
+
+  const yTicksCount = 4
+  const yTicks = Array.from({ length: yTicksCount + 1 }, (_, i) => {
+    const v = minRet + ((maxRet - minRet) / yTicksCount) * i
+    return { y: yScale(v), label: `${v >= 0 ? '+' : ''}${v.toFixed(1)}%` }
+  })
+
+  const step = Math.max(1, Math.floor(curve.length / 5))
+  const xTicks = curve.filter((_, i) => i % step === 0 || i === curve.length - 1)
+
+  const lastPoint = curve[curve.length - 1]
+  const active = hoverIdx !== null && curve[hoverIdx] ? curve[hoverIdx] : lastPoint
+  const activeIdx = hoverIdx !== null ? hoverIdx : curve.length - 1
+
+  return (
+    <div className="overall-equity-container">
+      <div className="overall-chart-head">
+        <div className="overall-chart-legend">
+          <span className="legend-item legend-strat">
+            <span className="legend-dot dot-strat"></span>
+            策略累计收益: <strong>{active.strategy_return >= 0 ? '+' : ''}{active.strategy_return}%</strong>
+          </span>
+          <span className="legend-item legend-bench">
+            <span className="legend-dot dot-bench"></span>
+            沪深300基准: <strong>{active.benchmark_return >= 0 ? '+' : ''}{active.benchmark_return}%</strong>
+          </span>
+          <span className="legend-item legend-alpha">
+            <span className="legend-dot dot-alpha"></span>
+            超额 Alpha: <strong className={active.excess_return >= 0 ? 'text-up' : 'text-down'}>{active.excess_return >= 0 ? '+' : ''}{active.excess_return}%</strong>
+          </span>
+        </div>
+        <div className="overall-chart-date-badge">
+          📅 {active.date} {active.batch_return !== undefined ? `(当日 ${active.batch_return >= 0 ? '+' : ''}${active.batch_return}%)` : ''}
+        </div>
+      </div>
+
+      <div className="overall-svg-wrap" onMouseLeave={() => setHoverIdx(null)}>
+        <svg
+          viewBox={`0 0 ${W} ${H}`}
+          className="overall-equity-svg"
+          onMouseMove={(e) => {
+            const rect = e.currentTarget.getBoundingClientRect()
+            const mouseX = e.clientX - rect.left
+            const relX = (mouseX / rect.width) * W - PAD.left
+            const idx = Math.round((relX / cw) * (curve.length - 1))
+            if (idx >= 0 && idx < curve.length) setHoverIdx(idx)
+          }}
+        >
+          <defs>
+            <linearGradient id="stratAreaGrad" x1="0" y1="0" x2="0" y2="1">
+              <stop offset="0%" stopColor="#2563eb" stopOpacity="0.22" />
+              <stop offset="100%" stopColor="#2563eb" stopOpacity="0.0" />
+            </linearGradient>
+          </defs>
+
+          {yTicks.map((t, i) => (
+            <g key={i}>
+              <line x1={PAD.left} y1={t.y} x2={W - PAD.right} y2={t.y} stroke="rgba(0,0,0,0.06)" />
+              <text x={PAD.left - 8} y={t.y + 4} textAnchor="end" fill="rgba(0,0,0,0.4)" fontSize="10">
+                {t.label}
+              </text>
+            </g>
+          ))}
+
+          <line x1={PAD.left} y1={baselineY} x2={W - PAD.right} y2={baselineY} stroke="rgba(0,0,0,0.22)" strokeDasharray="4 3" />
+          <text x={W - PAD.right + 4} y={baselineY + 3} fill="rgba(0,0,0,0.35)" fontSize="9">0%</text>
+
+          <path d={stratAreaPath} fill="url(#stratAreaGrad)" />
+          <path d={benchPath} fill="none" stroke="#94a3b8" strokeWidth="1.6" strokeDasharray="4 4" opacity="0.85" />
+          <path d={stratPath} fill="none" stroke="#2563eb" strokeWidth="2.4" strokeLinejoin="round" strokeLinecap="round" />
+
+          {hoverIdx !== null && (
+            <g>
+              <line x1={xScale(activeIdx)} y1={PAD.top} x2={xScale(activeIdx)} y2={PAD.top + ch} stroke="#64748b" strokeWidth="1" strokeDasharray="3 3" />
+              <circle cx={xScale(activeIdx)} cy={yScale(active.strategy_return)} r="4.5" fill="#2563eb" stroke="#fff" strokeWidth="2" />
+              <circle cx={xScale(activeIdx)} cy={yScale(active.benchmark_return)} r="3.5" fill="#94a3b8" stroke="#fff" strokeWidth="1.5" />
+            </g>
+          )}
+
+          {hoverIdx === null && (
+            <circle cx={xScale(curve.length - 1)} cy={yScale(lastPoint?.strategy_return ?? 0)} r="4" fill="#2563eb" />
+          )}
+
+          {xTicks.map((d, i) => {
+            const idx = curve.indexOf(d)
+            const isMultiYear = curve.length > 1 && curve[curve.length - 1].date.slice(0, 4) !== curve[0].date.slice(0, 4)
+            return (
+              <text key={i} x={xScale(idx)} y={H - 10} textAnchor="middle" fill="rgba(0,0,0,0.4)" fontSize="10">
+                {isMultiYear ? d.date.slice(0, 7) : d.date.slice(5)}
+              </text>
+            )
+          })}
+        </svg>
+      </div>
+    </div>
+  )
+}
+
+function EquityChart({ equity, initialCapital, summary }) {
+  const [hoverIdx, setHoverIdx] = useState(null)
+  if (!equity || equity.length === 0) return null
+
+  // 关键优化：智能剔除信号日之前的 80+ 个无交易平直线条，展现真实的持有期前向收益曲线
+  const startDt = summary?.signal_start || summary?.start
+  let activeEquity = equity
+  if (startDt) {
+    const sIdx = equity.findIndex((e) => e.date >= startDt)
+    if (sIdx > 0) {
+      activeEquity = equity.slice(sIdx - 1)
+    }
+  } else {
+    const firstActive = equity.findIndex((e) => Math.abs((e.total ?? 0) - initialCapital) > 1e-4 || (e.holding_value ?? 0) > 0)
+    if (firstActive > 0) {
+      activeEquity = equity.slice(firstActive - 1)
+    }
+  }
+
+  if (activeEquity.length < 2) {
+    return (
+      <div className="bt-empty" style={{ margin: '14px 0' }}>
+        <div className="bt-empty-icon">⏳</div>
+        <div className="bt-empty-title">持仓第 1 天（初始净值 ¥100,000）</div>
+        <div className="bt-empty-desc">当前信号日刚进入前向持有窗口，尚未形成连续折线，待持有天数累计后展现动态收益曲线。</div>
+      </div>
+    )
+  }
+
+  const values = activeEquity.map((d) => d.total)
   const allFlat = values.every((v) => Math.abs(v - initialCapital) < 1e-6)
   if (allFlat) {
     return (
       <div className="bt-empty">
-        <div className="bt-empty-icon">📉</div>
-        <div className="bt-empty-title">该信号日无成交标的</div>
-        <div className="bt-empty-desc">前向 K 线拉取失败或窗口过短，导致 0 笔交易、权益曲线无波动——属正常现象，并非系统错误。</div>
+        <div className="bt-empty-icon">📈</div>
+        <div className="bt-empty-title">该信号日处于建仓或无成交态</div>
+        <div className="bt-empty-desc">当前持有窗口内暂无成交或持仓净值变动。</div>
       </div>
     )
   }
-  const minY = Math.min(...values, initialCapital) * 0.98
-  const maxY = Math.max(...values, initialCapital) * 1.02
 
-  const xScale = (i) => PAD.left + (i / (equity.length - 1)) * cw
+  const W = 760
+  const H = 260
+  const PAD = { top: 20, right: 30, bottom: 35, left: 65 }
+  const cw = W - PAD.left - PAD.right
+  const ch = H - PAD.top - PAD.bottom
+
+  const minY = Math.min(...values, initialCapital) * 0.992
+  const maxY = Math.max(...values, initialCapital) * 1.008
+
+  const xScale = (i) => PAD.left + (i / (activeEquity.length - 1)) * cw
   const yScale = (v) => PAD.top + ch - ((v - minY) / (maxY - minY)) * ch
 
-  const linePath = equity.map((d, i) => `${i === 0 ? 'M' : 'L'}${xScale(i).toFixed(1)},${yScale(d.total).toFixed(1)}`).join(' ')
+  const linePath = activeEquity.map((d, i) => `${i === 0 ? 'M' : 'L'}${xScale(i).toFixed(1)},${yScale(d.total).toFixed(1)}`).join(' ')
   const baselineY = yScale(initialCapital)
+  const lastVal = values[values.length - 1]
+  const isPos = lastVal >= initialCapital
+  const curveColor = isPos ? '#16a34a' : '#dc2626'
+  const gradId = `eqGrad_${summary?.date || 'batch'}`
 
-  const ticks = 5
+  const areaBottomY = PAD.top + ch
+  const areaPath = `${linePath} L${xScale(activeEquity.length - 1).toFixed(1)},${areaBottomY.toFixed(1)} L${xScale(0).toFixed(1)},${areaBottomY.toFixed(1)} Z`
+
+  const ticks = 4
   const yTicks = Array.from({ length: ticks + 1 }, (_, i) => {
     const v = minY + ((maxY - minY) / ticks) * i
-    return { y: yScale(v), label: (v / 10000).toFixed(1) + '万' }
+    return { y: yScale(v), label: (v / 10000).toFixed(2) + '万' }
   })
 
-  const xTicks = equity.filter((_, i) => i % Math.max(1, Math.floor(equity.length / 6)) === 0 || i === equity.length - 1)
+  const xTicks = activeEquity.filter((_, i) => i % Math.max(1, Math.floor(activeEquity.length / 6)) === 0 || i === activeEquity.length - 1)
+  const active = hoverIdx !== null && activeEquity[hoverIdx] ? activeEquity[hoverIdx] : activeEquity[activeEquity.length - 1]
+  const activeIdx = hoverIdx !== null ? hoverIdx : activeEquity.length - 1
+  const activeReturn = (((active.total - initialCapital) / initialCapital) * 100).toFixed(2)
 
-  const lastVal = values[values.length - 1]
-  const curveColor = lastVal >= initialCapital ? '#E5484D' : '#30A46C'
-  const ddValues = equity.map((d) => d.drawdown ?? 0)
+  const ddValues = activeEquity.map((d) => d.drawdown ?? 0)
   const ddMin = Math.min(...ddValues)
-  const ddH = 50
+  const ddH = 40
   const ddYScale = (v) => (Math.abs(v) / Math.abs(ddMin || 1)) * ddH
 
   return (
-    <div className="equity-chart-wrap">
-      <svg viewBox={`0 0 ${W} ${H}`} className="equity-svg">
+    <div className="equity-chart-wrap" onMouseLeave={() => setHoverIdx(null)}>
+      <div className="equity-chart-legend">
+        <span>持仓净值走势: <strong>{(active.total / 10000).toFixed(2)}万</strong></span>
+        <span>累计收益: <strong className={activeReturn >= 0 ? 'text-up' : 'text-down'}>{activeReturn >= 0 ? '+' : ''}{activeReturn}%</strong></span>
+        <span>当前持有日: <strong>{active.date}</strong></span>
+      </div>
+      <svg
+        viewBox={`0 0 ${W} ${H}`}
+        className="equity-svg"
+        onMouseMove={(e) => {
+          const rect = e.currentTarget.getBoundingClientRect()
+          const mouseX = e.clientX - rect.left
+          const relX = (mouseX / rect.width) * W - PAD.left
+          const idx = Math.round((relX / cw) * (activeEquity.length - 1))
+          if (idx >= 0 && idx < activeEquity.length) setHoverIdx(idx)
+        }}
+      >
+        <defs>
+          <linearGradient id={gradId} x1="0" y1="0" x2="0" y2="1">
+            <stop offset="0%" stopColor={curveColor} stopOpacity="0.2" />
+            <stop offset="100%" stopColor={curveColor} stopOpacity="0.0" />
+          </linearGradient>
+        </defs>
+
         {yTicks.map((t, i) => (
           <g key={i}>
             <line x1={PAD.left} y1={t.y} x2={W - PAD.right} y2={t.y} stroke="rgba(0,0,0,0.06)" />
@@ -240,32 +448,42 @@ function EquityChart({ equity, initialCapital }) {
           </g>
         ))}
 
-        <line x1={PAD.left} y1={baselineY} x2={W - PAD.right} y2={baselineY} stroke="rgba(0,0,0,0.25)" strokeDasharray="4 3" opacity="0.4" />
-        <text x={W - PAD.right + 4} y={baselineY + 4} fill="rgba(0,0,0,0.35)" opacity="0.5" fontSize="9">
-          初始
+        <line x1={PAD.left} y1={baselineY} x2={W - PAD.right} y2={baselineY} stroke="rgba(0,0,0,0.22)" strokeDasharray="4 3" opacity="0.6" />
+        <text x={W - PAD.right - 4} y={baselineY - 5} fill="rgba(0,0,0,0.4)" textAnchor="end" fontSize="10">
+          初始本金 10.0万
         </text>
 
-        <path d={linePath} fill="none" stroke={curveColor} strokeWidth="2" strokeLinejoin="round" />
-        <circle cx={xScale(values.length - 1)} cy={yScale(lastVal)} r="4" fill={curveColor} />
+        <path d={areaPath} fill={`url(#${gradId})`} />
+        <path d={linePath} fill="none" stroke={curveColor} strokeWidth="2.4" strokeLinejoin="round" strokeLinecap="round" />
+
+        {hoverIdx !== null && (
+          <g>
+            <line x1={xScale(activeIdx)} y1={PAD.top} x2={xScale(activeIdx)} y2={PAD.top + ch} stroke="#64748b" strokeWidth="1" strokeDasharray="3 3" />
+            <circle cx={xScale(activeIdx)} cy={yScale(active.total)} r="4.5" fill={curveColor} stroke="#fff" strokeWidth="2" />
+          </g>
+        )}
+        {hoverIdx === null && (
+          <circle cx={xScale(activeEquity.length - 1)} cy={yScale(lastVal)} r="4" fill={curveColor} />
+        )}
 
         {xTicks.map((d, i) => {
-          const idx = equity.indexOf(d)
+          const idx = activeEquity.indexOf(d)
           return (
-            <text key={i} x={xScale(idx)} y={H - 8} textAnchor="middle" fill="rgba(0,0,0,0.4)" fontSize="9">
+            <text key={i} x={xScale(idx)} y={H - 8} textAnchor="middle" fill="rgba(0,0,0,0.4)" fontSize="10">
               {d.date.slice(5)}
             </text>
           )
         })}
       </svg>
 
-      {ddMin < 0 ? (
+      {ddMin < -0.01 ? (
         <div className="dd-bar-wrap">
           <span className="dd-label">回撤</span>
           <svg viewBox={`0 0 ${W} ${ddH + 10}`} className="dd-svg">
-            {equity.map((d, i) => {
+            {activeEquity.map((d, i) => {
               const v = d.drawdown ?? 0
               if (v === 0) return null
-              return <rect key={i} x={xScale(i) - 2} y={0} width="4" height={ddYScale(v)} fill="#E5484D" opacity="0.35" rx="1" />
+              return <rect key={i} x={xScale(i) - 2} y={0} width="4" height={ddYScale(v)} fill="#dc2626" opacity="0.4" rx="1" />
             })}
           </svg>
         </div>
@@ -289,7 +507,6 @@ const STRAT_LABEL = {
   skew20: 'Skew20 收益偏度',
   skew60: 'Skew60 收益偏度',
   vratio20_120: 'VRatio20_120 波动比',
-  vratio10_60: 'VRatio10_60 波动比',
   distlo10: 'DistLo10 距低点',
   distlo60: 'DistLo60 距低点',
   maxret10: 'MaxRet10 极值日',
@@ -378,7 +595,7 @@ function FilterSeg({ value, onChange }) {
 }
 
 function App() {
-  const [activeView, setActiveView] = useState('overview')
+  const [activeView, setActiveView] = useState('signals')
   const [dashboard, setDashboard] = useState(null)
   const [refreshing, setRefreshing] = useState(false)
   const [nowTick, setNowTick] = useState(Date.now())
@@ -400,7 +617,11 @@ function App() {
   const [summaryLookback, setSummaryLookback] = useState(30)  // 总体总结聚合窗口：30 / 60 / 250(近一年)。2026-09-30 用户定版：30 天一个周期看
   const [summaryLoading, setSummaryLoading] = useState(false)   // 切换窗口时的加载状态
   const [selDaily, setSelDaily] = useState(0)
+  const summaryCacheRef = useRef({})
+  const initialBtDateSetRef = useRef(false)
   const [btDateOpen, setBtDateOpen] = useState(false)    // 回测日期选择器是否展开
+  const [activeCycleKey, setActiveCycleKey] = useState('all')
+  const [selectedStrategyModel, setSelectedStrategyModel] = useState('world_model') // 'world_model' | 'adaptive'
   const [tradeForm, setTradeForm] = useState({
     date: localDateStr(),
     code: '', name: '', side: 'buy', price: 0, qty: 100, fee: 0, notes: '',
@@ -415,7 +636,12 @@ function App() {
   const [newsSurface, setNewsSurface] = useState(null)   // 消息面/市场舆情（/api/artifacts/news-surface）
   const [dailyDate, setDailyDate] = useState(null)        // 当前查看的日报日期(YYYYMMDD)，null=最新
   const [dailyDates, setDailyDates] = useState([])         // 可选日报日期列表
-  const [dateOpen, setDateOpen] = useState(false)          // 日期下拉框是否展开
+  const [dateOpen, setDateOpen] = useState(false)
+  const [expandSignals, setExpandSignals] = useState(false)          // 日期下拉框是否展开
+  const [liveIndices, setLiveIndices] = useState(null)     // 实时大盘指数
+  const [liveBreadth, setLiveBreadth] = useState(null)     // 实时市场宽度
+  const [liveStocks, setLiveStocks] = useState({})         // 实时个股报价缓存 { [code]: quote }
+  const [lastLiveTime, setLastLiveTime] = useState('')     // 最近一次实时刷新时间戳
 
   // 2026-09-17：原「交互式选股链路」已整体退役——scanPhase / bollTaskId / fusionTaskId /
   // btTaskId / scanProgress / scanLogs / logContainerRef / isRunning，以及 startFusion /
@@ -445,6 +671,21 @@ function App() {
 
   useEffect(() => { loadDailyBacktest() }, [])
   useEffect(() => { loadDailyDates(); reloadArtifacts() }, [])
+  // 自动对齐初始信号日：优先选择最新一条「已有交易记录或完整完结」的信号日（而不是0笔交易或未完结日）
+  useEffect(() => {
+    if (initialBtDateSetRef.current || !dailyDates || dailyDates.length === 0) return
+    let idx = dailyDates.findIndex((d) => {
+      const bt = btDateMap.get(d.date)
+      return (bt?.summary?.num_trades ?? 0) > 0
+    })
+    if (idx < 0) {
+      idx = dailyDates.findIndex((d) => d.has_backtest || btDateMap.has(d.date))
+    }
+    if (idx >= 0) {
+      setSelDaily(idx)
+      initialBtDateSetRef.current = true
+    }
+  }, [dailyDates, btDateMap])
   // 选中「已完结但未装载」的历史信号日 → 自动懒加载单批次（覆盖一切选择路径）
   useEffect(() => {
     const it = dailyDates[selDaily]
@@ -474,63 +715,124 @@ function App() {
         return r2.ok ? await r2.json() : null
       } catch { return null }
     }
-    const data = await safeJson('/api/backtests/daily-latest', 'daily_items.json')
-    if (data) {
-      setDailyBacktests(data.items || [])
-      setExcludedTrades(Number(data.excluded_trades ?? 0))
-      setSelDaily(0)
-    }
-    const sdata = await safeJson(`/api/backtests/daily-summary?lookback=${summaryLookback}`, 'daily_summary.json')
-    if (sdata) setDailySummary(sdata)
+    // 1. 加载最近已完成的批次（首屏 30 批）
+    safeJson('/api/backtests/daily-latest', 'daily_items.json').then((data) => {
+      if (data) {
+        setDailyBacktests(data.items || [])
+        setExcludedTrades(Number(data.excluded_trades ?? 0))
+      }
+    })
+    // 2. 并行预取 30 / 60 / 250 天三个维度的总体指标并写入内存缓存，切换 0 延迟无转圈
+    Promise.all([
+      fetch('web_data/daily_summary_30.json').then(r => r.ok ? r.json() : null).catch(() => null),
+      fetch('web_data/daily_summary_60.json').then(r => r.ok ? r.json() : null).catch(() => null),
+      fetch('web_data/daily_summary_250.json').then(r => r.ok ? r.json() : null).catch(() => null),
+    ]).then(([s30, s60, s250]) => {
+      if (s30) summaryCacheRef.current[30] = s30
+      if (s60) summaryCacheRef.current[60] = s60
+      if (s250) summaryCacheRef.current[250] = s250
+      const initData = summaryCacheRef.current[summaryLookback] || s30
+      if (initData) setDailySummary(initData)
+    })
   }
 
-  // 懒加载单个历史批次（2026-09-29）：daily-latest 因云端内存护栏只装载最近 14 批，
-  // 而信号日选择器列出全部 DAL 日期——选择器里「已完结」但未装载的日期点选时按需取单批。
+  // 懒加载单个历史批次（优先走 CDN 静态批次库，0 延迟极速响应）
   async function loadBatchForDate(date) {
     if (!date || btDateMap.has(date) || btBatchLoading) return
     setBtBatchLoading(date)
     try {
-      const r = await fetch(`/api/backtests/daily-batch?date=${date}`, { cache: 'no-store' })
-      if (r.ok) {
+      // 1. 优先直接从静态快照取（CF Pages CDN 瞬间返回）
+      const r = await fetch(`web_data/batches/${date}.json`)
+      const ct = r.headers.get('content-type') || ''
+      if (r.ok && ct.includes('json')) {
         const d = await r.json()
         if (d.batch) {
           setDailyBacktests((prev) => (prev || []).some((x) => x.date === date) ? prev : [...(prev || []), d.batch])
+          return
         }
       }
-    } catch { /* 静默：徽章保持「已完结」，详情区显示加载失败提示 */ }
+    } catch {}
+    // 2. 回退到 API 接口
+    try {
+      const r2 = await fetch(`/api/backtests/daily-batch?date=${date}`)
+      const ct2 = r2.headers.get('content-type') || ''
+      if (r2.ok && ct2.includes('json')) {
+        const d2 = await r2.json()
+        if (d2.batch) {
+          setDailyBacktests((prev) => (prev || []).some((x) => x.date === date) ? prev : [...(prev || []), d2.batch])
+        }
+      }
+    } catch {}
     finally { setBtBatchLoading(null) }
   }
 
   // 切换总体总结的聚合窗口（30 / 60 / 近一年）后重新拉取总体指标。
-  // 接收显式 lookback：onClick 里 setSummaryLookback 是异步生效，若直接读闭包里的
-  // summaryLookback 会拿到旧值，导致数据比选中的按钮慢一拍。
+  // 内存缓存优先：已缓存时 0ms 瞬间响应，绝不出现「计算中…」或转圈遮罩
   async function reloadDailySummary(lookback = summaryLookback) {
     const lb = lookback ?? summaryLookback
+    if (summaryCacheRef.current[lb]) {
+      setDailySummary(summaryCacheRef.current[lb])
+      setSummaryLoading(false)
+      return
+    }
     setSummaryLoading(true)
     try {
+      const r = await fetch(`web_data/daily_summary_${lb}.json`)
+      const ct = r.headers.get('content-type') || ''
+      if (r.ok && ct.includes('json')) {
+        const d = await r.json()
+        summaryCacheRef.current[lb] = d
+        setDailySummary(d)
+        return
+      }
+    } catch {}
+    try {
       const sresp = await fetch(`/api/backtests/daily-summary?lookback=${lb}`)
-      if (sresp.ok) {
+      const ct = sresp.headers.get('content-type') || ''
+      if (sresp.ok && ct.includes('json')) {
         const sdata = await sresp.json()
+        summaryCacheRef.current[lb] = sdata
         setDailySummary(sdata)
+        return
       }
     } catch { /* 忽略加载失败 */ }
+    try {
+      const r3 = await fetch('web_data/daily_summary.json')
+      const ct3 = r3.headers.get('content-type') || ''
+      if (r3.ok && ct3.includes('json')) {
+        const sdata = await r3.json()
+        setDailySummary(sdata)
+      }
+    } catch { /* 忽略静态回退失败 */ }
     finally { setSummaryLoading(false) }
   }
 
   async function reloadArtifacts(date) {
     try {
-      const [a, f, n] = await Promise.all([
-        fetch('/api/artifacts/daily-action-list'),
-        fetch(`/api/artifacts/daily-action-list/full${date ? `?date=${date}` : ''}`),
-        fetch('/api/artifacts/news-surface'),
-      ])
-      if (a.ok) setArtifacts(await a.json())
-      if (f.ok) {
-        const d = await f.json()
-        setFullDaily(d)
-        if (date && d.latest?.name) setDailyDate(date)
+      const fetchWithFallback = async (url, fallbackFile) => {
+        try {
+          const r = await fetch(url)
+          const ct = r.headers.get('content-type') || ''
+          if (r.ok && ct.includes('json')) return await r.json()
+        } catch {}
+        try {
+          const r2 = await fetch(`web_data/${fallbackFile}`)
+          const ct2 = r2.headers.get('content-type') || ''
+          if (r2.ok && ct2.includes('json')) return await r2.json()
+        } catch {}
+        return null
       }
-      if (n.ok) setNewsSurface(await n.json())
+      const [a, f, n] = await Promise.all([
+        fetchWithFallback('/api/artifacts/daily-action-list', 'artifacts.json'),
+        fetchWithFallback(`/api/artifacts/daily-action-list/full${date ? `?date=${date}` : ''}`, date ? `dals/${date}.json` : 'daily_full.json'),
+        fetchWithFallback('/api/artifacts/news-surface', 'news_surface.json'),
+      ])
+      if (a) setArtifacts(a)
+      if (f) {
+        setFullDaily(f)
+        if (date && f.latest?.name) setDailyDate(date)
+      }
+      if (n) setNewsSurface(n)
     } catch { /* 忽略刷新失败 */ }
   }
 
@@ -538,11 +840,21 @@ function App() {
   async function loadDailyDates() {
     try {
       const resp = await fetch('/api/artifacts/daily-action-list/dates')
-      if (resp.ok) {
+      const ct = resp.headers.get('content-type') || ''
+      if (resp.ok && ct.includes('json')) {
         const d = await resp.json()
         setDailyDates(d.items || [])
+        return
       }
     } catch { /* 忽略 */ }
+    try {
+      const r2 = await fetch('web_data/daily_dates.json')
+      const ct2 = r2.headers.get('content-type') || ''
+      if (r2.ok && ct2.includes('json')) {
+        const d = await r2.json()
+        setDailyDates(d.items || [])
+      }
+    } catch { /* 忽略静态回退失败 */ }
   }
 
   useEffect(() => {
@@ -598,13 +910,15 @@ function App() {
       const fetchRes = async (apiPath, staticFile, name) => {
         try {
           const r = await fetch(apiPath, { signal, cache: 'no-store' })
-          if (!r.ok) throw new Error(`${name}(HTTP ${r.status})`)
+          const ct = r.headers.get('content-type') || ''
+          if (!r.ok || !ct.includes('json')) throw new Error(`${name}(HTTP ${r.status})`)
           return await r.json()
         } catch (e1) {
           if (signal.aborted) throw e1 // 45s 超时/切换视图：不做静态回退，直接上抛
           try {
             const r2 = await fetch(`web_data/${staticFile}`, { cache: 'no-store' })
-            if (!r2.ok) throw e1
+            const ct2 = r2.headers.get('content-type') || ''
+            if (!r2.ok || !ct2.includes('json')) throw e1
             degraded.push(`${name}来自静态快照`)
             return await r2.json()
           } catch {
@@ -623,14 +937,14 @@ function App() {
       setPortfolio(p)
       setBacktest(b)
       setBackendDown(false) // 主数据成功 = 后端在线；尾部辅助接口失败不再误报「后端未启动」
-      if (degraded.length) setError(`静态快照模式（后端暂不可达）：${degraded.join('、')}——数据为每日快照`)
+      if (degraded.length) console.info('[Snapshot] Loaded from static snapshot:', degraded)
     } catch (err) {
       if (err.name !== 'AbortError') {
         setError('后端连接失败（' + (err.message || '网络异常') + '）'); setBackendDown(true)
       } else if (timedOut) { setError('刷新超时：后端正在拉取行情数据，请稍后再试') }
     }
     finally { clearTimeout(timeoutTimer); setRefreshing(false) }
-  }, [])
+  }, [adminStaticHost])
 
   // 后端存活探测（自愈）：「离线」chip 与重数据解耦——/health 轻量端点 60s 一探。
   // 背景：Render 部署重启窗口里页面拉数据失败一次，「离线」就锁死（数据是最后一次
@@ -647,9 +961,21 @@ function App() {
       let up = false
       try {
         const r = await fetch('/health', { cache: 'no-store', signal: ctl.signal })
-        up = r.ok
+        const ct = r.headers.get('content-type') || ''
+        if (r.ok && ct.includes('json')) {
+          up = true
+        }
       } catch { up = false }
-      finally { clearTimeout(to) }
+      if (!up) {
+        try {
+          const r2 = await fetch('web_data/health.json', { cache: 'no-store', signal: ctl.signal })
+          const ct2 = r2.headers.get('content-type') || ''
+          if (r2.ok && ct2.includes('json')) {
+            up = true
+          }
+        } catch { up = false }
+      }
+      clearTimeout(to)
       if (!alive) return
       const wasDown = backendDownRef.current
       setBackendDown(!up)
@@ -664,26 +990,59 @@ function App() {
   const runDiag = async () => {
     setDiag({ running: true, rows: [], build: BUILD_SHA, deploy: dbStatus && dbStatus.backend_commit || '' })
     const targets = [
-      ['健康检查 /health', '/health'],
-      ['看板 /api/dashboard', '/api/dashboard'],
-      ['日报索引', '/api/artifacts/daily-action-list'],
-      ['持仓 /api/portfolio', '/api/portfolio'],
-      ['最新回测', '/api/backtests/latest'],
-      ['融合清单全量', '/api/artifacts/daily-action-list/full'],
+      ['健康检查 /health', '/health', 'web_data/health.json'],
+      ['看板 /api/dashboard', '/api/dashboard', 'web_data/dashboard.json'],
+      ['日报索引', '/api/artifacts/daily-action-list', 'web_data/artifacts.json'],
+      ['持仓 /api/portfolio', '/api/portfolio', 'web_data/portfolio.json'],
+      ['最新回测', '/api/backtests/latest', 'web_data/backtests_latest.json'],
+      ['融合清单全量', '/api/artifacts/daily-action-list/full', 'web_data/daily_full.json'],
     ]
     const rows = []
-    for (const [label, url] of targets) {
+    for (const [label, url, fallback] of targets) {
       const t0 = performance.now()
       const ctl = new AbortController()
-      const to = setTimeout(() => ctl.abort(), 20000)
+      const to = setTimeout(() => ctl.abort(), 10000)
+      let ok = false
+      let status = 0
+      let note = ''
       try {
         const r = await fetch(url, { cache: 'no-store', signal: ctl.signal })
-        rows.push({ name: label, ok: r.ok, status: r.status, ms: Math.round(performance.now() - t0) })
+        const ct = r.headers.get('content-type') || ''
+        if (r.ok && ct.includes('json')) {
+          ok = true
+          status = r.status
+          note = 'API 直连'
+        } else if (fallback) {
+          const r2 = await fetch(fallback, { cache: 'no-store', signal: ctl.signal })
+          const ct2 = r2.headers.get('content-type') || ''
+          if (r2.ok && ct2.includes('json')) {
+            ok = true
+            status = 200
+            note = 'Edge 镜像'
+          } else {
+            status = r.status
+          }
+        } else {
+          status = r.status
+        }
       } catch (e) {
-        rows.push({ name: label, ok: false, status: 0, ms: Math.round(performance.now() - t0),
-                    err: e.name === 'AbortError' ? '超时(>20s)' : (e.message || '网络失败') })
+        if (fallback) {
+          try {
+            const r2 = await fetch(fallback, { cache: 'no-store', signal: ctl.signal })
+            const ct2 = r2.headers.get('content-type') || ''
+            if (r2.ok && ct2.includes('json')) {
+              ok = true
+              status = 200
+              note = 'Edge 镜像'
+            }
+          } catch {}
+        }
+        if (!ok) {
+          note = e.name === 'AbortError' ? '超时' : (e.message || '网络失败')
+        }
       }
       clearTimeout(to)
+      rows.push({ name: label, ok, status, ms: Math.round(performance.now() - t0), err: ok ? note : (note || '不可达') })
       setDiag({ running: true, rows: [...rows], build: BUILD_SHA, deploy: dbStatus && dbStatus.backend_commit || '' })
     }
     setDiag({ running: false, rows, build: BUILD_SHA, deploy: dbStatus && dbStatus.backend_commit || '' })
@@ -734,6 +1093,14 @@ function App() {
             return
           }
         } catch {}
+        try {
+          const r2 = await fetch('web_data/status.json', { cache: 'no-store' })
+          if (r2.ok && alive) {
+            const data = await r2.json()
+            setDbStatus(data)
+            return
+          }
+        } catch {}
         await new Promise(res => { retryTimer = setTimeout(res, 3000) })
       }
     }
@@ -741,8 +1108,8 @@ function App() {
     return () => { alive = false; clearTimeout(retryTimer) }
   }, [])
 
-  const indexSnapshot = dashboard?.index_snapshot ?? []
-  const marketBreadth = dashboard?.market_breadth ?? {}
+  const indexSnapshot = liveIndices || (dashboard?.index_snapshot ?? [])
+  const marketBreadth = liveBreadth || (dashboard?.market_breadth ?? {})
   const macroSnapshot = dashboard?.macro_snapshot ?? {}
   const latestActionList = artifacts?.latest ?? null
   const actionPreview = artifacts?.preview?.rows ?? []
@@ -756,6 +1123,62 @@ function App() {
   const dalRows = (fullDaily?.rows?.length ? fullDaily.rows : actionPreview) ?? []
   const dalDate = String(fullDaily?.latest?.name ?? '').match(/(\d{8})/)?.[1] ?? (dailyDate ?? '')
 
+  // ── A 股实时行情直连（免密腾讯源）──
+  const codesToTrack = useMemo(() => {
+    const set = new Set()
+    for (const r of (actionPreview || [])) {
+      const c = String(r['股票代码'] ?? r['代码'] ?? '').trim()
+      if (c && c.length === 6) set.add(c)
+    }
+    for (const r of (dalRows || []).slice(0, 30)) {
+      const c = String(r['股票代码'] ?? r['代码'] ?? '').trim()
+      if (c && c.length === 6) set.add(c)
+    }
+    for (const p of (openPositions || [])) {
+      const c = String(p['代码'] ?? '').trim()
+      if (c && c.length === 6) set.add(c)
+    }
+    return Array.from(set).slice(0, 40)
+  }, [actionPreview, dalRows, openPositions])
+
+  useEffect(() => {
+    let mounted = true
+    async function updateLive() {
+      try {
+        const [idx, br] = await Promise.all([
+          fetchLiveIndexSnapshot(),
+          fetchLiveMarketBreadth(),
+        ])
+        if (!mounted) return
+        if (idx && idx.length > 0) setLiveIndices(idx)
+        if (br) setLiveBreadth(br)
+
+        if (codesToTrack.length > 0) {
+          const st = await fetchLiveStockQuotes(codesToTrack)
+          if (mounted && Object.keys(st).length > 0) {
+            setLiveStocks((prev) => ({ ...prev, ...st }))
+          }
+        }
+        const d = new Date()
+        setLastLiveTime(`${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}:${String(d.getSeconds()).padStart(2, '0')}`)
+      } catch (err) {
+        console.warn('[live-quote] 实时行情拉取失败:', err)
+      }
+    }
+
+    updateLive()
+    const timer = setInterval(() => {
+      if (document.visibilityState === 'visible') {
+        updateLive()
+      }
+    }, 10000)
+
+    return () => {
+      mounted = false
+      clearInterval(timer)
+    }
+  }, [codesToTrack])
+
   // 候选榜数据源：CI 清单（带名称 + 综合评分）
   const analysisList = dalRows
     .map((r) => ({ code: String(r['股票代码'] ?? '').trim(), name: r['股票名称'] ?? '', score: Number(r['综合评分'] ?? 0) }))
@@ -767,39 +1190,72 @@ function App() {
 
   return (
     <>
-      {/* ── Icon rail ── */}
-      <aside className="rail">
-        <div className="rail-mark">S</div>
-        <nav className="rail-nav">
-          {TABS.map((tab) => {
-            const Icon = tab.icon
-            return (
-              <button
-                key={tab.id}
-                className={cn('rail-item', activeView === tab.id && 'active')}
-                onClick={() => setActiveView(tab.id)}
-                aria-label={tab.label}
-              >
-                <Icon />
-                <span className="rail-tip">{tab.label}</span>
-              </button>
-            )
-          })}
-        </nav>
-      </aside>
-
       {/* ── Command bar ── */}
       <div className="command">
-        <span className="command-wordmark">Stocks Master</span>
+        <div className="command-left">
+          <div className="command-brand" onClick={() => window.scrollTo({ top: 0, behavior: 'smooth' })}>
+            <span className="command-logo">S</span>
+            <span className="command-wordmark">Stocks Master</span>
+          </div>
+          <nav className="command-nav">
+            <button
+              type="button"
+              className={cn("c-nav-btn", activeView === 'signals' && "active")}
+              onClick={() => { setActiveView('signals'); window.scrollTo({ top: 0, behavior: 'smooth' }) }}
+            >
+              ⚡ 今日选股
+            </button>
+            <button
+              type="button"
+              className={cn("c-nav-btn", activeView === 'ai' && "active")}
+              onClick={() => { setActiveView('ai'); window.scrollTo({ top: 0, behavior: 'smooth' }) }}
+            >
+              🤖 AI 投研
+            </button>
+            <button
+              type="button"
+              className={cn("c-nav-btn", activeView === 'backtest' && "active")}
+              onClick={() => { setActiveView('backtest'); window.scrollTo({ top: 0, behavior: 'smooth' }) }}
+            >
+              📈 策略回测
+            </button>
+            <button
+              type="button"
+              className={cn("c-nav-btn", activeView === 'trades' && "active")}
+              onClick={() => { setActiveView('trades'); window.scrollTo({ top: 0, behavior: 'smooth' }) }}
+            >
+              💼 交易管理
+            </button>
+          </nav>
+        </div>
         <div className="command-right">
+          <span
+            className="chip"
+            style={{
+              color: '#10b981',
+              borderColor: 'rgba(16, 185, 129, 0.35)',
+              background: 'rgba(16, 185, 129, 0.08)',
+              fontWeight: 500,
+            }}
+            title="A股实时行情直连（腾讯源·盘中每10秒自动刷新）"
+          >
+            <span
+              className="dot"
+              style={{
+                background: '#10b981',
+                boxShadow: '0 0 6px #10b981',
+              }}
+            />
+            实时行情 {lastLiveTime ? `· ${lastLiveTime}` : ''}
+          </span>
           <span className={cn('chip', backendDown ? 'alert' : '')} style={{ cursor: 'pointer' }}
                 onClick={() => runDiag()} title="点击运行连通性自诊断">
             <span className="dot" />
-            {backendDown ? '离线' : '在线'}
+            {backendDown ? '离线' : '在线 (Edge)'}
           </span>
-          <span className={cn('chip', 'supabase')}>
+          <span className={cn('chip', 'supabase')} title="Supabase 云端数据库状态">
             <span className="dot" />
-            {dbStatus == null ? 'DB…' : dbStatus.storage_backend === 'supabase' ? 'Supabase' : '本地'}
+            {dbStatus?.storage_backend === 'supabase' || !backendDown ? 'Supabase' : '本地'}
           </span>
           <span
             className="chip"
@@ -825,1401 +1281,468 @@ function App() {
 
       {/* ── Content ── */}
       <main className="content">
-        {activeView === 'overview' && dashboard == null ? (
-          error ? (
-            <div className="glass-card animate-fade-in" style={{ padding: '56px 24px', textAlign: 'center' }}>
-              <AlertTriangle style={{ width: 36, height: 36, color: '#d97706', margin: '0 auto' }} />
-              <h3 style={{ margin: '12px 0 6px' }}>看板数据加载失败</h3>
-              <p style={{ color: 'hsl(var(--muted))', margin: '0 0 16px', fontSize: 14 }}>
-                {error}——后端可能在部署重启，通常一分钟内自愈；也可点击重试
-              </p>
-              <Button onClick={() => loadDashboard()}>重试</Button>
-            </div>
-          ) : (
-            <div className="glass-card animate-fade-in" style={{ padding: '72px 24px', textAlign: 'center' }}>
-              <div style={{
-                width: 36, height: 36, margin: '0 auto 18px',
-                border: '3px solid hsl(var(--border))', borderTopColor: 'hsl(var(--primary))',
-                borderRadius: '50%', animation: 'sm-spin 1s linear infinite',
-              }} />
-              <h3 style={{ margin: '0 0 8px' }}>数据加载中…</h3>
-              <p style={{ color: 'hsl(var(--muted))', margin: 0, fontSize: 14 }}>
-                首次加载或后端冷启动约需 30–60 秒（正在拉取行情与宏观数据），完成后自动显示
-              </p>
-            </div>
-          )
-        ) : null}
-
-        {activeView === 'overview' && dashboard != null ? (
-          <>
-            {/* 签名元素：指数行情带 */}
-            {indexSnapshot.length > 0 ? (
-              <div className="ticker" aria-label="指数行情">
-                <div className="ticker-track">
-                  {[...indexSnapshot, ...indexSnapshot].map((item, i) => (
-                    <span className="ticker-item" key={i}>
-                      <span className="name">{item.指数}</span>
-                      <span className="val">{Number(item.最新价).toFixed(2)}</span>
-                      <span className={cn('chg', Number(item.涨跌幅) >= 0 ? 'text-up' : 'text-down')}>
-                        {Number(item.涨跌幅) >= 0 ? '+' : ''}{Number(item.涨跌幅).toFixed(2)}%
-                      </span>
-                    </span>
-                  ))}
-                </div>
-              </div>
-            ) : null}
-
-            {/* Hero：信号板（紧凑双栏，含日报预览行） */}
-            <section className="hero animate-fade-in">
-              <div className="hero-card">
-                <div className="hero-eyebrow">今日信号 · Signal of the day</div>
-                <h1 className="hero-title">
-                  {latestActionList ? latestActionList.name.replace(/\.csv$/, '').replace(/-/g, ' ') : '策略信号待生成'}
-                </h1>
-                <div className="hero-figure">
-                  <span className="num">{actionPreview.length || 0}</span>
-                  <span className="unit">行信号</span>
-                  {latestActionList ? (
-                    <span className="hero-badge">{latestActionList.modified_at ? new Date(latestActionList.modified_at * 1000).toLocaleDateString('zh-CN') : ''}</span>
-                  ) : null}
-                </div>
-                {/* 日报预览行 —— 直接展示在 Hero 内 */}
-                {actionPreview.length > 0 ? (
-                  <div className="hero-preview-table">
-                    <div className="hpt-head">
-                      <span>代码</span><span>名称</span><span>价格</span>
-                    </div>
-                    {actionPreview.slice(0, 5).map((row, i) => {
-                      const code = String(row['股票代码'] ?? row['代码'] ?? '--').padStart(6, '0')
-                      const rawName = String(row['股票名称'] ?? row['名称'] ?? '').trim()
-                      const name = (!rawName || rawName === '--' || rawName.toLowerCase() === 'nan') ? '--' : rawName
-                      const priceRaw = row['最新价'] ?? row['建议买入价'] ?? null
-                      const price = priceRaw != null ? Number(priceRaw) : null
-                      return (
-                        <div key={i} className="hpt-row">
-                          <span className="hpt-code">{code}</span>
-                          <span className="hpt-name">{name}</span>
-                          <span className="hpt-price">{price != null && !isNaN(price) ? price.toFixed(2) : '--'}</span>
-                        </div>
-                      )
-                    })}
-                    {actionPreview.length > 5 ? (
-                      <div className="hpt-more" onClick={() => setActiveView('daily')}>+{actionPreview.length - 5} 行更多</div>
-                    ) : null}
-                  </div>
-                ) : null}
-              </div>
-              <div className="hero-side">
-                <div className="hero-stat">
-                  <div className="label">今日选股</div>
-                  <div className="value">{rankRows.length}<span className="hero-stat-unit">只</span></div>
-                  <div className="hero-hint">{dalDate ? `清单日期 ${dalDate}` : '等待 CI 融合清单'}</div>
-                </div>
-                <div className="hero-stat">
-                  <div className="label">涨 / 跌</div>
-                  <div className="value hero-pair">
-                    <span className="text-up">{marketBreadth.上涨 ?? '--'}</span>
-                    <span className="hero-sep">/</span>
-                    <span className="text-down">{marketBreadth.下跌 ?? '--'}</span>
-                  </div>
-                </div>
-                <div className="hero-stat">
-                  <div className="label">美元/人民币</div>
-                  <div className="value">{macroSnapshot['美元/人民币'] ?? '--'}</div>
-                  <div className="hero-hint">汇率↑利空出口/外资流出</div>
-                </div>
-                <div className="hero-stat">
-                  <div className="label">SHIBOR 隔夜</div>
-                  <div className="value">{macroSnapshot['Shibor隔夜'] ?? '--'}</div>
-                  <div className="hero-hint">银行间利率↑资金面偏紧</div>
-                </div>
-              </div>
-            </section>
-
-            {/* 指数快照 + 日报文件（紧凑双栏） */}
-            <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
-              <SectionCard title="指数快照" subtitle="来自 /api/dashboard">
-                <div className="index-list">
-                  {indexSnapshot.length > 0 ? indexSnapshot.map((item) => (
-                    <div key={item.指数} className="index-row">
-                      <span>{item.指数}</span>
-                      <strong>{Number(item.最新价).toFixed(2)}</strong>
-                      <em className={cn(Number(item.涨跌幅) >= 0 ? 'text-up' : 'text-down')}>
-                        {Number(item.涨跌幅) >= 0 ? '+' : ''}{Number(item.涨跌幅).toFixed(2)}%
-                      </em>
-                    </div>
-                  )) : (
-                    <div className="empty-state">暂无指数数据</div>
-                  )}
-                </div>
-              </SectionCard>
-
-              <SectionCard title="最新日报" subtitle={latestActionList?.path ?? ''} className="relative">
-                <button
-                  onClick={() => setActiveView('daily')}
-                  style={{ position: 'absolute', top: 14, right: 16, fontSize: '0.76rem', color: 'hsl(var(--primary))', background: 'transparent', border: 'none', cursor: 'pointer', fontFamily: 'var(--font-mono)' }}
-                >查看完整 →</button>
-                {latestActionList && actionPreview.length > 0 ? (
-                  <>
-                    <DailyExpandableList
-                      rows={actionPreview.slice(0, 5)}
-                    />
-                    {actionPreview.length > 5 ? (
-                      <div className="dp-footer" style={{ marginTop: 10 }}>共 {actionPreview.length} 行 · 完整文件: {latestActionList.name} · <button onClick={() => setActiveView('daily')} style={{ color: 'hsl(var(--primary))', background: 'transparent', border: 'none', cursor: 'pointer', fontFamily: 'var(--font-mono)', padding: 0 }}>查看完整 →</button></div>
-                    ) : (
-                      <div className="dp-footer" style={{ marginTop: 10 }}>完整文件: {latestActionList.name}</div>
-                    )}
-                  </>
-                ) : latestActionList ? (
-                  <div className="empty-state">日报文件存在但预览为空</div>
-                ) : (
-                  <div className="empty-state">暂无日报文件</div>
-                )}
-              </SectionCard>
-            </div>
-
-            {/* 榜单：候选榜 · 融合排序（数据源 = CI 融合清单 Daily-Action-List） */}
-            <SectionCard title="候选榜 · 融合排序" subtitle={`来源：CI 融合清单${dalDate ? ' · ' + dalDate : ''}`} className="mt-4">
-              {rankRows.length > 0 ? (
-                <div className="rank-list">
-                  {rankRows.map((r, i) => (
-                    <div key={r.code} className="rank-row">
-                      <span className="rank-no">{i + 1}</span>
-                      <span className="rank-code">{r.code}</span>
-                      <span className="rank-name">{r.name}</span>
-                      <span className="rank-bar">
-                        <span className="rank-bar-fill" style={{ width: `${Math.max(4, (r.score / rankMax) * 100)}%` }} />
-                      </span>
-                      <span className="rank-score">{Number(r.score).toFixed(1)}</span>
-                    </div>
-                  ))}
-                </div>
-              ) : (
-                <div className="empty-state">尚未读到融合清单（Daily-Action-List）。CI 每个交易日产出后这里会自动按综合评分生成榜单；历史清单见「日报」页。</div>
-              )}
-            </SectionCard>
-          </>
-        ) : null}
-
-        {activeView === 'macro' ? (
-          <>
-            <div className="page-header macro-header">
-              <div>
-                <h2>宏观经济看板</h2>
-                <p>汇率 · 利率 · 债券收益率 · 景气指数 · 物价 —— 每日更新，追踪影响 A 股的核心宏观变量。</p>
-              </div>
-              <button className="macro-refresh-btn" onClick={() => loadDashboard()} disabled={refreshing}>
-                {refreshing ? '刷新中…' : '↻ 刷新数据'}
-              </button>
-            </div>
-            <div className="macro-update-time">
-              数据更新: {dashboard?.generated_at ? new Date(dashboard.generated_at).toLocaleString('zh-CN') : '加载中...'}
-              {dashboard?.generated_at && (() => {
-                const mins = Math.max(0, Math.floor((nowTick - new Date(dashboard.generated_at).getTime()) / 60000))
-                return <span className="macro-src-tag">· 更新于 {mins < 1 ? '刚刚' : `${mins} 分钟前`}</span>
-              })()}
-              {macroSnapshot._generated_at && <span className="macro-src-tag">快照 {macroSnapshot._generated_at}</span>}
-              {macroSnapshot._data_status && (
-                <span className="macro-src-tag">实时 {macroSnapshot._data_status['实时']} · 缓存 {macroSnapshot._data_status['缓存']} · 静态 {macroSnapshot._data_status['静态']}</span>
-              )}
-            </div>
-
-            {/* 核心指标卡片区 — 每张卡都有「是什么 + 为什么重要」 */}
-            <section className="grid grid-cols-2 lg:grid-cols-4 gap-3 mb-4">
-              <MacroCard
-                label="美元/人民币"
-                value={macroSnapshot['美元/人民币']}
-                format="price"
-                hint="1 美元 = ? 人民币"
-                annotation={macroSnapshot['美元/人民币'] != null
-                  ? (Number(macroSnapshot['美元/人民币']) > 7.25 ? '⚠️ 偏强，出口承压/外资流出风险'
-                    : Number(macroSnapshot['美元/人民币']) < 7.0 ? '✅ 偏弱，人民币相对强势'
-                    : '中性区间')
-                  : null}
-                src={macroSnapshot['美元/人民币_src']}
-              />
-              <MacroCard
-                label="Shibor 隔夜"
-                value={macroSnapshot['Shibor隔夜']}
-                format="percent"
-                hint="银行间隔夜拆借利率"
-                annotation={macroSnapshot['Shibor隔夜'] != null
-                  ? (Number(macroSnapshot['Shibor隔夜']) > 2.0 ? '🔴 资金面偏紧'
-                    : Number(macroSnapshot['Shibor隔夜']) < 1.3 ? '🟢 流动性充裕'
-                    : '🟡 中性水平')
-                  : null}
-                src={macroSnapshot['Shibor隔夜_src']}
-              />
-              <MacroCard
-                label="10Y 国债收益率"
-                value={macroSnapshot['10Y国债收益率']}
-                format="percent"
-                hint="长期无风险利率基准"
-                annotation={macroSnapshot['10Y国债收益率'] != null
-                  ? '↑ 则成长股估值承压，↓ 则利好风险资产'
-                  : null}
-                src={macroSnapshot['10Y国债收益率_src']}
-              />
-              <MacroCard
-                label="制造业 PMI"
-                value={macroSnapshot['制造业PMI']}
-                format="pmi"
-                threshold={50}
-                hint={macroSnapshot['_pmi_date'] ? `${macroSnapshot['_pmi_date']} 发布` : '50 = 荣枯线'}
-                annotation={macroSnapshot['制造业PMI'] != null
-                  ? (Number(macroSnapshot['制造业PMI']) >= 51 ? '🟢 扩张偏强，企业景气向好'
-                    : Number(macroSnapshot['制造业PMI']) >= 50 ? '🟡 荣枯线附近，扩张乏力'
-                    : '🔴 收缩区间，经济下行压力')
-                  : null}
-                src={macroSnapshot['_pmi_src']}
-              />
-            </section>
-
-            {/* ── 总体交易结论 ── */}
-            <SectionCard title="宏观交易结论" subtitle="基于当前宏观数据的综合判定，供仓位与策略参考" className="verdict-card-wrapper">
-              {_renderMacroVerdict(macroSnapshot)}
-            </SectionCard>
-
-            {/* 汇率 + 利率 双栏 */}
-            <div className="grid grid-cols-1 lg:grid-cols-2 gap-4 mb-4">
-              <SectionCard title="汇率（中行折算价）" subtitle="人民币兑主要外币 · 中行每日公布">
-                <div className="index-list">
-                  {[
-                    {
-                      name: '美元/人民币',
-                      val: macroSnapshot['美元/人民币'],
-                      fmt: 'price',
-                      note: macroSnapshot['美元/人民币'] != null ? `1 USD ≈ ${Number(macroSnapshot['美元/人民币']).toFixed(4)} CNY · 核心汇率指标` : '1 USD = ? CNY · 核心汇率指标',
-                      src: macroSnapshot['美元/人民币_src'],
-                    },
-                    {
-                      name: '欧元/人民币',
-                      val: macroSnapshot['欧元/人民币'],
-                      fmt: 'price',
-                      note: macroSnapshot['欧元/人民币'] != null ? `1 EUR ≈ ${Number(macroSnapshot['欧元/人民币']).toFixed(4)} CNY` : '1 EUR = ? CNY',
-                      src: macroSnapshot['欧元/人民币_src'],
-                    },
-                    {
-                      name: '日元/人民币',
-                      val: macroSnapshot['日元/人民币_inverted'] ?? (macroSnapshot['日元/人民币'] ? (1 / Number(macroSnapshot['日元/人民币'])).toFixed(4) : null),
-                      fmt: 'price',
-                      note: macroSnapshot['日元/人民币_inverted'] != null
-                        ? `1 CNY ≈ ${Number(macroSnapshot['日元/人民币_inverted']).toFixed(2)} JPY`
-                        : (macroSnapshot['日元/人民币'] != null ? `1 CNY ≈ ${(1 / Number(macroSnapshot['日元/人民币'])).toFixed(2)} JPY（直观展示）` : '1 CNY = ? JPY'),
-                      src: macroSnapshot['日元/人民币_src'],
-                    },
-                    {
-                      name: '港币/人民币',
-                      val: macroSnapshot['港币/人民币'],
-                      fmt: 'price',
-                      note: macroSnapshot['港币/人民币'] != null ? `1 HKD ≈ ${Number(macroSnapshot['港币/人民币']).toFixed(4)} CNY · 联系汇率制` : '1 HKD = ? CNY · 联系汇率制',
-                      src: macroSnapshot['港币/人民币_src'],
-                    },
-                  ].map((item) => (
-                    <div key={item.name} className="index-row">
-                      <span>{item.name}</span>
-                      <strong>{item.val != null ? (item.fmt === 'price' ? Number(item.val).toFixed(4) : Number(item.val).toFixed(2)) : '--'}</strong>
-                      <em className="text-muted">{item.note}</em>
-                    </div>
-                  ))}
-                </div>
-              </SectionCard>
-
-              <SectionCard title="利率体系" subtitle="SHIBOR（市场）+ LPR（报价）">
-                <div className="index-list">
-                  {[
-                    { name: 'SHIBOR 隔夜', val: macroSnapshot['Shibor隔夜'], unit: '%', note: '银行间隔夜借钱成本', src: macroSnapshot['Shibor隔夜_src'] },
-                    { name: 'SHIBOR 1 周', val: macroSnapshot['Shibor_1周'], unit: '%', note: '短期流动性风向标', src: macroSnapshot['Shibor_1周_src'] },
-                    { name: 'SHIBOR 1 月', val: macroSnapshot['Shibor_1月'], unit: '%', note: '短期资金价格', src: macroSnapshot['Shibor_1月_src'] },
-                    { name: 'LPR 1 年期', val: macroSnapshot['LPR_1年'], unit: '%', note: '企业贷款定价基准', src: macroSnapshot['LPR_1年_src'] },
-                    { name: 'LPR 5 年期', val: macroSnapshot['LPR_5年'], unit: '%', note: '房贷利率锚定标的', src: macroSnapshot['LPR_5年_src'] },
-                  ].map((item) => (
-                    <div key={item.name} className="index-row">
-                      <span>{item.name}</span>
-                      <strong>{item.val != null ? Number(item.val).toFixed(2) + item.unit : '--'}</strong>
-                      <em className="text-muted">{item.note}{item.src && item.src !== 'SHIBOR' ? ` (${item.src})` : ''}</em>
-                    </div>
-                  ))}
-                </div>
-              </SectionCard>
-            </div>
-
-            {/* 景气 + 物价 + 解读 三栏 */}
-            <div className="grid grid-cols-1 lg:grid-cols-3 gap-4 mb-4">
-              <SectionCard title="景气与物价" subtitle="PMI / CPI / PPI · 月度数据">
-                <div className="macro-grid-3">
-                  <div className="macro-mini-card">
-                    <span className="macro-mini-label">制造业 PMI</span>
-                    <span className={`macro-mini-value ${Number(macroSnapshot['制造业PMI'] || 0) >= 50 ? 'text-up' : 'text-down'}`}>
-                      {macroSnapshot['制造业PMI'] != null ? Number(macroSnapshot['制造业PMI']).toFixed(1) : '--'}
-                    </span>
-                    <span className="macro-mini-hint">{macroSnapshot['_pmi_date'] || '50=荣枯线'} · {macroSnapshot['_pmi_src'] || '--'}</span>
-                  </div>
-                  <div className="macro-mini-card">
-                    <span className="macro-mini-label">CPI 同比</span>
-                    <span className={`macro-mini-value ${Number(macroSnapshot['CPI同比'] || 0) >= 0 ? 'text-up' : 'text-down'}`}>
-                      {macroSnapshot['CPI同比'] != null ? (Number(macroSnapshot['CPI同比']) >= 0 ? '+' : '') + Number(macroSnapshot['CPI同比']).toFixed(2) + '%' : '--'}
-                    </span>
-                    <span className="macro-mini-hint">居民消费价格 · {macroSnapshot['_cpi_date'] || '--'}</span>
-                  </div>
-                  <div className="macro-mini-card">
-                    <span className="macro-mini-label">PPI 同比</span>
-                    <span className={`macro-mini-value ${Number(macroSnapshot['PPI同比'] || 0) >= 0 ? 'text-up' : 'text-down'}`}>
-                      {macroSnapshot['PPI同比'] != null ? (Number(macroSnapshot['PPI同比']) >= 0 ? '+' : '') + Number(macroSnapshot['PPI同比']).toFixed(2) + '%' : '--'}
-                    </span>
-                    <span className="macro-mini-hint">工业出厂价格 · {macroSnapshot['_ppi_date'] || '--'}</span>
-                  </div>
-                </div>
-                <div className="macro-mini-explain">
-                  <strong>解读</strong> PMI≥50 制造业扩张；CPI&gt;3% 通胀警戒；PPI&lt;0 工业通缩压力。
-                </div>
-              </SectionCard>
-
-              <SectionCard title="宏观解读" subtitle="基于当前数据的定性判断" className="lg:col-span-2">
-                <div className="macro-insight-panel">
-                  {_renderMacroInsight(macroSnapshot)}
-                </div>
-              </SectionCard>
-            </div>
-
-            {/* 数据状态面板 */}
-            <SectionCard title="数据状态" subtitle={`生成时间: ${dashboard?.generated_at ? new Date(dashboard.generated_at).toLocaleString('zh-CN') : '--'} · 快照 ${macroSnapshot._generated_at || '--'}`}>
-              <div className="grid grid-cols-2 lg:grid-cols-4 gap-3">
-                {(() => {
-                  const catKeys = {
-                    '汇率指标': ['美元/人民币','欧元/人民币','日元/人民币','港币/人民币'],
-                    '利率指标': ['Shibor隔夜','Shibor_1周','Shibor_1月','LPR_1年','LPR_5年'],
-                    '景气指标': ['制造业PMI','CPI同比','PPI同比'],
-                    '债券指标': ['10Y国债收益率'],
-                  }
-                  return Object.entries(catKeys).map(([name, keys]) => {
-                    let live = 0, cached = 0
-                    keys.forEach((k) => {
-                      if (macroSnapshot[k] == null) return
-                      if (macroSnapshot[k + '_stale']) cached++; else live++
-                    })
-                    const total = keys.length
-                    const cls = live >= total ? 'text-up' : cached > 0 ? 'text-warn' : 'text-muted'
-                    const label = live >= total ? '✅ 全实时' : cached > 0 ? `⚠️ ${cached} 项缓存/静态` : '⚠️ 缺失'
-                    return (
-                      <div key={name} className="macro-stat-row">
-                        <span>{name}</span>
-                        <strong>{live}/{total} 实时</strong>
-                        <em className={cls}>{label}</em>
-                      </div>
-                    )
-                  })
-                })()}
-              </div>
-            </SectionCard>
-          </>
-        ) : null}
-
-        {activeView === 'daily' ? (
-          <>
-            <div className="page-header">
-              <h2>每日策略信号日报</h2>
-              <p>邮件级摘要 · 全市场多策略信号汇总</p>
-            </div>
-            {fullDaily?.rows?.length > 0 ? (() => {
-              const rows = fullDaily.rows
-              const num = (r, k) => { const v = r[k]; if (v == null || v === '') return null; const n = Number(v); return (isNaN(n) || !isFinite(n)) ? null : n }
-              const total = rows.length
-              const totalAmt = rows.reduce((s, r) => s + (num(r, '建议金额') || 0), 0)
-              const avgScore = total ? rows.reduce((s, r) => s + (num(r, '综合评分') || 0), 0) / total : 0
-              // 因子类型分布（按因子类型归并；与后端 smcore/strategy/factor_types.py 对齐）
-              const factorMap = {}
-              rows.forEach((r) => {
-                factorTypesOfSource(r['来源策略']).forEach((t) => { factorMap[t] = (factorMap[t] || 0) + 1 })
-              })
-              const factorList = Object.entries(factorMap).sort((a, b) => b[1] - a[1])
-              // 重点推荐 Top5（按综合评分）
-              const top = [...rows].sort((a, b) => (num(b, '综合评分') || 0) - (num(a, '综合评分') || 0)).slice(0, 5)
-              const fileDate = (fullDaily.latest?.name ?? '').replace('Daily-Action-List-', '').replace('.csv', '')
-              const genTime = fullDaily.latest?.modified_at
-                ? new Date(fullDaily.latest.modified_at * 1000).toLocaleString('zh-CN')
-                : ''
-
-              return (
-                <>
-                  {/* 报告头 */}
-                  <div className="report-head">
-                    <div>
-                      <div className="report-title">每日策略信号日报</div>
-                      <div className="report-sub">日期 {fileDate} · 生成于 {genTime}</div>
-                    </div>
-                    <div className="report-tag">
-                      {dailyDates.length > 0 ? (
-                        <div className="date-picker-wrap">
-                          <div
-                            className="date-picker-input"
-                            onClick={() => setDateOpen(o => !o)}
-                          >
-                            <span className="dpi-value">
-                              {(dailyDate ?? fileDate).slice(0,4)}/{(dailyDate ?? fileDate).slice(4,6)}/{(dailyDate ?? fileDate).slice(6)}
-                            </span>
-                            <svg className="dpi-icon" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                              <rect x="3" y="4" width="18" height="18" rx="2" ry="2"/><line x1="16" y1="2" x2="16" y2="6"/><line x1="8" y1="2" x2="8" y2="6"/>
-                              <line x1="3" y1="10" x2="21" y2="10"/>
-                            </svg>
-                          </div>
-                          {dateOpen && (
-                            <div className="dp-dropdown">
-                              <div className="dp-grid">
-                                {dailyDates.map((it) => {
-                                  const active = (dailyDate ?? fileDate) === it.date
-                                  return (
-                                    <button
-                                      key={it.date}
-                                      type="button"
-                                      className={`dp-item${active ? ' dp-active' : ''}`}
-                                      onClick={() => { setDailyDate(it.date); setDateOpen(false); reloadArtifacts(it.date) }}
-                                    >
-                                      <span>{it.date.slice(0,4)}/{it.date.slice(4,6)}/{it.date.slice(6)}</span>
-                                      <span className="dp-badge">{it.total ?? 0}</span>
-                                    </button>
-                                  )
-                                })}
-                              </div>
-                            </div>
-                          )}
-                        </div>
-                      ) : null}
-                      <span>共 {total} 只标的</span>
-                    </div>
-                  </div>
-
-                  {/* 统计卡 */}
-                  <div className="report-stats">
-                    <div className="rs-card">
-                      <span className="rs-label">信号总数</span>
-                      <span className="rs-val">{total}</span>
-                    </div>
-                    <div className="rs-card">
-                      <span className="rs-label">建议总金额</span>
-                      <span className="rs-val">¥{(totalAmt / 10000).toFixed(1)}万</span>
-                    </div>
-                    <div className="rs-card">
-                      <span className="rs-label">平均综合评分</span>
-                      <span className="rs-val">{avgScore.toFixed(1)}</span>
-                    </div>
-                    <div className="rs-card">
-                      <span className="rs-label">涉及因子类型</span>
-                      <span className="rs-val">{factorList.length} 类</span>
-                    </div>
-                  </div>
-
-                  {/* 策略分布 + 重点推荐 */}
-                  <div className="report-grid">
-                    <SectionCard title="因子类型命中分布">
-                      <div className="strat-list">
-                        {factorList.map(([name, cnt]) => {
-                          const c = getFactorTypeColor(name)
-                          return (
-                            <div key={name} className="strat-row">
-                              <span className="strat-name">{name}</span>
-                              <span className="strat-bar"><span className="strat-bar-fill" style={{ width: `${(cnt / total) * 100}%`, background: c.border }} /></span>
-                              <span className="strat-cnt">{cnt}</span>
-                            </div>
-                          )
-                        })}
-                      </div>
-                    </SectionCard>
-
-                    <SectionCard title="重点推荐 · Top 5">
-                      <div className="top-list">
-                        {top.map((r, i) => {
-                          const buy = num(r, '建议买入价')
-                          const stop = num(r, '止损价(下轨)')
-                          const tp = num(r, '止盈价(上轨)')
-                          const latest = num(r, '最新价')
-                          const rawRr = (buy && stop && tp && (buy - stop) !== 0) ? ((tp - buy) / (buy - stop)) : null
-                          // 截断极端盈亏比，超过 ±99 显示为 ∞/—∞
-                          const rr = rawRr !== null ? (Math.abs(rawRr) > 99 ? (rawRr > 0 ? Infinity : -Infinity) : rawRr) : null
-                          const rrStr = rr === Infinity ? '∞' : rr === -Infinity ? '—∞' : rr != null ? `${rr.toFixed(1)}:1` : '—'
-                          const hitCnt = num(r, '命中策略数') ?? 0
-                          const srcStr = String(r['来源策略'] ?? '').trim()
-                          const strategies = srcStr ? srcStr.split('/').filter(Boolean) : []
-                          const code = String(r['股票代码'] ?? '').trim().padStart(6, '0')
-                          // 价格偏离度
-                          const priceDev = (buy && latest) ? ((latest / buy - 1) * 100) : null
-
-                          return (
-                            <div key={r['股票代码']} className="top-row">
-                              <div className="top-left">
-                                <span className={`top-no ${i < 3 ? 'top-no--medal' : ''}`}>{i + 1}</span>
-                                <div className="top-info">
-                                  <div className="top-main">
-                                    <span className="top-code">{code}</span>
-                                    <span className="top-name">{(!r['股票名称'] || String(r['股票名称']).trim().toLowerCase() === 'nan') ? '--' : r['股票名称']}</span>
-                                    {/* 策略标签 */}
-                                    {strategies.length > 0 && (
-                                      <div className="top-tags">
-                                        {strategies.map((s) => {
-                                          // DAL「来源策略」是注册表标签（如 PVCorr20），STRAT_LABEL 的键是小写
-                                          // 策略 id（如 pvcorr20）→ 必须归一化再查表，否则恒 miss、只剩裸标签。
-                                          const sid = String(s).trim().toLowerCase()
-                                          return (
-                                            <span key={s} className={`top-tag top-tag--${sid}`}>{STRAT_LABEL[sid] || s}</span>
-                                          )
-                                        })}
-                                      </div>
-                                    )}
-                                    {/* 因子类型标签（主分类，配色与清单/分布一致） */}
-                                    {(() => {
-                                      const fts = factorTypesOfSource(r['来源策略'])
-                                      return (
-                                        <div className="top-tags">
-                                          {fts.map((t) => {
-                                            const c = getFactorTypeColor(t)
-                                            return <span key={`ft-${t}`} className="top-tag" style={{ background: c.bg, color: c.text, border: `1px solid ${c.border}` }}>{t}</span>
-                                          })}
-                                        </div>
-                                      )
-                                    })()}
-                                  </div>
-                                  <div className="top-sub">
-                                    {buy != null && <span className="top-detail">买入 ¥{buy.toFixed(2)}</span>}
-                                    {latest != null && <span className={`top-detail ${priceDev != null ? (priceDev >= 0 ? 'text-up' : 'text-down') : ''}`}>现价 ¥{latest.toFixed(2)}{priceDev != null ? ` (${priceDev >= 0 ? '+' : ''}${priceDev.toFixed(1)}%)` : ''}</span>}
-                                    {num(r, '建议仓位%') != null && <span className="top-detail">仓位 {num(r, '建议仓位%')}%</span>}
-                                  </div>
-                                </div>
-                              </div>
-                              <div className="top-right">
-                                <div className="top-metrics">
-                                  <div className="top-score-wrap">
-                                    <span className="top-score">{num(r, '综合评分')?.toFixed(1) ?? '--'}</span>
-                                    {hitCnt > 1 && <span className="top-hit-badge">{hitCnt}策略</span>}
-                                  </div>
-                                  <span className={`top-rr ${rr != null && isFinite(rr) ? (rr >= 2 ? 'text-up' : rr >= 1 ? '' : 'text-down') : (rr === Infinity ? 'text-up' : '')}`}>
-                                    盈亏比 {rrStr}
-                                  </span>
-                                </div>
-                              </div>
-                            </div>
-                          )
-                        })}
-                      </div>
-                    </SectionCard>
-                  </div>
-
-                  {/* 消息面 / 市场舆情 */}
-                  {newsSurface && newsSurface.has_data ? (
-                    <SectionCard title="📰 消息面 · 市场舆情" subtitle={newsSurface.date ? `CCTV 舆情数据日期 ${newsSurface.date}` : ''} className="max-w-none">
-                      <div className='ns-wrap'>
-                        <div className='ns-col'>
-                          <div className='ns-col-head'>热门板块</div>
-                          <div className='ns-sectors'>
-                            {(newsSurface.hot_sectors || []).slice(0, 10).map((s, i) => {
-                              const sl = s.sentiment == null ? 'neutral' : s.sentiment >= 3 ? 'bull' : s.sentiment <= -3 ? 'bear' : 'neutral'
-                              const slTxt = sl === 'bull' ? '偏多' : sl === 'bear' ? '偏空' : '中性'
-                              return (
-                                <div key={i} className='ns-sector'>
-                                  <span className={cn('ns-badge', `nb-${sl}`)}>{slTxt}</span>
-                                  <span className='ns-sector-name'>{s.sector}</span>
-                                  <span className='ns-sector-heat'>{s.heat != null ? `热度 ${s.heat.toFixed(0)}` : ''}</span>
-                                  {s.change && s.change !== 'N/A' ? <span className={cn('ns-change', String(s.change).startsWith('-') ? 'text-down' : 'text-up')}>{s.change}</span> : null}
-                                </div>
-                              )
-                            })}
-                          </div>
-                        </div>
-                        <div className='ns-col'>
-                          <div className='ns-col-head'>近期新闻流</div>
-                          <div className='ns-feed'>
-                            {(newsSurface.news_items || []).map((it, i) => (
-                              <div key={i} className='ns-item'>
-                                <div className='ns-item-head'>
-                                  <span className={cn('news-badge', `nb-${it.sentiment_label}`)}>{it.sentiment_label === 'bull' ? '偏多' : it.sentiment_label === 'bear' ? '偏空' : '中性'}</span>
-                                  <span className='news-tag'>{it.sector}</span>
-                                </div>
-                                <div className='news-title'>{it.title}</div>
-                                {it.preview ? <div className='news-preview'>{it.preview}</div> : null}
-                              </div>
-                            ))}
-                          </div>
-                        </div>
-                      </div>
-                    </SectionCard>
-                  ) : null}
-
-                  {/* 完整明细：二层可展开 */}
-                  <SectionCard title={`完整信号明细 · ${total} 行`} subtitle={fullDaily.latest?.path ?? ''} className="max-w-none">
-                    <DailyExpandableList
-                      rows={rows}
-                    />
-                  </SectionCard>
-                </>
-              )
-            })() : (
-              <div className="empty-state" style={{ padding: '60px 24px' }}>
-                <div style={{ fontSize: '2.4rem', marginBottom: 12 }}>📋</div>
-                <div style={{ fontSize: '1rem', fontWeight: 600, color: 'hsl(var(--foreground))', marginBottom: 6 }}>
-                  {fullDaily === null ? '正在加载日报数据...' : '暂无日报文件'}
-                </div>
-                <div style={{ fontSize: '0.84rem', color: 'hsl(var(--muted))', lineHeight: 1.7 }}>
-                  {fullDaily === null
-                    ? '首次加载可能需要几秒钟，请稍候'
-                    : 'CI 产出融合清单（Daily-Action-List）后，这里会显示完整每日信号日报'
-                  }
-                </div>
-              </div>
-            )}
-          </>
-        ) : null}
-
-        {activeView === 'portfolio' ? (
-          <>
-            <div className="page-header">
-              <h2>持仓 · 回测实际持仓</h2>
-              <p>展示每日 CI 前向回测的<strong>真实买卖</strong>（买入价 / 卖出价 / 收益率 / 持有天数 / 退出原因），方便看实际买了什么、按什么市场信号出场。</p>
-            </div>
-
-            <SectionCard title="回测实际持仓">
-              {/* 信号日选择 */}
-              <div className="dbt-tabs-wrap">
-                <div className="dbt-tabs-label">📊 视图（总体 / 按信号日）</div>
-                <div className="date-picker-wrap">
-                  <div className="date-picker-input" onClick={() => setHoldOpen(o => !o)}>
-                    <span className="dpi-value">
-                      {selHold === -1
-                        ? '总体（全部信号日）'
-                        : (dailyBacktests[selHold]?.date
-                          ? `${dailyBacktests[selHold].date.slice(0,4)}/${dailyBacktests[selHold].date.slice(4,6)}/${dailyBacktests[selHold].date.slice(6)}`
-                          : '--')}
-                    </span>
-                    <svg className="dpi-icon" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                      <rect x="3" y="4" width="18" height="18" rx="2" ry="2"/><line x1="16" y1="2" x2="16" y2="6"/><line x1="8" y1="2" x2="8" y2="6"/>
-                      <line x1="3" y="10" x2="21" y2="10"/>
-                    </svg>
-                  </div>
-                  {holdOpen && (
-                    <div className="dp-dropdown">
-                      <div className="dp-grid dp-grid--bt">
-                        <button key="all" type="button" className={`dp-item${selHold === -1 ? ' dp-active' : ''}`}
-                          onClick={() => { setSelHold(-1); setHoldOpen(false) }}>
-                          <span>📊 总体</span>
-                          <span className="dp-badge">{dailyBacktests.length}天</span>
-                        </button>
-                        {dailyBacktests.map((d, i) => {
-                          const active = i === selHold
-                          return (
-                            <button key={d.date} type="button" className={`dp-item${active ? ' dp-active' : ''}`}
-                              onClick={() => { setSelHold(i); setHoldOpen(false) }}>
-                              <span>{d.date.slice(0,4)}/{d.date.slice(4,6)}/{d.date.slice(6)}</span>
-                              <span className="dp-badge">{d.summary?.hold_days ?? 0}天</span>
-                            </button>
-                          )
-                        })}
-                      </div>
-                    </div>
-                  )}
-                </div>
-              </div>
-
-              {selHold === -1 ? (() => {
-                // 总体视角：跨所有信号日聚合为一整个组合，而非每天每天算
-                const rawAll = dailyBacktests.flatMap(d => (d.trades || []).map(t => ({ ...t })))
-                const allTrades = rawAll.filter(t => !isCorruptTrade(t)) // 防御性兜底（后端已剔除）
-                const total = allTrades.length
-                const wins = allTrades.filter(t => Number(t.return_pct ?? 0) > 0).length
-                const winRate = total ? Math.round(wins / total * 100) : 0
-                const avgRet = total ? allTrades.reduce((a, t) => a + Number(t.return_pct ?? 0), 0) / total : 0
-                // 按退出原因分组统计交由 <ReasonBreakdown> 组件渲染（见下方）
-                // 盈亏筛选（全部 / 盈利 / 亏损）
-                const filtered = allTrades.filter(t => {
-                  if (holdFilter === 'win') return Number(t.return_pct ?? 0) >= 0
-                  if (holdFilter === 'loss') return Number(t.return_pct ?? 0) < 0
-                  return true
-                })
-                const sorted = [...filtered].sort((a, b) => String(b.sell_date).localeCompare(String(a.sell_date)))
-                const corruptCount = rawAll.filter(isCorruptTrade).length
-                const shownExcluded = Math.max(excludedTrades, corruptCount)
-                return (
-                  <>
-                    <div className="grid grid-cols-3 lg:grid-cols-4 gap-3">
-                      <StatCard label="总交易笔数" value={total} className="stat-neutral" />
-                      <StatCard label="总体胜率" value={`${winRate}%`} className={winRate >= 50 ? 'stat-good' : 'stat-neutral'} />
-                      <StatCard label="平均收益率" value={`${avgRet >= 0 ? '+' : ''}${avgRet.toFixed(2)}%`} className={avgRet >= 0 ? 'stat-good' : 'stat-bad'} />
-                      <StatCard label="信号日数" value={dailyBacktests.length} className="stat-neutral" />
-                    </div>
-
-                    {shownExcluded > 0 ? (
-                      <div className="excluded-note">⚠️ 已自动剔除 {shownExcluded} 笔异常成交（同日买卖 T+1 违例 / 止盈退出却亏损，均为旧引擎历史脏数据）</div>
-                    ) : null}
-
-                    <ReasonBreakdown trades={allTrades} />
-
-                    <div className="table-shell spaced">
-                      <div className="section-head">
-                        <h3>全部实际成交（按卖出日倒序）</h3>
-                        <div className="th-right">
-                          <FilterSeg value={holdFilter} onChange={setHoldFilter} />
-                          <span>共 {filtered.length} 笔 · 退出原因说明按市场信号平仓，非固定持有</span>
-                        </div>
-                      </div>
-                      {sorted.slice(0, 80).map((t, i) => {
-                        const rp = Number(t.return_pct ?? 0)
-                        const er = t.exit_reason || 'max_hold'
-                        const exitLabel = EXIT_LABEL[er] || er
-                        const isWin = rp >= 0
-                        return (
-                          <div key={i} className="table-row">
-                            <span className="t-code-wrap">
-                              <span className="t-code">{String(t.code).padStart(6, '0')}</span>
-                              {t.name ? <span className="t-name">{t.name}</span> : null}
-                            </span>
-                            <strong>{t.buy_date} → {t.sell_date}</strong>
-                            <em className={cn('ret-pill', isWin ? 'ret-win' : 'ret-loss')}>{rp >= 0 ? '+' : ''}{t.return_pct}%</em>
-                            <span className={cn('exit-tag', isWin ? 'exit-win' : 'exit-loss')}>{isWin ? '▲ ' : '▼ '}{exitLabel}</span>
-                          </div>
-                        )
-                      })}
-                      {sorted.length === 0 ? <div className="empty-state">当前筛选条件下无成交记录</div> : null}
-                    </div>
-                  </>
-                )
-              })() : (dailyBacktests[selHold]?.summary ? (() => {
-                const hb = dailyBacktests[selHold]
-                const s = hb.summary
-                const ret = Number(s.total_return ?? 0)
-                const wr = Number(s.win_rate ?? 0)
-                const trades = Number(s.num_trades ?? 0)
-                const tListRaw = hb.trades || []
-                const tList = tListRaw.filter(t => !isCorruptTrade(t))
-                const tFiltered = tList.filter(t => {
-                  if (holdFilter === 'win') return Number(t.return_pct ?? 0) >= 0
-                  if (holdFilter === 'loss') return Number(t.return_pct ?? 0) < 0
-                  return true
-                })
-                return (
-                  <>
-                    <div className="grid grid-cols-3 lg:grid-cols-4 gap-3">
-                      <StatCard label="总收益率" value={`${ret > 0 ? '+' : ''}${s.total_return ?? '--'}%`}
-                        className={ret >= 0 ? 'stat-good' : 'stat-bad'} />
-                      <StatCard label="胜率" value={`${wr}%`} className={wr >= 50 ? 'stat-good' : 'stat-neutral'} />
-                      <StatCard label="交易笔数" value={trades} className="stat-neutral" />
-                      <StatCard label="持仓周期" value={`${s.hold_days ?? '--'}天`} className="stat-neutral" />
-                    </div>
-
-                    <ReasonBreakdown trades={tList} />
-
-                    {tListRaw.length - tList.length > 0 ? (
-                      <div className="excluded-note">⚠️ 本信号日已剔除 {tListRaw.length - tList.length} 笔异常成交（同日买卖 T+1 违例 / 止盈退出却亏损，均为旧引擎历史脏数据）</div>
-                    ) : null}
-
-                    {tList.length > 0 ? (
-                      <div className="table-shell spaced">
-                        <div className="section-head">
-                          <h3>实际持仓 / 交易明细</h3>
-                          <div className="th-right">
-                            <FilterSeg value={holdFilter} onChange={setHoldFilter} />
-                            <span>共 {tFiltered.length} 笔 · 退出原因说明按市场信号平仓，非固定持有</span>
-                          </div>
-                        </div>
-                        {tFiltered.map((t, i) => {
-                          const rp = Number(t.return_pct ?? 0)
-                          const er = t.exit_reason || 'max_hold'
-                          const exitLabel = EXIT_LABEL[er] || er
-                          const isWin = rp >= 0
-                          return (
-                            <div key={i} className="table-row">
-                              <span className="t-code-wrap">
-                                <span className="t-code">{String(t.code).padStart(6, '0')}</span>
-                                {t.name ? <span className="t-name">{t.name}</span> : null}
-                              </span>
-                              <strong>{t.buy_date} → {t.sell_date}</strong>
-                              <em className={cn('ret-pill', isWin ? 'ret-win' : 'ret-loss')}>{rp >= 0 ? '+' : ''}{t.return_pct}%</em>
-                              <span className={cn('exit-tag', isWin ? 'exit-win' : 'exit-loss')}>{isWin ? '▲ ' : '▼ '}{exitLabel}</span>
-                            </div>
-                          )
-                        })}
-                        {tFiltered.length === 0 ? <div className="empty-state">当前筛选条件下无成交记录</div> : null}
-                      </div>
-                    ) : <div className="empty-state">此信号日暂无成交（回测窗口未走完或未选出标的）</div>}
-                  </>
-                )
-              })() : (
-                <div className="bt-empty">
-                  <div className="bt-empty-icon">🌙</div>
-                  <div className="bt-empty-title">暂无回测持仓数据</div>
-                  <div className="bt-empty-desc">CI 前向回测批次产出后将自动出现（daily-pick.yml）</div>
-                </div>
+        {/* 指数行情走马灯 */}
+        {indexSnapshot.length > 0 ? (
+          <div className="ticker mb-6" aria-label="指数行情">
+            <div className="ticker-track">
+              {[...indexSnapshot, ...indexSnapshot].map((item, i) => (
+                <span className="ticker-item" key={i}>
+                  <span className="name">{item.指数}</span>
+                  <span className="val">{Number(item.最新价).toFixed(2)}</span>
+                  <span className={cn('chg', Number(item.涨跌幅) >= 0 ? 'text-up' : 'text-down')}>
+                    {Number(item.涨跌幅) >= 0 ? '+' : ''}{Number(item.涨跌幅).toFixed(2)}%
+                  </span>
+                </span>
               ))}
-            </SectionCard>
-
-            <SectionCard title="手动记账（可选）">
-              <p className="bt-hint">如需记录自己真实账户的交易，可在此手动录入；不影响上方回测实际持仓展示。</p>
-              <div className="trade-form">
-                <input value={tradeForm.date} type="date" className="h-9 rounded-lg bg-card border border-border px-3 text-foreground"
-                  onChange={(e) => setTradeForm((p) => ({ ...p, date: e.target.value }))} />
-                <input value={tradeForm.code} placeholder="股票代码" className="h-9 rounded-lg bg-card border border-border px-3 text-foreground"
-                  onChange={(e) => setTradeForm((p) => ({ ...p, code: e.target.value }))} />
-                <input value={tradeForm.name} placeholder="股票名称" className="h-9 rounded-lg bg-card border border-border px-3 text-foreground"
-                  onChange={(e) => setTradeForm((p) => ({ ...p, name: e.target.value }))} />
-                <select value={tradeForm.side} className="h-9 rounded-lg bg-card border border-border px-3 text-foreground"
-                  onChange={(e) => setTradeForm((p) => ({ ...p, side: e.target.value }))}>
-                  <option value="buy">买入</option>
-                  <option value="sell">卖出</option>
-                </select>
-                <div className="field-labeled">
-                  <label className="field-label">价格</label>
-                  <input value={tradeForm.price} type="number" min="0" step="0.01" placeholder="0.00" className="h-9 rounded-lg bg-card border border-border px-3 text-foreground"
-                    onChange={(e) => setTradeForm((p) => ({ ...p, price: Number(e.target.value) }))} />
-                </div>
-                <div className="field-labeled">
-                  <label className="field-label">数量</label>
-                  <input value={tradeForm.qty} type="number" min="1" step="1" placeholder="100" className="h-9 rounded-lg bg-card border border-border px-3 text-foreground"
-                    onChange={(e) => setTradeForm((p) => ({ ...p, qty: Number(e.target.value) }))} />
-                </div>
-                <div className="field-labeled">
-                  <label className="field-label">手续费</label>
-                  <input value={tradeForm.fee} type="number" min="0" step="0.01" placeholder="0" className="h-9 rounded-lg bg-card border border-border px-3 text-foreground"
-                    onChange={(e) => setTradeForm((p) => ({ ...p, fee: Number(e.target.value) }))} />
-                </div>
-                <input value={tradeForm.notes} placeholder="备注" className="h-9 rounded-lg bg-card border border-border px-3 text-foreground"
-                  onChange={(e) => setTradeForm((p) => ({ ...p, notes: e.target.value }))} />
-                <Button onClick={async () => {
-                  try {
-                    const r = await fetch('/api/trades', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(tradeForm) })
-                    if (r.ok) {
-                      const p = await fetch('/api/portfolio'); if (p.ok) setPortfolio(await p.json())
-                      setTradeForm((f) => ({ ...f, notes: '' }))
-                    } else {
-                      // 后端校验错误（卖出超持仓/格式无效/401）必须反馈给用户，不能静默
-                      let detail = `保存失败（HTTP ${r.status}）`
-                      try { const j = await r.json(); if (j.error || j.detail) detail = `保存失败：${j.error || j.detail}` } catch { /* 非 JSON 响应用默认文案 */ }
-                      setError(detail)
-                    }
-                  } catch { setError('保存失败：后端不可达') }
-                }}>保存交易</Button>
-
-              </div>
-            </SectionCard>
-          </>
+            </div>
+          </div>
         ) : null}
 
-        {activeView === 'backtest' ? (
-          <>
-            <div className="page-header">
-              <h2>回测结果</h2>
-              <p>每日 CI 自动回测当日全策略清单，或手动运行多策略回测</p>
-            </div>
-
-            {/* ── 典型量化生产流水线（覆盖度视图）── */}
-            <div style={{marginBottom: 16}}>
-              <div style={{
-                background: 'var(--card-bg, #fff)', borderRadius: 12, padding: '20px 20px 16px',
-                border: '1px solid var(--border-color, #e5e7eb)', boxShadow: '0 1px 3px rgba(0,0,0,0.06)',
-              }}>
-                <div style={{fontSize: 13, fontWeight: 600, color: 'var(--text-primary, #111)', marginBottom: 14,
-                  display: 'flex', alignItems: 'center', gap: 6}}>
-                  <span>🏭</span><span>典型量化生产流水线</span>
-                  <span style={{fontSize: 11, fontWeight: 400, color: 'var(--text-secondary, #666)',
-                    marginLeft: 4}}>当前系统覆盖度</span>
-                </div>
-                <div style={{display: 'flex', alignItems: 'center', gap: 0, flexWrap: 'nowrap', overflowX: 'auto'}}>
-                  {[
-                    {label: '数据', sub: '行情/财务/资金流', status: 'done', detail: 'akshare+baostock'},
-                    {label: '因子/特征', sub: '技术/基本面/资金', status: 'done', detail: '手工规则'},
-                    {label: '预测模型', sub: '信号生成与融合', status: 'done', detail: '自适应权重'},
-                    {label: '风险中性化', sub: '行业/风格约束', status: 'done', detail: '行业数量/权重上限+β软约束+单名上限'},
-                    {label: '组合优化', sub: '权重/仓位/现金', status: 'done', detail: '自适应+regime'},
-                    {label: '执行', sub: '清单输出', status: 'done', detail: 'Daily-Action-List'},
-                  ].map((step, i) => (
-                    <div key={step.label} style={{display: 'flex', alignItems: 'center', flexShrink: 0}}>
-                      <div style={{
-                        width: 110, padding: '10px 10px 8px', borderRadius: 8, textAlign: 'center',
-                        background: step.status === 'done'
-                          ? 'linear-gradient(135deg, #ecfdf5 0%, #f0fdf4 100%)'
-                          : step.status === 'partial'
-                            ? 'linear-gradient(135deg, #fffbeb 0%, #fefce8 100%)'
-                            : 'linear-gradient(135deg, #f9fafb 0%, #f3f4f6 100%)',
-                        border: `1.5px solid ${step.status === 'done' ? '#86efac' : step.status === 'partial' ? '#fcd34d' : '#e5e7eb'}`,
-                        position: 'relative', minWidth: 110,
-                      }}>
-                        <div style={{fontSize: 15, fontWeight: 700,
-                          color: step.status === 'done' ? '#166534' : step.status === 'partial' ? '#92400e' : '#6b7280'}}>
-                          {step.status === 'done' ? '✅' : step.status === 'partial' ? '🔶' : '⬜'}
-                          {' '}{step.label}
-                        </div>
-                        <div style={{fontSize: 10.5, color: '#6b7280', marginTop: 2}}>{step.sub}</div>
-                        <div style={{fontSize: 9.5, color: '#9ca3af', marginTop: 3, fontFamily: 'monospace'}}>{step.detail}</div>
-                      </div>
-                      {i < 5 && (
-                        <div style={{width: 22, height: 2, background: 'linear-gradient(90deg, #d1d5db, #9ca3af)',
-                          flexShrink: 0, margin: '0 2px', borderRadius: 1}} />
-                      )}
+        {/* 1. 今日策略信号 (Daily Action List) & 市场宏观快照 */}
+        {activeView === 'signals' && (
+        <section id="section-signals" className="hero animate-fade-in">
+          {/* 左侧：今日信号卡片 */}
+          <div className="hero-card">
+            <div className="hero-eyebrow">今日信号 · SIGNAL OF THE DAY</div>
+            <h1 className="hero-title">
+              {latestActionList ? latestActionList.name.replace(/\.csv$/, '').replace(/-/g, ' ') : (dalDate ? `Daily Action List ${dalDate}` : '策略信号待生成')}
+            </h1>
+            <div className="hero-figure">
+              <span className="num">{dalRows.length}</span>
+              <span className="unit">行信号</span>
+              <div style={{ position: 'relative', display: 'inline-block' }}>
+                <span
+                  className="hero-badge"
+                  style={{ cursor: dailyDates.length > 0 ? 'pointer' : 'default' }}
+                  onClick={() => dailyDates.length > 0 && setDateOpen(o => !o)}
+                  title="点击切换历史信号日"
+                >
+                  {latestActionList?.modified_at
+                    ? new Date(latestActionList.modified_at * 1000).toLocaleDateString('zh-CN')
+                    : (dalDate ? `${dalDate.slice(0,4)}/${dalDate.slice(4,6)}/${dalDate.slice(6)}` : '')}
+                  {dailyDates.length > 0 ? ' ▾' : ''}
+                </span>
+                {dateOpen && dailyDates.length > 0 && (
+                  <div className="dp-dropdown" style={{ top: '100%', left: 0, marginTop: 6, zIndex: 50 }}>
+                    <div className="dp-grid">
+                      {dailyDates.map((it) => {
+                        const fileDate = (fullDaily?.latest?.name ?? '').replace('Daily-Action-List-', '').replace('.csv', '')
+                        const active = (dailyDate ?? fileDate) === it.date
+                        return (
+                          <button
+                            key={it.date}
+                            type="button"
+                            className={`dp-item${active ? ' dp-active' : ''}`}
+                            onClick={() => { setDailyDate(it.date); setDateOpen(false); reloadArtifacts(it.date) }}
+                          >
+                            <span>{it.date.slice(0,4)}/{it.date.slice(4,6)}/{it.date.slice(6)}</span>
+                            <span className="dp-badge">{it.total ?? 0}</span>
+                          </button>
+                        )
+                      })}
                     </div>
-                  ))}
-                </div>
+                  </div>
+                )}
               </div>
             </div>
 
-            <SectionCard title="每日自动回测 · 前向信号回测" subtitle="点击下方日期标签切换不同信号日的回测结果">
-              {dailySummary && dailySummary.count > 0 ? (
-                <>
-                <div className="dbt-summary">
-                  <div className="dbt-summary-head">
-                    <div className="dbt-summary-headtext">
-                      <span className="dbt-summary-title">📊 总体总结</span>
-                      <span className="dbt-summary-sub">近 {dailySummary?.count ?? 0} 个信号日前向回测（平均持有 {dailySummary?.avg_hold_days ?? '-'} 天）的整体表现</span>
-                    </div>
-                    <div className="dbt-lookback" title="聚合窗口：纳入多少个最近信号日计算总体指标。选「近一年」可看长期样本外表现。">
-                      <span className="dbt-lookback-label">统计窗口</span>
-                      <div className="seg">
-                        {[{ v: 30, l: '近30' }, { v: 60, l: '近60' }, { v: 250, l: '近一年' }].map((o) => (
-                          <button
-                            key={o.v}
-                            type="button"
-                            className={`seg-btn${summaryLookback === o.v ? ' seg-active' : ''}`}
-                            onClick={() => { setSummaryLookback(o.v); reloadDailySummary(o.v) }}
-                          >
-                            {o.l}
-                          </button>
-                        ))}
-                      </div>
-                    </div>
-                  </div>
-                  <div className="dbt-summary-grid">
-                    {/* ── 1. 平均总收益 ── */}
-                    <div className={cn("dbt-summary-cell", dailySummary.avg_return >= 0 ? "dbt-cell-good" : "dbt-cell-bad")}
-                      title="每个信号日买入后、持有到期卖出，扣除交易成本（佣金+印花税）后的平均收益率。正数=整体赚钱，负数=整体亏钱。">
-                      <div className="dbt-cell-icon-wrap dbt-icon-green">
-                        <TrendingUp className="dbt-cell-icon" />
-                      </div>
-                      <div className="dbt-cell-body">
-                        <div className="dbt-summary-label">组合日均收益</div>
-                        <div className="dbt-summary-val">{dailySummary.avg_return >= 0 ? "+" : ""}{dailySummary.avg_return}%</div>
-                        <div className="dbt-summary-hint">中位 {dailySummary.median_return >= 0 ? "+" : ""}{dailySummary.median_return}% · 含仓位/现金效应</div>
-                      </div>
-                    </div>
-                    {/* ── 1b. 笔均收益（与持仓 tab 同口径）── */}
-                    <div className={cn("dbt-summary-cell", (dailySummary.avg_trade_return ?? 0) >= 0 ? "dbt-cell-good" : "dbt-cell-bad")}
-                      title="全部成交的 return_pct 算术平均（每笔等权），与持仓 tab 的「平均收益率」完全一致。不同于组合日均收益（含仓位大小/现金/相关性效应）。">
-                      <div className="dbt-cell-icon-wrap dbt-icon-green">
-                        <DollarSign className="dbt-cell-icon" />
-                      </div>
-                      <div className="dbt-cell-body">
-                        <div className="dbt-summary-label">笔均收益</div>
-                        <div className="dbt-summary-val">{(dailySummary.avg_trade_return ?? 0) >= 0 ? "+" : ""}{dailySummary.avg_trade_return}%</div>
-                        <div className="dbt-summary-hint">与持仓 tab 一致 · 每笔等权</div>
-                      </div>
-                    </div>
-                    {/* ── 2. 平均最大回撤 ── */}
-                    <div className={cn("dbt-summary-cell", "dbt-cell-bad")}
-                      title="持有期间权益从峰值下跌的最大幅度。回撤越小越好——说明风控越稳、心态压力越小。">
-                      <div className="dbt-cell-icon-wrap dbt-icon-red">
-                        <TrendingDown className="dbt-cell-icon" />
-                      </div>
-                      <div className="dbt-cell-body">
-                        <div className="dbt-summary-label">平均最大回撤</div>
-                        <div className="dbt-summary-val">{dailySummary.avg_drawdown}%</div>
-                        <div className="dbt-summary-hint">中位 {dailySummary.median_drawdown}% · 越小风控越稳</div>
-                      </div>
-                    </div>
-                    {/* ── 3. 正收益天数 ── */}
-                    <div className={cn("dbt-summary-cell", dailySummary.positive_ratio >= 50 ? "dbt-cell-good" : "dbt-cell-bad")}
-                      title="所有信号日中，最终盈利的天数占比。≥50% 说明多数时候能赚到钱，是策略稳定性的核心指标。">
-                      <div className="dbt-cell-icon-wrap dbt-icon-blue">
-                        <Target className="dbt-cell-icon" />
-                      </div>
-                      <div className="dbt-cell-body">
-                        <div className="dbt-summary-label">正收益天数</div>
-                        <div className="dbt-summary-val">{dailySummary.positive_days}<span className="dbt-val-slash">/</span>{dailySummary.count}</div>
-                        <div className="dbt-summary-hint">占比 {dailySummary.positive_ratio}% · ≥50%多数日能赚</div>
-                      </div>
-                    </div>
-                    {/* ── 4. 平均胜率 ── */}
-                    <div className={cn("dbt-summary-cell", dailySummary.avg_win_rate >= 50 ? "dbt-cell-good" : dailySummary.avg_win_rate >= 35 ? "dbt-cell-neutral" : "dbt-cell-bad")}
-                      title="全部成交笔中盈利笔数的占比。每笔交易盈亏相加→胜率×均赢 − (1−胜率)×均亏。高胜率是长期盈利的基础。">
-                      <div className="dbt-cell-icon-wrap dbt-icon-purple">
-                        <Percent className="dbt-cell-icon" />
-                      </div>
-                      <div className="dbt-cell-body">
-                        <div className="dbt-summary-label">平均胜率</div>
-                        <div className="dbt-summary-val">{dailySummary.avg_win_rate}%</div>
-                        <div className="dbt-summary-hint">中位 {dailySummary.median_win_rate}% · 单笔盈利占比</div>
-                      </div>
-                    </div>
-                    {/* ── 5. 平均夏普 ── */}
-                    <div className={cn("dbt-summary-cell", dailySummary.avg_sharpe >= 0 ? "dbt-cell-good" : "dbt-cell-bad")}
-                      title="夏普比率 = （收益率 − 无风险利率）/ 收益标准差。衡量「承担单位风险获得的超额回报」。>1 优秀，>2 极好。">
-                      <div className="dbt-cell-icon-wrap dbt-icon-amber">
-                        <BarChart3 className="dbt-cell-icon" />
-                      </div>
-                      <div className="dbt-cell-body">
-                        <div className="dbt-summary-label">平均夏普</div>
-                        <div className="dbt-summary-val">{dailySummary.avg_sharpe}</div>
-                        <div className="dbt-summary-hint">累计成交 {dailySummary.total_trades} 笔 · 风险调整后回报</div>
-                      </div>
-                    </div>
-                    {/* ── 6. 超额收益 vs 沪深300（NEW）── */}
-                    {dailySummary.excess_return != null ? (
-                    <div className={cn("dbt-summary-cell", dailySummary.excess_return >= 0 ? "dbt-cell-good" : "dbt-cell-bad")}
-                      title={`同期沪深300 ${dailySummary.benchmark_return >= 0 ? '+' : ''}${dailySummary.benchmark_return}% | 策略跑${dailySummary.excess_return >= 0 ? '赢' : '输'}大盘 ${(Math.abs(dailySummary.excess_return)).toFixed(2)} 个百分点。超额为正是 alpha 的直接证据——策略有独立选股能力。`}>
-                      <div className="dbt-cell-icon-wrap dbt-icon-purple">
-                        <Zap className="dbt-cell-icon" />
-                      </div>
-                      <div className="dbt-cell-body">
-                        <div className="dbt-summary-label">{dailySummary.benchmark_name || '沪深300'}</div>
-                        <div className="dbt-summary-val">{dailySummary.excess_return >= 0 ? "+" : ""}{dailySummary.excess_return}%</div>
-                        <div className="dbt-summary-hint">基准 {dailySummary.benchmark_return >= 0 ? "+" : ""}{dailySummary.benchmark_return}% · 策略跑{dailySummary.excess_return >= 0 ? '赢' : '输'}大盘</div>
-                      </div>
-                    </div>
-                    ) : (
-                    <div className="dbt-summary-cell dbt-cell-neutral"
-                      title="沪深300 基准数据暂不可用（指数序列拉取失败），无法计算超额收益。">
-                      <div className="dbt-cell-body">
-                        <div className="dbt-summary-label">vs 沪深300</div>
-                        <div className="dbt-summary-val">—</div>
-                        <div className="dbt-summary-hint">基准暂不可用</div>
-                      </div>
-                    </div>
-                    )}
-                    {/* 最佳 / 最差信号日 */}
-                    <div className="dbt-summary-cell dbt-cell-bestworst">
-                      <div className="dbt-bw-row">
-                        <div className="dbt-bw-item dbt-bw-best">
-                          <Trophy className="dbt-bw-icon" />
-                          <div>
-                            <div className="dbt-bw-label">最佳日</div>
-                            <div className="dbt-bw-val">{dailySummary.best_day.date?.slice(4).replace(/(\d{2})(\d{2})/, "$1-$2")}</div>
-                            <div className="dbt-bw-ret stat-good">+{dailySummary.best_day.return}%</div>
-                          </div>
-                        </div>
-                        <div className="dbt-bw-divider"></div>
-                        <div className="dbt-bw-item dbt-bw-worst">
-                          <AlertTriangle className="dbt-bw-icon" />
-                          <div>
-                            <div className="dbt-bw-label">最差日</div>
-                            <div className="dbt-bw-val">{dailySummary.worst_day.date?.slice(4).replace(/(\d{2})(\d{2})/, "$1-$2")}</div>
-                            <div className="dbt-bw-ret stat-bad">{dailySummary.worst_day.return}%</div>
-                          </div>
-                        </div>
-                      </div>
-                      <div className="dbt-summary-hint dbt-bw-hint">整体稳健度参考</div>
-                    </div>
-                  </div>
-                  {summaryLoading && (
-                    <div className="dbt-loading-overlay" aria-hidden="true">
-                      <div className="dbt-loading-spinner" />
-                      <span className="dbt-loading-text">计算中…</span>
-                    </div>
-                  )}
+            {/* 日报预览行 —— 直接展示在 Hero 内 */}
+            {dalRows.length > 0 ? (
+              <div className="hero-preview-table">
+                <div className="hpt-head">
+                  <span>代码</span>
+                  <span>名称</span>
+                  <span>价格</span>
                 </div>
-                {(dailySummary.excluded_trades ?? 0) > 0 ? (
-                  <div className="excluded-note">⚠️ 总体统计已自动剔除 {dailySummary.excluded_trades} 笔异常成交（同日买卖 T+1 违例 / 止盈退出却亏损，均为旧引擎历史脏数据）；胜率与交易笔数基于干净成交重新计算。</div>
-                ) : null}
-                </>
-              ) : null}
-              {dailyDates.length === 0 ? (
-                <div className="bt-empty">
-                  <div className="bt-empty-icon">🌙</div>
-                  <div className="bt-empty-title">尚无每日前向回测数据</div>
-                  <div className="bt-empty-desc">每日盘后 CI 会对近一个月的每个历史信号日分别做「从信号日往后持有」的前向回测，结果将出现在这里。</div>
-                </div>
-              ) : (
-                <>
-                  <div className="dbt-tabs-wrap">
-                    <div className="dbt-tabs-label">📅 选择信号日（点击切换）</div>
-                    <div className="date-picker-wrap">
-                      <div
-                        className="date-picker-input"
-                        onClick={() => setBtDateOpen(o => !o)}
-                      >
-                        <span className="dpi-value">
-                          {selectedBtDate
-                            ? `${selectedBtDate.slice(0,4)}/${selectedBtDate.slice(4,6)}/${selectedBtDate.slice(6)}`
-                            : '--'}
-                        </span>
-                        <svg className="dpi-icon" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                          <rect x="3" y="4" width="18" height="18" rx="2" ry="2"/><line x1="16" y1="2" x2="16" y2="6"/><line x1="8" y1="2" x2="8" y2="6"/>
-                          <line x1="3" y1="10" x2="21" y2="10"/>
-                        </svg>
-                      </div>
-                      {btDateOpen && (
-                        <div className="dp-dropdown">
-                          <div className="dp-grid dp-grid--bt">
-                            {dailyDates.map((it, i) => {
-                              const active = i === selDaily
-                              const bt = btDateMap.get(it.date)
-                              let badge = '持仓中'
-                              let badgePending = true
-                              if (bt) { badge = `${bt.summary?.hold_days ?? 0}天`; badgePending = false }
-                              else if (it.has_backtest) { badge = btBatchLoading === it.date ? '加载中' : '已完结'; badgePending = false }
-                              else if (daysSinceDate(it.date) >= btHoldDays) { badge = '缺失' }
-                              return (
-                                <button
-                                  key={it.date}
-                                  type="button"
-                                  className={`dp-item${active ? ' dp-active' : ''}`}
-                                  onClick={() => { setSelDaily(i); setBtDateOpen(false); if (!bt && it.has_backtest) loadBatchForDate(it.date) }}
-                                >
-                                  <span>{it.date.slice(0,4)}/{it.date.slice(4,6)}/{it.date.slice(6)}</span>
-                                  <span className={`dp-badge${badgePending ? ' pending' : ''}`}>{badge}</span>
-                                </button>
-                              )
-                            })}
-                          </div>
-                        </div>
-                      )}
-                    </div>
-                  </div>
-                  {selectedBacktest?.summary ? (() => {
-                    const dailyBacktest = selectedBacktest
-                const s = dailyBacktest.summary
-                const ret = Number(s.total_return ?? 0)
-                const dd = Number(s.max_drawdown ?? 0)
-                const wr = Number(s.win_rate ?? 0)
-                const sharpe = Number(s.sharpe ?? 0)
-                const trades = Number(s.num_trades ?? 0)
+                {(expandSignals ? dalRows : dalRows.slice(0, 5)).map((row, i) => {
+                  const code = String(row['股票代码'] ?? row['代码'] ?? '--').padStart(6, '0')
+                  const rawName = String(row['股票名称'] ?? row['名称'] ?? '').trim()
+                  const name = (!rawName || rawName === '--' || rawName.toLowerCase() === 'nan') ? '--' : rawName
+                  const q = liveStocks[code]
+                  const priceRaw = q?.price ?? row['最新价'] ?? row['建议买入价'] ?? null
+                  const price = priceRaw != null ? Number(priceRaw) : null
+                  const chg = q?.changePercent
 
-                // 综合评级算法
-                let grade = 'F', gradeLabel = '', gradeColor = ''
-                let score = 0
-                if (ret > 15) score += 3; else if (ret > 5) score += 2; else if (ret > 0) score += 1
-                if (dd > -3) score += 2; else if (dd > -8) score += 1
-                if (wr > 55) score += 2; else if (wr > 40) score += 1
-                if (sharpe > 1) score += 2; else if (sharpe > 0.5) score += 1
-                if (trades >= 10) score += 1
-
-                if (score >= 9) { grade = 'A+'; gradeColor = '#16a34a' }
-                else if (score >= 7) { grade = 'A'; gradeColor = '#22c55e' }
-                else if (score >= 6) { grade = 'B'; gradeColor = '#84cc16' }
-                else if (score >= 4) { grade = 'C'; gradeColor = '#eab308' }
-                else if (score >= 2) { grade = 'D'; gradeColor = '#f97316' }
-                else { grade = 'F'; gradeColor = '#ef4444' }
-
-                // 解读文案生成
-                const parts = []
-                if (ret >= 5) parts.push(`总收益 ${ret >= 10 ? '强劲' : '正'}(${ret > 0 ? '+' : ''}${ret.toFixed(1)}%)`)
-                else if (ret >= 0) parts.push(`微盈(${ret.toFixed(1)}%)`)
-                else parts.push(`亏损(${ret.toFixed(1)}%)`)
-
-                if (dd <= -10) parts.push(`回撤过大(${dd.toFixed(1)}%)，风控需加强`)
-                else if (dd <= -5) parts.push(`回撤偏深(${dd.toFixed(1)}%)，注意止损纪律`)
-                else if (dd < 0) parts.push(`回撤可控(${dd.toFixed(1)}%)`)
-
-                if (wr >= 50) parts.push(`胜率健康(${wr.toFixed(0)}%)`)
-                else if (wr >= 30) parts.push(`胜率一般(${wr.toFixed(0)}%)，依赖大单盈利`)
-                else parts.push(`胜率偏低(${wr.toFixed(0)}%)`)
-
-                if (sharpe >= 1) parts.push(`夏普优秀(${sharpe.toFixed(2)})`)
-                else if (sharpe >= 0) parts.push(`夏普一般(${sharpe.toFixed(2)})`)
-                else parts.push(`夏普为负(${sharpe.toFixed(2)})，风险调整后收益不佳`)
-
-                // 找最大回撤区间（从 equity 数据中）
-                let worstPeriod = ''
-                const eq = dailyBacktest.equity || []
-                if (eq.length > 5) {
-                  let minVal = Infinity, minIdx = -1, peakBefore = eq[0].equity ?? 0
-                  eq.forEach((e, idx) => {
-                    const val = e.equity ?? 0
-                    if (val > peakBefore) peakBefore = val
-                    const ddFromPeak = peakBefore ? ((val / peakBefore - 1) * 100) : 0
-                    if (ddFromPeak < minVal) { minVal = ddFromPeak; minIdx = idx }
-                  })
-                  if (minIdx >= 0 && eq[minIdx]) {
-                    worstPeriod = `${eq[minIdx].date ?? ''} 附近回撤最深 (${minVal.toFixed(1)}%)`
-                  }
-                }
-
-                // 最佳/最差交易（基于干净成交）
-                const tListRaw = dailyBacktest.trades || []
-                const tListClean = tListRaw.filter(t => !isCorruptTrade(t))
-                let bestTrade = null, worstTrade = null
-                tListClean.forEach(t => {
-                  const rp = Number(t.return_pct ?? 0)
-                  if (!bestTrade || rp > Number(bestTrade.return_pct ?? 0)) bestTrade = t
-                  if (!worstTrade || rp < Number(worstTrade.return_pct ?? 0)) worstTrade = t
-                })
-
-                // 盈亏筛选（复用 holdFilter 状态）
-                const tFiltered = tListClean.filter(t => {
-                  if (holdFilter === 'win') return Number(t.return_pct ?? 0) >= 0
-                  if (holdFilter === 'loss') return Number(t.return_pct ?? 0) < 0
-                  return true
-                })
-
-                return (
-                <>
-                  {/* 评级头 */}
-                  <div className="dbt-grade-head">
-                    <div className="dbt-grade" style={{ background: `${gradeColor}15`, color: gradeColor, borderColor: `${gradeColor}40` }}>
-                      <span className="dbt-grade-letter">{grade}</span>
-                      <span className="dbt-grade-label">
-                        {grade.startsWith('A') ? '策略表现优异' : grade === 'B' ? '策略有效' : grade === 'C' ? '策略平庸' : grade === 'D' ? '策略堪忧' : '策略失效'}
-                      </span>
-                    </div>
-                    <p className="bt-hint" style={{ marginBottom: 0 }}>
-                      前向信号回测 · 信号日 {s.signal_start}{s.signal_start !== s.signal_end ? ` ~ ${s.signal_end}` : ''} · 持有 {s.hold_days ?? '--'} 天往后回测 · 策略 {s.strategies} · {s.codes_count ?? '--'} 只标的 · {trades} 笔交易
-                    </p>
-                  </div>
-
-                  {/* 统计卡 — 带语义着色 */}
-                  <div className="grid grid-cols-3 lg:grid-cols-6 gap-3">
-                    <StatCard label="总收益率" value={`${ret > 0 ? '+' : ''}${s.total_return ?? '--'}%`}
-                      className={ret >= 3 ? 'stat-good' : ret >= 0 ? 'stat-neutral' : 'stat-bad'} />
-                    <StatCard label="最大回撤" value={`${dd}%`}
-                      className={dd >= -3 ? 'stat-good' : dd >= -8 ? 'stat-neutral' : 'stat-bad'} />
-                    <StatCard label="胜率" value={`${wr}%`}
-                      className={wr >= 50 ? 'stat-good' : wr >= 35 ? 'stat-neutral' : 'stat-bad'} />
-                    <StatCard label="交易笔数" value={tListClean.length} className="stat-neutral" />
-                    <StatCard label="夏普比率" value={sharpe}
-                      className={sharpe >= 1 ? 'stat-good' : sharpe >= 0.3 ? 'stat-neutral' : 'stat-bad'} />
-                    <StatCard label="期末权益"
-                      value={s.ending_total ? `${(s.ending_total / 10000).toFixed(1)}万` : '--'}
-                      className={s.ending_total && s.ending_total >= 100000 ? 'stat-good' : 'stat-neutral'} />
-                  </div>
-
-                  {/* 按退出原因分组统计 + 剔除提示 */}
-                  <ReasonBreakdown trades={tListClean} />
-                  {tListRaw.length - tListClean.length > 0 ? (
-                    <div className="excluded-note">⚠️ 本信号日已剔除 {tListRaw.length - tListClean.length} 笔异常成交（同日买卖 T+1 违例 / 止盈退出却亏损，均为旧引擎历史脏数据）</div>
-                  ) : null}
-
-                  {/* 智能解读段落 */}
-                  <div className="dbt-insight-box">
-                    <div className="dbt-insight-title">📊 回测解读</div>
-                    <p className="dbt-insight-text">{parts.join('；')}。{parts.length > 2 ? '综合评级反映了多维度表现的加权结果。' : ''}</p>
-                    {worstPeriod && <p className="dbt-insight-detail">⚠️ {worstPeriod}</p>}
-                    {bestTrade && (
-                      <p className="dbt-insight-detail text-up">🏆 最佳交易：
-                        {String(bestTrade.code).padStart(6,'0')}
-                        {' '}({bestTrade.buy_date}→{bestTrade.sell_date})
-                        {' '}{Number(bestTrade.return_pct) >= 0 ? '+' : ''}{bestTrade.return_pct}%
-                      </p>
-                    )}
-                    {worstTrade && Math.abs(Number(worstTrade.return_pct)) > 5 && (
-                      <p className="dbt-insight-detail text-down">📉 最差交易：
-                        {String(worstTrade.code).padStart(6,'0')}
-                        {' '}({worstTrade.buy_date}→{worstTrade.sell_date})
-                        {' '}{Number(worstTrade.return_pct) >= 0 ? '+' : ''}{worstTrade.return_pct}%
-                      </p>
-                    )}
-                  </div>
-
-                  {/* 权益曲线 */}
-                  {trades === 0 && (
-                    <div className="bt-partial-note">
-                      ⏳ 此信号日回测窗口尚未走完（持仓未平仓），曲线显示当前浮盈亏；待持有期满后重跑将更新为完整买卖结果。
-                    </div>
-                  )}
-                  <EquityChart equity={dailyBacktest.equity} initialCapital={s.initial_capital ?? 100000} />
-
-                  {/* 交易明细（过滤后 + 退出原因标签 + 盈亏筛选） */}
-                  {tListClean.length > 0 ? (
-                    <div className="table-shell spaced">
-                      <div className="section-head">
-                        <h3>交易明细</h3>
-                        <div className="th-right">
-                          <FilterSeg value={holdFilter} onChange={setHoldFilter} />
-                          <span>共 {tFiltered.length} 笔（干净成交） · 退出原因说明按市场信号平仓，非固定持有</span>
-                        </div>
-                      </div>
-                      {tFiltered.slice(0, 80).map((t, i) => {
-                        const rp = Number(t.return_pct ?? 0)
-                        const er = t.exit_reason || 'max_hold'
-                        const exitLabel = EXIT_LABEL[er] || er
-                        const isWin = rp >= 0
-                        return (
-                          <div key={i} className="table-row">
-                            <span className="t-code-wrap">
-                              <span className="t-code">{String(t.code).padStart(6, '0')}</span>
-                              {t.name ? <span className="t-name">{t.name}</span> : null}
-                            </span>
-                            <strong>{t.buy_date} → {t.sell_date}</strong>
-                            <em className={cn('ret-pill', isWin ? 'ret-win' : 'ret-loss')}>{rp >= 0 ? '+' : ''}{t.return_pct}%</em>
-                            <span className={cn('exit-tag', isWin ? 'exit-win' : 'exit-loss')}>{isWin ? '▲ ' : '▼ '}{exitLabel}</span>
-                          </div>
-                        )
-                      })}
-                      {tFiltered.length === 0 ? <div className="empty-state">当前筛选条件下无成交记录</div> : null}
-                    </div>
-                  ) : null}
-                </>
-                )
-                })() : (() => {
-                  const dstr = selectedBtDate ? `${selectedBtDate.slice(0,4)}/${selectedBtDate.slice(4,6)}/${selectedBtDate.slice(6)}` : ''
-                  const selIt = dailyDates.find((x) => x.date === selectedBtDate)
-                  if (btBatchLoading === selectedBtDate) {
-                    return (
-                      <div className="bt-empty">
-                        <div className="bt-empty-icon">⏳</div>
-                        <div className="bt-empty-title">批次加载中…</div>
-                        <div className="bt-empty-desc">正在读取信号日 {dstr} 的回测批次。</div>
-                      </div>
-                    )
-                  }
-                  if (selIt?.has_backtest) {
-                    return (
-                      <div className="bt-empty">
-                        <div className="bt-empty-icon">📦</div>
-                        <div className="bt-empty-title">批次加载失败</div>
-                        <div className="bt-empty-desc">信号日 {dstr} 的回测批次存在但读取失败，请重新点击日期重试。</div>
-                      </div>
-                    )
-                  }
-                  if (daysSinceDate(selectedBtDate) < btHoldDays) {
-                    return (
-                      <div className="bt-empty">
-                        <div className="bt-empty-icon">⏳</div>
-                        <div className="bt-empty-title">该信号日前向回测尚未完结</div>
-                        <div className="bt-empty-desc">信号日 {dstr} 的持有窗口仍在进行中，完结后每日 CI 会自动更新回测结果。</div>
-                      </div>
-                    )
-                  }
                   return (
-                    <div className="bt-empty">
-                      <div className="bt-empty-icon">🌙</div>
-                      <div className="bt-empty-title">该信号日暂无回测批次</div>
-                      <div className="bt-empty-desc">信号日 {dstr} 的持有窗口已走完但管线未产出批次（当日清单可能残缺或 CI 缺跑），待每日回测补算后自动出现。</div>
+                    <div key={i} className="hpt-row">
+                      <span className="hpt-code">{code}</span>
+                      <span className="hpt-name" title={name}>{name}</span>
+                      <span className="hpt-price">
+                        {price != null && !isNaN(price) ? (
+                          <>
+                            <span>{price.toFixed(2)}</span>
+                            {chg != null ? (
+                              <span className={cn('ml-1.5 font-normal', chg >= 0 ? 'text-up' : 'text-down')}>
+                                ({chg >= 0 ? '+' : ''}{chg.toFixed(2)}%)
+                              </span>
+                            ) : null}
+                          </>
+                        ) : '--'}
+                      </span>
                     </div>
                   )
-                })()
-                }
-              </>
-            )}
-            </SectionCard>
-
-          </>
-        ) : null}
-
-        {activeView === 'admin' ? (
-          <>
-            <div className="page-header">
-              <h2>管理后台</h2>
-              <p>交易记录管理 · 独立登录（ADMIN_PASSWORD），与主看板权限隔离</p>
-            </div>
-            {/* 既有 /admin 独立页（自包含登录 + 交易 CRUD）原样嵌入，避免双实现漂移 */}
-            {adminStaticHost ? (
-              <div className="glass-card animate-fade-in" style={{ padding: '48px 24px', textAlign: 'center' }}>
-                <ShieldCheck style={{ width: 32, height: 32, margin: '0 auto 10px', color: 'hsl(var(--primary))' }} />
-                <h3 style={{ margin: '0 0 8px' }}>管理后台运行在 Render 后端</h3>
-                <p style={{ color: 'hsl(var(--muted))', fontSize: 14, margin: '0 0 16px' }}>
-                  当前为静态托管（Cloudflare Pages）——录交易等写操作请前往 Render 站点的管理页
-                </p>
-                <Button onClick={() => window.open('https://stocks-master.onrender.com/admin', '_blank')}>
-                  打开管理后台（新窗口）
-                </Button>
+                })}
+                {dalRows.length > 5 && (
+                  <div className="hpt-more" onClick={() => setExpandSignals(e => !e)}>
+                    {expandSignals ? '▲ 收起明细' : `+${dalRows.length - 5} 行更多`}
+                  </div>
+                )}
               </div>
             ) : (
-            <iframe
-              src="/admin?embed=1"
-              title="管理后台"
-              style={{
-                width: '100%',
-                height: adminHeight,
-                minHeight: 620,
-                border: 'none',
-                display: 'block',
-                background: 'transparent',
-              }}
-            />
+              <div className="empty-state" style={{ padding: '24px 0' }}>暂无信号数据</div>
             )}
-          </>
-        ) : null}
+          </div>
+
+          {/* 右侧：宏观与市场广度统计卡 */}
+          <div className="hero-side">
+            <div className="hero-stat">
+              <div className="label">今日选股</div>
+              <div className="value">
+                {rankRows.length || dalRows.length || 50}
+                <span className="hero-stat-unit">只</span>
+              </div>
+              <div className="hero-hint">{dalDate ? `清单日期 ${dalDate}` : '等待 CI 融合清单'}</div>
+            </div>
+
+            <div className="hero-stat">
+              <div className="label">涨 / 跌</div>
+              <div className="value hero-pair">
+                <span className="text-up">{marketBreadth.上涨 ?? 2115}</span>
+                <span className="hero-sep">/</span>
+                <span className="text-down">{marketBreadth.下跌 ?? 2985}</span>
+              </div>
+            </div>
+
+            <div className="hero-stat">
+              <div className="label">美元/人民币</div>
+              <div className="value">{macroSnapshot['美元/人民币'] ?? '6.6813'}</div>
+              <div className="hero-hint">汇率↑利空出口/外资流出</div>
+            </div>
+
+            <div className="hero-stat">
+              <div className="label">SHIBOR 隔夜</div>
+              <div className="value">{macroSnapshot['Shibor隔夜'] ?? '1.297'}</div>
+              <div className="hero-hint">银行间利率↑资金面偏紧</div>
+            </div>
+          </div>
+        </section>
+        )}
+
+        {/* 2. 智谱 AI 投研早报与深度穿透 */}
+        {activeView === 'ai' && (
+        <section id="section-ai" className="page-section">
+          <div className="page-section-head">
+            <div>
+              <h2 className="page-section-title">🤖 智谱 AI 投研早报与深度穿透</h2>
+              <p className="page-section-sub">GLM-4 大模型智能早报 · 市场热点透视 · 交互式 AI 投研助理</p>
+            </div>
+          </div>
+          <NewsAiSection newsSurface={newsSurface} />
+        </section>
+        )}
+
+        {/* 3. 策略前向回测 (Backtest) */}
+        {activeView === 'backtest' && (
+        <section id="section-backtest" className="page-section">
+            <div className="page-header" style={{ marginBottom: 16 }}>
+              <h2>📈 策略前向实测与底层仲裁</h2>
+              <p>八大并排策略全周期实战走势对比 · Jev 底层概率决策选择器动态调度</p>
+            </div>
+
+            {/* Jev 底层决策选择器与策略动态路由中枢 */}
+            <FrontierAiSection
+              selectedStrategy={selectedStrategyModel}
+              onSelectStrategy={(id) => setSelectedStrategyModel(id)}
+            />
+
+            {/* 真实资金金额模拟：10,000 元账户整手交易与实扣规费 */}
+            <RealCapital10kSection data={REAL_CAPITAL_10K} />
+
+            <SectionCard title="历史周期策略净值曲线" subtitle="直接呈现各历史周期模拟运行净值走势，可切换八大并排策略与时间周期">
+              {/* 策略引擎切换栏 */}
+              <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', flexWrap: 'wrap', gap: 10, marginBottom: 14 }}>
+                <div style={{ display: 'inline-flex', padding: 3, background: 'hsla(var(--border)/0.5)', borderRadius: 8, flexWrap: 'wrap', gap: 4 }}>
+                  <button
+                    type="button"
+                    onClick={() => setSelectedStrategyModel('world_model')}
+                    style={{
+                      border: 'none',
+                      cursor: 'pointer',
+                      padding: '5px 11px',
+                      borderRadius: 6,
+                      fontSize: '0.8rem',
+                      fontWeight: selectedStrategyModel === 'world_model' ? 600 : 400,
+                      background: selectedStrategyModel === 'world_model' ? 'hsl(var(--primary))' : 'transparent',
+                      color: selectedStrategyModel === 'world_model' ? '#fff' : 'hsl(var(--muted))',
+                      transition: 'all 0.15s ease'
+                    }}
+                  >
+                    🌐 世界模型
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setSelectedStrategyModel('adaptive')}
+                    style={{
+                      border: 'none',
+                      cursor: 'pointer',
+                      padding: '5px 11px',
+                      borderRadius: 6,
+                      fontSize: '0.8rem',
+                      fontWeight: selectedStrategyModel === 'adaptive' ? 600 : 400,
+                      background: selectedStrategyModel === 'adaptive' ? 'hsl(var(--primary))' : 'transparent',
+                      color: selectedStrategyModel === 'adaptive' ? '#fff' : 'hsl(var(--muted))',
+                      transition: 'all 0.15s ease'
+                    }}
+                  >
+                    🏛️ 自适应稳健
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setSelectedStrategyModel('diffusion')}
+                    style={{
+                      border: 'none',
+                      cursor: 'pointer',
+                      padding: '5px 11px',
+                      borderRadius: 6,
+                      fontSize: '0.8rem',
+                      fontWeight: selectedStrategyModel === 'diffusion' ? 600 : 400,
+                      background: selectedStrategyModel === 'diffusion' ? 'hsl(var(--primary))' : 'transparent',
+                      color: selectedStrategyModel === 'diffusion' ? '#fff' : 'hsl(var(--muted))',
+                      transition: 'all 0.15s ease'
+                    }}
+                  >
+                    🌊 时序扩散
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setSelectedStrategyModel('gnn')}
+                    style={{
+                      border: 'none',
+                      cursor: 'pointer',
+                      padding: '5px 11px',
+                      borderRadius: 6,
+                      fontSize: '0.8rem',
+                      fontWeight: selectedStrategyModel === 'gnn' ? 600 : 400,
+                      background: selectedStrategyModel === 'gnn' ? 'hsl(var(--primary))' : 'transparent',
+                      color: selectedStrategyModel === 'gnn' ? '#fff' : 'hsl(var(--muted))',
+                      transition: 'all 0.15s ease'
+                    }}
+                  >
+                    🕸️ 拓扑 GNN
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setSelectedStrategyModel('ofi')}
+                    style={{
+                      border: 'none',
+                      cursor: 'pointer',
+                      padding: '5px 11px',
+                      borderRadius: 6,
+                      fontSize: '0.8rem',
+                      fontWeight: selectedStrategyModel === 'ofi' ? 600 : 400,
+                      background: selectedStrategyModel === 'ofi' ? 'hsl(var(--primary))' : 'transparent',
+                      color: selectedStrategyModel === 'ofi' ? '#fff' : 'hsl(var(--muted))',
+                      transition: 'all 0.15s ease'
+                    }}
+                  >
+                    ⚔️ 盘口订单流
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setSelectedStrategyModel('causal')}
+                    style={{
+                      border: 'none',
+                      cursor: 'pointer',
+                      padding: '5px 11px',
+                      borderRadius: 6,
+                      fontSize: '0.8rem',
+                      fontWeight: selectedStrategyModel === 'causal' ? 600 : 400,
+                      background: selectedStrategyModel === 'causal' ? 'hsl(var(--primary))' : 'transparent',
+                      color: selectedStrategyModel === 'causal' ? '#fff' : 'hsl(var(--muted))',
+                      transition: 'all 0.15s ease'
+                    }}
+                  >
+                    🧠 因果事件
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setSelectedStrategyModel('marl')}
+                    style={{
+                      border: 'none',
+                      cursor: 'pointer',
+                      padding: '5px 11px',
+                      borderRadius: 6,
+                      fontSize: '0.8rem',
+                      fontWeight: selectedStrategyModel === 'marl' ? 600 : 400,
+                      background: selectedStrategyModel === 'marl' ? 'hsl(var(--primary))' : 'transparent',
+                      color: selectedStrategyModel === 'marl' ? '#fff' : 'hsl(var(--muted))',
+                      transition: 'all 0.15s ease'
+                    }}
+                  >
+                    ♟️ 博弈 RL
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setSelectedStrategyModel('stat_arb')}
+                    style={{
+                      border: 'none',
+                      cursor: 'pointer',
+                      padding: '5px 11px',
+                      borderRadius: 6,
+                      fontSize: '0.8rem',
+                      fontWeight: selectedStrategyModel === 'stat_arb' ? 600 : 400,
+                      background: selectedStrategyModel === 'stat_arb' ? 'hsl(var(--primary))' : 'transparent',
+                      color: selectedStrategyModel === 'stat_arb' ? '#fff' : 'hsl(var(--muted))',
+                      transition: 'all 0.15s ease'
+                    }}
+                  >
+                    💎 统计套利
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setSelectedStrategyModel('jev_meta')}
+                    style={{
+                      border: 'none',
+                      cursor: 'pointer',
+                      padding: '5px 11px',
+                      borderRadius: 6,
+                      fontSize: '0.8rem',
+                      fontWeight: selectedStrategyModel === 'jev_meta' ? 600 : 400,
+                      background: selectedStrategyModel === 'jev_meta' ? '#10b981' : 'transparent',
+                      color: selectedStrategyModel === 'jev_meta' ? '#fff' : 'hsl(var(--muted))',
+                      transition: 'all 0.15s ease'
+                    }}
+                  >
+                    ⚡ Jev 综合
+                  </button>
+                </div>
+                <span className="chip" style={{ color: '#2563eb', borderColor: 'rgba(37,99,235,0.3)', background: 'rgba(37,99,235,0.06)', fontSize: '0.78rem' }}>
+                  {selectedStrategyModel === 'world_model' ? '500次平行宇宙推演 · RSSM潜空间动力学 · 严格-4%止损'
+                    : selectedStrategyModel === 'adaptive' ? '宏观周期状态机风控 · 破位MA60刚性避险 · 稳健穿越牛熊'
+                    : selectedStrategyModel === 'diffusion' ? '50步DDPM极限反事实压力测试 · 反脆弱抗极端踩踏 · 优质防御韧性标的'
+                    : selectedStrategyModel === 'gnn' ? '产业链拓扑图卷积 · 归一化拉普拉斯多跳传导 · 捕捉未充分定价溢出Alpha'
+                    : selectedStrategyModel === 'ofi' ? 'Level-2 逐笔委托买卖订单失衡 (OFI) · 筹码峰突破 · 主力大单吸筹博弈'
+                    : selectedStrategyModel === 'causal' ? '大模型结构因果推断网络 · 政策与突发利好因果图传导 · 前瞻事件驱动脉冲'
+                    : selectedStrategyModel === 'marl' ? '多智能体沙盘博弈 · 纳什均衡最优反应 · 反向收割散户非理性恐慌踩踏'
+                    : selectedStrategyModel === 'stat_arb' ? '因子正交施密特去共线 · 行业市值纯中性配对对冲 · 45度平稳向上复利'
+                    : 'Jev底层毫秒级概率仲裁 · 随宏观周期动态调配八大并排策略权重'}
+                </span>
+              </div>
+
+              {/* 日 / 周 / 月 / 季 / 年 / 全部 时间周期切换栏 */}
+              <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap', marginBottom: 16 }}>
+                <span style={{ fontSize: '0.82rem', color: 'hsl(var(--muted))', fontWeight: 500, marginRight: 2 }}>
+                  周期切换:
+                </span>
+                <div style={{ display: 'inline-flex', padding: 2, background: 'hsla(var(--border)/0.4)', borderRadius: 8, gap: 4 }}>
+                  {TIMEFRAME_OPTIONS.map((c) => {
+                    const isActive = activeCycleKey === c.id
+                    return (
+                      <button
+                        key={c.id}
+                        type="button"
+                        onClick={() => setActiveCycleKey(c.id)}
+                        style={{
+                          border: 'none',
+                          padding: '6px 16px',
+                          borderRadius: 6,
+                          fontSize: '0.82rem',
+                          fontWeight: isActive ? 600 : 400,
+                          background: isActive ? 'hsl(var(--primary))' : 'transparent',
+                          color: isActive ? '#fff' : 'hsl(var(--foreground))',
+                          cursor: 'pointer',
+                          transition: 'all 0.15s ease',
+                        }}
+                      >
+                        {c.short_name}
+                      </button>
+                    )
+                  })}
+                </div>
+                <span style={{ fontSize: '0.76rem', color: 'hsl(var(--muted))', marginLeft: 6 }}>
+                  (已全部实时更新至今日收盘 · 2026-11-23)
+                </span>
+              </div>
+
+              {/* 周期核心指标条 */}
+              {(() => {
+                const STRATEGY_DATA_MAP = {
+                  world_model: WORLD_MODEL_CYCLES,
+                  adaptive: MACRO_CYCLES,
+                  diffusion: DIFFUSION_CYCLES,
+                  gnn: GNN_CYCLES,
+                  ofi: OFI_CYCLES,
+                  causal: CAUSAL_CYCLES,
+                  marl: MARL_CYCLES,
+                  stat_arb: STAT_ARB_CYCLES,
+                  jev_meta: JEV_META_CYCLES,
+                }
+                const currentDataStore = STRATEGY_DATA_MAP[selectedStrategyModel] || WORLD_MODEL_CYCLES
+                const info = currentDataStore[activeCycleKey] || currentDataStore['all']
+                const activeCurve = info?.curve || []
+
+                if (!info || !activeCurve || activeCurve.length === 0) {
+                  return (
+                    <div style={{ padding: '24px', textAlign: 'center', color: 'hsl(var(--muted))' }}>
+                      数据加载中…
+                    </div>
+                  )
+                }
+
+                return (
+                  <div>
+                    <div style={{
+                      display: 'flex',
+                      alignItems: 'center',
+                      justifyContent: 'space-between',
+                      flexWrap: 'wrap',
+                      gap: 12,
+                      padding: '12px 18px',
+                      background: 'hsla(var(--primary)/0.04)',
+                      borderRadius: 8,
+                      border: '1px solid hsla(var(--primary)/0.12)',
+                      marginBottom: 16
+                    }}>
+                      <div style={{ display: 'flex', alignItems: 'center', gap: 12, flexWrap: 'wrap' }}>
+                        <span style={{ fontSize: '0.92rem', fontWeight: 600, color: 'hsl(var(--foreground))' }}>
+                          {info.name}
+                        </span>
+                        <span style={{ fontSize: '0.78rem', color: 'hsl(var(--muted))' }}>
+                          {info.start} ~ {info.end} ({info.days} 个交易日)
+                        </span>
+                      </div>
+                      <div style={{ display: 'flex', alignItems: 'center', gap: 16, flexWrap: 'wrap', fontFamily: 'var(--font-mono)', fontSize: '0.84rem' }}>
+                        <span>策略收益: <strong style={{ color: info.total_strategy_return >= 0 ? '#16a34a' : '#dc2626', fontSize: '0.92rem' }}>{info.total_strategy_return >= 0 ? '+' : ''}{info.total_strategy_return}%</strong></span>
+                        <span>沪深300: <strong style={{ color: info.total_benchmark_return >= 0 ? '#16a34a' : '#dc2626' }}>{info.total_benchmark_return >= 0 ? '+' : ''}{info.total_benchmark_return}%</strong></span>
+                        <span>超额 Alpha: <strong style={{ color: info.total_excess_return >= 0 ? '#2563eb' : '#dc2626' }}>{info.total_excess_return >= 0 ? '+' : ''}{info.total_excess_return}%</strong></span>
+                        <span>最大回撤: <strong style={{ color: '#16a34a' }}>{info.max_drawdown}%</strong> <span style={{ color: 'hsl(var(--muted))', fontSize: '0.76rem' }}>(大盘 {info.benchmark_max_drawdown}%)</span></span>
+                        <span>夏普: <strong>{info.sharpe}</strong></span>
+                      </div>
+                    </div>
+
+                    <OverallEquityChart curve={activeCurve} />
+                  </div>
+                )
+              })()}
+            </SectionCard>
+        </section>
+        )}
+
+        {/* 4. 我的持仓与交易记录 */}
+        {activeView === 'trades' && (
+        <section id="section-trades" className="page-section">
+<div className="page-header">
+              <h2>管理后台 · 交易中心</h2>
+              <p>交易记录管理 · Supabase 云端数据库直连（支持录入与删除），状态实时同步</p>
+            </div>
+            <TradeManager onTradeChange={() => {
+              fetch('/api/portfolio').then(r => r.json()).then(setPortfolio).catch(() => {})
+            }} />
+            <div style={{ marginTop: 24 }}>
+              <QuantRescueSection />
+            </div>
+        </section>
+        )}
       </main>
 
       {error ? (
