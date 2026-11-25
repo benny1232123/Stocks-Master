@@ -16,10 +16,10 @@ sys.path.insert(0, str(ROOT))
 from smcore.notify.email import send_email
 
 GUEANT_CFG = {
-    "002284": {"name": "亚太股份", "lock_qty": 500, "unit": 200},
-    "603187": {"name": "海容冷链", "lock_qty": 300, "unit": 100},
-    "600269": {"name": "赣粤高速", "lock_qty": 1000, "unit": 400},
-    "603390": {"name": "通达电气", "lock_qty": 100, "unit": 100},
+    "002284": {"name": "亚太股份", "strategy": "Almgren-Chriss 宽幅", "lock_qty": 500, "unit": 200, "sell_mult": 1.05, "buy_mult": 1.15},
+    "603187": {"name": "海容冷链", "strategy": "Avellaneda 库存偏移", "lock_qty": 300, "unit": 100, "sell_mult": 0.70, "buy_mult": 1.30},
+    "600269": {"name": "赣粤高速", "strategy": "Fernholz 低频平衡", "lock_qty": 1000, "unit": 400, "sell_mult": 1.50, "buy_mult": 1.50},
+    "603390": {"name": "通达电气", "strategy": "PPO 极值减仓(停网格)", "lock_qty": 100, "unit": 100, "sell_mult": 1.60, "buy_mult": 1.60},
 }
 
 ACK_TOKEN = "sm_rescue_2026"
@@ -125,8 +125,8 @@ def main() -> int:
         atr = quotes.get(code, {}).get("atr_pct", 0.025)
         current_atrs[code] = round(atr, 4)
         grid_info[code] = {
-            "sell_pct": round(0.8 * atr * 100, 1),
-            "buy_pct": round(1.3 * atr * 100, 1),
+            "sell_pct": round(cfg["sell_mult"] * atr * 100, 1),
+            "buy_pct": round(cfg["buy_mult"] * atr * 100, 1),
         }
 
     pending_file = ROOT / "pending_plan.json"
@@ -181,17 +181,17 @@ def main() -> int:
         total_qty = holdings.get(code, 0)
         unit = cfg["unit"]
         max_qty = total_qty + unit
-        p_sell = round(price * (1.0 + 0.8 * atr), 2) if price > 0 else 0.0
-        p_buy = round(price * (1.0 - 1.3 * atr), 2) if price > 0 else 0.0
+        p_sell = round(price * (1.0 + cfg["sell_mult"] * atr), 2) if price > 0 else 0.0
+        p_buy = round(price * (1.0 - cfg["buy_mult"] * atr), 2) if price > 0 else 0.0
         chg_str = f"{chg:+.2f}%"
         badge = " <span style='background:#fef3c7;color:#d97706;padding:1px 6px;border-radius:4px;font-size:11px;'>建议调整</span>" if code in changed_codes else ""
 
         lines_md.append(
-            f"| {cfg['name']} ({code}) | {price:.2f} ({chg_str}) | {atr*100:.2f}% | +{sell_pct:.1f}% (>= {p_sell:.2f}) | -{buy_pct:.1f}% (<= {p_buy:.2f}) | {unit} 股 | 留{cfg['lock_qty']} / 上限{max_qty} |"
+            f"| {cfg['name']} ({code}) [{cfg['strategy']}] | {price:.2f} ({chg_str}) | {atr*100:.2f}% | +{sell_pct:.1f}% (>= {p_sell:.2f}) | -{buy_pct:.1f}% (<= {p_buy:.2f}) | {unit} 股 | 留{cfg['lock_qty']} / 上限{max_qty} |"
         )
         rows_html.append(
             f"<tr>"
-            f"<td style='padding:8px;border-bottom:1px solid #eee;'><b>{cfg['name']}</b> ({code}){badge}</td>"
+            f"<td style='padding:8px;border-bottom:1px solid #eee;'><b>{cfg['name']}</b> ({code}){badge}<br><span style='font-size:11px;color:#2563eb;'>{cfg['strategy']}</span></td>"
             f"<td style='padding:8px;border-bottom:1px solid #eee;'>{price:.2f} ({chg_str})</td>"
             f"<td style='padding:8px;border-bottom:1px solid #eee;'>{atr*100:.2f}%</td>"
             f"<td style='padding:8px;border-bottom:1px solid #eee;color:#ef4444;font-weight:bold;'>+{sell_pct:.1f}% <span style='font-weight:normal;color:#64748b;font-size:11px;'>(&ge;{p_sell:.2f})</span></td>"

@@ -5,12 +5,52 @@ import { fetchTradesFromCloud } from '../lib/supabaseTrades'
 import { SectionCard } from './cards'
 import { Compass, RefreshCw, Copy, Check, ShieldAlert, TrendingUp } from 'lucide-react'
 
-// Guéant (2023) 非对称网格做 T 策略配置（7 战 7 胜方案）
+// 一票一策 · 按实扣5元最低佣金后的全周期/套牢期实测最优策略配置
 const RESCUE_STRATEGY_CFG = {
-  '002284': { name: '亚太股份', lockQty: 500, unit: 200, atrPct: 0.0500 },
-  '603187': { name: '海容冷链', lockQty: 300, unit: 100, atrPct: 0.0298 },
-  '600269': { name: '赣粤高速', lockQty: 1000, unit: 400, atrPct: 0.0206 },
-  '603390': { name: '通达电气', lockQty: 100, unit: 100, atrPct: 0.0444 },
+  '002284': {
+    name: '亚太股份',
+    strategy: 'Almgren-Chriss 宽幅',
+    strategyColor: '#06b6d4',
+    lockQty: 500,
+    unit: 200,
+    atrPct: 0.0500,
+    sellMult: 1.05,
+    buyMult: 1.15,
+    tip: '大波动(≥1.5×ATR)再成交，防5元佣金磨损'
+  },
+  '603187': {
+    name: '海容冷链',
+    strategy: 'Avellaneda 库存偏移',
+    strategyColor: '#f59e0b',
+    lockQty: 300,
+    unit: 100,
+    atrPct: 0.0298,
+    sellMult: 0.70,
+    buyMult: 1.30,
+    tip: '重仓先高抛腾现金，转强站稳MA20即停卖'
+  },
+  '600269': {
+    name: '赣粤高速',
+    strategy: 'Fernholz 低频平衡',
+    strategyColor: '#10b981',
+    lockQty: 1000,
+    unit: 400,
+    atrPct: 0.0206,
+    sellMult: 1.50,
+    buyMult: 1.50,
+    tip: '低波红利压舱收息，仅极端偏离调仓一次'
+  },
+  '603390': {
+    name: '通达电气',
+    strategy: 'PPO 极值反抽减仓',
+    strategyColor: '#ec4899',
+    lockQty: 100,
+    unit: 100,
+    atrPct: 0.0444,
+    sellMult: 1.60,
+    buyMult: 1.60,
+    tip: '❌ 停高频网格！仅放量急拉高抛100股减仓'
+  },
 }
 const AZURE_ACK_API = 'https://receives-duplicate-cleaners-recognition.trycloudflare.com'
 
@@ -93,7 +133,7 @@ export default function QuantRescueSection({ jevLive, activeRegime }) {
     }
   }
 
-  // 构建今日 Guéant 非对称做 T 清单行
+  // 构建今日「一票一策」专属做 T / 减仓清单行
   const actionRows = useMemo(() => {
     return Object.entries(RESCUE_STRATEGY_CFG).map(([code, cfg]) => {
       const q = liveQuotes[code] || {}
@@ -102,15 +142,20 @@ export default function QuantRescueSection({ jevLive, activeRegime }) {
       const changePct = q.changePct ?? 0
       const totalQty = holdingsQty[code] ?? 0
       const baseRef = preClose > 0 ? preClose : price
-      const sellTrigger = baseRef > 0 ? (baseRef * (1 + 0.8 * cfg.atrPct)).toFixed(2) : '--'
-      const buyTrigger = baseRef > 0 ? (baseRef * (1 - 1.3 * cfg.atrPct)).toFixed(2) : '--'
+      const sellTrigger = baseRef > 0 ? (baseRef * (1 + cfg.sellMult * cfg.atrPct)).toFixed(2) : '--'
+      const buyTrigger = baseRef > 0 ? (baseRef * (1 - cfg.buyMult * cfg.atrPct)).toFixed(2) : '--'
       const estProfit = sellTrigger !== '--' && buyTrigger !== '--'
-        ? Math.round((Number(sellTrigger) - Number(buyTrigger)) * cfg.unit)
+        ? Math.round((Number(sellTrigger) - Number(buyTrigger)) * cfg.unit - 10)
         : 0
 
       return {
         code,
         name: cfg.name,
+        strategy: cfg.strategy,
+        strategyColor: cfg.strategyColor,
+        tip: cfg.tip,
+        sellPctStr: `+${(cfg.sellMult * cfg.atrPct * 100).toFixed(1)}%`,
+        buyPctStr: `-${(cfg.buyMult * cfg.atrPct * 100).toFixed(1)}%`,
         price,
         changePct,
         totalQty,
@@ -244,10 +289,10 @@ export default function QuantRescueSection({ jevLive, activeRegime }) {
         </div>
       )}
 
-      {/* 1. 今日 Guéant 非对称做 T 网格操作清单 */}
+      {/* 1. 今日「一票一策」专属做 T / 减仓操作清单 */}
       <SectionCard
-        title="📋 今日 Guéant 非对称做 T 网格操作清单 (实测 7 战 7 胜)"
-        subtitle="高抛间距窄 (+0.8×ATR)、低吸间距宽 (-1.3×ATR)，严格锁死核心底仓防卖飞；可直接照单在手机 App 设置双向网格条件单"
+        title="📋 今日「一票一策」专属条件单清单 (已扣最低5元佣金净差价)"
+        subtitle="按每只股票波动率、市值与 5 元最低佣金占比匹配最优策略：亚太用 Almgren 宽幅、海容用 Avellaneda 库存偏移、赣粤低频平衡、通达停网格等急拉减仓"
         action={
           <button
             onClick={loadLivePlan}
@@ -275,20 +320,34 @@ export default function QuantRescueSection({ jevLive, activeRegime }) {
           <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 13 }}>
             <thead>
               <tr style={{ borderBottom: '1px solid hsl(var(--border))', color: 'hsl(var(--muted-foreground))', textAlign: 'left' }}>
-                <th style={{ padding: '10px 8px' }}>标的</th>
+                <th style={{ padding: '10px 8px' }}>标的 / 专属策略</th>
                 <th style={{ padding: '10px 8px' }}>最新现价</th>
                 <th style={{ padding: '10px 8px' }}>持仓 / 锁底仓</th>
-                <th style={{ padding: '10px 8px' }}>高抛卖出线 (+0.8 ATR)</th>
-                <th style={{ padding: '10px 8px' }}>低吸买回线 (-1.3 ATR)</th>
-                <th style={{ padding: '10px 8px' }}>单次做 T 股数</th>
-                <th style={{ padding: '10px 8px' }}>预计单笔差价</th>
+                <th style={{ padding: '10px 8px' }}>高抛卖出线</th>
+                <th style={{ padding: '10px 8px' }}>低吸买回线</th>
+                <th style={{ padding: '10px 8px' }}>单次股数</th>
+                <th style={{ padding: '10px 8px' }}>扣费后净差价</th>
               </tr>
             </thead>
             <tbody>
               {actionRows.map((r) => (
                 <tr key={r.code} style={{ borderBottom: '1px solid hsl(var(--border) / 0.5)' }}>
                   <td style={{ padding: '10px 8px', fontWeight: 600 }}>
-                    {r.name} <span style={{ fontSize: 11, color: 'hsl(var(--muted-foreground))' }}>{r.code}</span>
+                    <div>{r.name} <span style={{ fontSize: 11, color: 'hsl(var(--muted-foreground))' }}>{r.code}</span></div>
+                    <span style={{
+                      display: 'inline-block',
+                      marginTop: 3,
+                      padding: '1px 6px',
+                      borderRadius: 4,
+                      fontSize: 11,
+                      fontWeight: 600,
+                      background: `${r.strategyColor}15`,
+                      color: r.strategyColor,
+                      border: `1px solid ${r.strategyColor}35`
+                    }}>
+                      {r.strategy}
+                    </span>
+                    <div style={{ fontSize: 11, color: 'hsl(var(--muted-foreground))', fontWeight: 400, marginTop: 2 }}>{r.tip}</div>
                   </td>
                   <td style={{ padding: '10px 8px' }}>
                     {r.price > 0 ? (
@@ -317,7 +376,7 @@ export default function QuantRescueSection({ jevLive, activeRegime }) {
                         color: '#ef4444',
                         fontWeight: 600
                       }}>
-                        ≥ ¥{r.sellTrigger}
+                        ≥ ¥{r.sellTrigger} ({r.sellPctStr})
                       </span>
                       <button
                         onClick={() => copyText(`sell_${r.code}`, r.sellTrigger)}
@@ -337,7 +396,7 @@ export default function QuantRescueSection({ jevLive, activeRegime }) {
                         color: '#3b82f6',
                         fontWeight: 600
                       }}>
-                        ≤ ¥{r.buyTrigger}
+                        ≤ ¥{r.buyTrigger} ({r.buyPctStr})
                       </span>
                       <button
                         onClick={() => copyText(`buy_${r.code}`, r.buyTrigger)}
@@ -377,7 +436,7 @@ export default function QuantRescueSection({ jevLive, activeRegime }) {
             {ackInfo ? (
               <>✅ <strong>已确认最新网格参数</strong>（确认于 {ackInfo.confirmed_at}）——在波动率变化超 0.8% 前，Azure 每天 15:05 检测后将保持静默不再提醒。</>
             ) : (
-              <>💡 <strong>手机按比例设置幅度</strong>：亚太 +4.0%/-6.5% · 海容 +2.4%/-3.9% · 赣粤 +1.6%/-2.7% · 通达 +3.5%/-5.8%。设好后请点右侧按钮确认不再提醒。</>
+              <>💡 <strong>手机按比例设置幅度（一票一策）</strong>：亚太 +5.3%/-5.8% (Almgren宽幅) · 海容 +2.1%/-3.9% (Avellaneda减仓) · 赣粤 +3.1%/-3.1% (低频平衡) · 通达停网格，仅急拉 +7.1% 高抛减仓。</>
             )}
           </span>
           <button
