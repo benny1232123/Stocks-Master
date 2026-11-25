@@ -49,6 +49,7 @@ const RESCUE_STRATEGY_CFG = {
     atrPct: 0.0444,
     sellMult: 1.60,
     buyMult: 1.60,
+    noBuy: true,
     tip: '❌ 停高频网格！仅放量急拉高抛100股减仓'
   },
 }
@@ -141,10 +142,10 @@ export default function QuantRescueSection({ jevLive, activeRegime }) {
       const preClose = q.preClose || price
       const changePct = q.changePct ?? 0
       const totalQty = holdingsQty[code] ?? 0
-      const baseRef = preClose > 0 ? preClose : price
+      const baseRef = price > 0 ? price : preClose
       const sellTrigger = baseRef > 0 ? (baseRef * (1 + cfg.sellMult * cfg.atrPct)).toFixed(2) : '--'
-      const buyTrigger = baseRef > 0 ? (baseRef * (1 - cfg.buyMult * cfg.atrPct)).toFixed(2) : '--'
-      const estProfit = sellTrigger !== '--' && buyTrigger !== '--'
+      const buyTrigger = cfg.noBuy ? null : (baseRef > 0 ? (baseRef * (1 - cfg.buyMult * cfg.atrPct)).toFixed(2) : '--')
+      const estProfit = !cfg.noBuy && sellTrigger !== '--' && buyTrigger && buyTrigger !== '--'
         ? Math.round((Number(sellTrigger) - Number(buyTrigger)) * cfg.unit - 10)
         : 0
 
@@ -153,6 +154,7 @@ export default function QuantRescueSection({ jevLive, activeRegime }) {
         name: cfg.name,
         strategy: cfg.strategy,
         strategyColor: cfg.strategyColor,
+        noBuy: !!cfg.noBuy,
         tip: cfg.tip,
         sellPctStr: `+${(cfg.sellMult * cfg.atrPct * 100).toFixed(1)}%`,
         buyPctStr: `-${(cfg.buyMult * cfg.atrPct * 100).toFixed(1)}%`,
@@ -390,30 +392,43 @@ export default function QuantRescueSection({ jevLive, activeRegime }) {
                     </div>
                   </td>
                   <td style={{ padding: '10px 8px' }}>
-                    <div style={{ display: 'inline-flex', alignItems: 'center', gap: 6 }}>
+                    {r.noBuy ? (
                       <span style={{
                         padding: '2px 8px',
                         borderRadius: 4,
-                        background: 'rgba(59, 130, 246, 0.12)',
-                        color: '#3b82f6',
-                        fontWeight: 600
+                        background: 'hsla(var(--muted)/0.12)',
+                        color: 'hsl(var(--muted-foreground))',
+                        fontSize: 12,
+                        fontWeight: 500
                       }}>
-                        ≤ ¥{r.buyTrigger} ({r.buyPctStr})
+                        ⏸ 暂停低吸（只减不加）
                       </span>
-                      <button
-                        onClick={() => copyText(`buy_${r.code}`, r.buyTrigger)}
-                        title="复制低吸价"
-                        style={{ border: 'none', background: 'transparent', cursor: 'pointer', color: 'hsl(var(--muted-foreground))', padding: 2 }}
-                      >
-                        {copiedKey === `buy_${r.code}` ? <Check size={13} color="#10b981" /> : <Copy size={13} />}
-                      </button>
-                    </div>
+                    ) : (
+                      <div style={{ display: 'inline-flex', alignItems: 'center', gap: 6 }}>
+                        <span style={{
+                          padding: '2px 8px',
+                          borderRadius: 4,
+                          background: 'rgba(59, 130, 246, 0.12)',
+                          color: '#3b82f6',
+                          fontWeight: 600
+                        }}>
+                          ≤ ¥{r.buyTrigger} ({r.buyPctStr})
+                        </span>
+                        <button
+                          onClick={() => copyText(`buy_${r.code}`, r.buyTrigger)}
+                          title="复制低吸价"
+                          style={{ border: 'none', background: 'transparent', cursor: 'pointer', color: 'hsl(var(--muted-foreground))', padding: 2 }}
+                        >
+                          {copiedKey === `buy_${r.code}` ? <Check size={13} color="#10b981" /> : <Copy size={13} />}
+                        </button>
+                      </div>
+                    )}
                   </td>
                   <td style={{ padding: '10px 8px', fontWeight: 600 }}>
                     {r.unit} 股
                   </td>
-                  <td style={{ padding: '10px 8px', color: '#10b981', fontWeight: 600 }}>
-                    {r.estProfit > 0 ? `+¥${r.estProfit}` : '--'}
+                  <td style={{ padding: '10px 8px', color: r.noBuy ? 'hsl(var(--muted-foreground))' : '#10b981', fontWeight: 600 }}>
+                    {r.noBuy ? '单向减仓兑现' : (r.estProfit > 0 ? `+¥${r.estProfit}` : '--')}
                   </td>
                 </tr>
               ))}
