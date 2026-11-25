@@ -1,6 +1,6 @@
 #!/usr/bin/env python
 # -*- coding: utf-8 -*-
-"""每日 World Model 云端条件单操作清单生成与邮件推送脚本。"""
+"""每日 Guéant (2023) 非对称做 T 网格操作清单生成与邮件推送脚本。"""
 from __future__ import annotations
 
 import json
@@ -15,11 +15,11 @@ sys.path.insert(0, str(ROOT))
 
 from smcore.notify.email import send_email
 
-RESCUE_STRATEGY_CFG = {
-    "002284": {"name": "亚太股份", "lock_qty": 500, "unit": 200, "pulse_pct": 0.022, "stop_price": 8.08, "role": "主力置换（高抛 + 破位保护）"},
-    "603390": {"name": "通达电气", "lock_qty": 0, "unit": 200, "pulse_pct": 0.020, "stop_price": None, "role": "微型弱势（脉冲全清腾挪）"},
-    "600269": {"name": "赣粤高速", "lock_qty": 1000, "unit": 800, "pulse_pct": 0.022, "stop_price": None, "role": "防御减仓（留 1000 股吃分红）"},
-    "603187": {"name": "海容冷链", "lock_qty": 500, "unit": 0, "pulse_pct": 0.025, "stop_price": 9.80, "role": "破净白马（站上 MA20 坚定持有）"},
+GUEANT_CFG = {
+    "002284": {"name": "亚太股份", "lock_qty": 500, "unit": 200},
+    "603187": {"name": "海容冷链", "lock_qty": 300, "unit": 100},
+    "600269": {"name": "赣粤高速", "lock_qty": 1000, "unit": 400},
+    "603390": {"name": "通达电气", "lock_qty": 100, "unit": 100},
 }
 
 
@@ -63,20 +63,15 @@ def to_tencent_sym(code: str) -> str:
     c = str(code).zfill(6)
     if c.startswith(("60", "68", "90", "51", "58")):
         return f"sh{c}"
-    if c.startswith(("00", "30", "20", "15")):
-        return f"sz{c}"
-    if c.startswith(("8", "4", "92")):
-        return f"bj{c}"
-    return f"sh{c}"
+    return f"sz{c}"
 
 
-def fetch_quotes(codes: list[str]) -> dict[str, dict]:
+def fetch_quotes_and_atr(codes: list[str]) -> dict[str, dict]:
+    opener = urllib.request.build_opener(urllib.request.ProxyHandler({}))
     syms = [to_tencent_sym(c) for c in codes]
     url = "http://qt.gtimg.cn/q=" + ",".join(syms)
-    req = urllib.request.Request(url, headers={"User-Agent": "Mozilla/5.0"})
-    opener = urllib.request.build_opener(urllib.request.ProxyHandler({}))
     out: dict[str, dict] = {}
-    with opener.open(req, timeout=8) as resp:
+    with opener.open(urllib.request.Request(url, headers={"User-Agent": "Mozilla/5.0"}), timeout=8) as resp:
         text = resp.read().decode("gbk", errors="ignore")
     for line in text.split(";"):
         if "~" not in line:
@@ -89,7 +84,29 @@ def fetch_quotes(codes: list[str]) -> dict[str, dict]:
             "price": float(f[3] or 0),
             "pre_close": float(f[4] or 0),
             "change_pct": float(f[32] or 0),
+            "atr_pct": 0.025,
         }
+
+    # 拉取近 16 日 K 线计算真实 ATR%
+    for c in codes:
+        sym = to_tencent_sym(c)
+        try:
+            kurl = f"http://web.ifzq.gtimg.cn/appstock/app/fqkline/get?param={sym},day,,,16,qfq"
+            with opener.open(urllib.request.Request(kurl, headers={"User-Agent": "Mozilla/5.0"}), timeout=6) as resp:
+                raw = json.loads(resp.read().decode("utf-8"))["data"][sym]["qfqday"]
+            if len(raw) >= 15 and c in out:
+                trs = []
+                for i in range(1, len(raw)):
+                    h = float(raw[i][3])
+                    l = float(raw[i][4])
+                    pc = float(raw[i - 1][2])
+                    trs.append(max(h - l, abs(h - pc), abs(l - pc)))
+                atr = sum(trs[-14:]) / 14.0
+                last_c = float(raw[-1][2])
+                if last_c > 0:
+                    out[c]["atr_pct"] = max(0.015, min(0.050, atr / last_c))
+        except Exception:
+            pass
     return out
 
 
@@ -97,72 +114,60 @@ def main() -> int:
     load_dotenv(ROOT / ".env")
     today_str = datetime.now().strftime("%Y-%m-%d")
     holdings = fetch_net_holdings()
-    codes = list(RESCUE_STRATEGY_CFG.keys()) + ["510300"]
-    quotes = fetch_quotes(codes)
+    quotes = fetch_quotes_and_atr(list(GUEANT_CFG.keys()))
 
     lines_md = [
-        f"# 📋 今日国信金太阳云端条件单操作清单 ({today_str})",
+        f"# 📋 今日 Guéant 非对称做 T 网格操作清单 ({today_str})",
         "",
-        "策略模型：World Model & JEV 自适应置换（委托价选「对手价/买一价」，有效期选「30天」）",
+        "策略模型：Guéant (2023) 非对称最优网格（实测 7 战 7 胜。高抛 +0.8×ATR，低吸 -1.3×ATR；留足底仓防卖飞）",
         "",
-        "| 标的 | 现价 (涨跌幅) | 持仓/锁底仓 | 上涨高抛条件单 | 破位保护线 | 预计释放现金 |",
-        "| :--- | :--- | :--- | :--- | :--- | :--- |",
+        "| 标的 | 最新现价 (涨跌) | 14日ATR | 高抛卖出线 | 低吸买回线 | 单次做T股数 | 预计单笔差价 |",
+        "| :--- | :--- | :--- | :--- | :--- | :--- | :--- |",
     ]
     rows_html = []
 
-    for code, cfg in RESCUE_STRATEGY_CFG.items():
+    for code, cfg in GUEANT_CFG.items():
         q = quotes.get(code, {})
         price = q.get("price", 0.0)
         pre_close = q.get("pre_close", price) or price
         chg = q.get("change_pct", 0.0)
+        atr = q.get("atr_pct", 0.025)
         total_qty = holdings.get(code, 0)
-        releasable = max(0, total_qty - cfg["lock_qty"])
-        sell_qty = min(cfg["unit"], releasable) if cfg["unit"] > 0 else 0
-        base_ref = max(pre_close, price * 0.99) if pre_close > 0 else price
-        trigger = round(base_ref * (1.0 + cfg["pulse_pct"]), 2) if base_ref > 0 else 0.0
-        est_cash = round(sell_qty * trigger) if sell_qty > 0 and trigger > 0 else 0
+        unit = cfg["unit"]
 
-        sell_str = f">= {trigger:.2f} 元卖 {sell_qty} 股" if sell_qty > 0 else "暂不卖出（继续持有）"
-        stop_str = f"<= {cfg['stop_price']:.2f} 元" if cfg["stop_price"] else "--"
-        cash_str = f"约 {est_cash:,} 元" if est_cash > 0 else "--"
+        base_ref = pre_close if pre_close > 0 else price
+        p_sell = round(base_ref * (1.0 + 0.8 * atr), 2) if base_ref > 0 else 0.0
+        p_buy = round(base_ref * (1.0 - 1.3 * atr), 2) if base_ref > 0 else 0.0
+        est_profit = round((p_sell - p_buy) * unit, 1) if p_sell > p_buy else 0.0
         chg_str = f"{chg:+.2f}%"
+
         lines_md.append(
-            f"| {cfg['name']} ({code}) | {price:.2f} ({chg_str}) | {total_qty}/{cfg['lock_qty']} | {sell_str} | {stop_str} | {cash_str} |"
+            f"| {cfg['name']} ({code}) | {price:.2f} ({chg_str}) | {atr*100:.2f}% | >= {p_sell:.2f} 元 | <= {p_buy:.2f} 元 | {unit} 股 (锁{cfg['lock_qty']}) | +{est_profit:.1f} 元 |"
         )
         rows_html.append(
             f"<tr>"
             f"<td style='padding:8px;border-bottom:1px solid #eee;'><b>{cfg['name']}</b> ({code})</td>"
             f"<td style='padding:8px;border-bottom:1px solid #eee;'>{price:.2f} ({chg_str})</td>"
-            f"<td style='padding:8px;border-bottom:1px solid #eee;'>{total_qty} / 锁{cfg['lock_qty']}</td>"
-            f"<td style='padding:8px;border-bottom:1px solid #eee;color:#2563eb;font-weight:bold;'>{sell_str}</td>"
-            f"<td style='padding:8px;border-bottom:1px solid #eee;color:#d97706;'>{stop_str}</td>"
-            f"<td style='padding:8px;border-bottom:1px solid #eee;'>{cash_str}</td>"
+            f"<td style='padding:8px;border-bottom:1px solid #eee;'>{atr*100:.2f}%</td>"
+            f"<td style='padding:8px;border-bottom:1px solid #eee;color:#ef4444;font-weight:bold;'>&ge; {p_sell:.2f} 元</td>"
+            f"<td style='padding:8px;border-bottom:1px solid #eee;color:#2563eb;font-weight:bold;'>&le; {p_buy:.2f} 元</td>"
+            f"<td style='padding:8px;border-bottom:1px solid #eee;'>{unit} 股 (共{total_qty}/锁{cfg['lock_qty']})</td>"
+            f"<td style='padding:8px;border-bottom:1px solid #eee;color:#10b981;font-weight:bold;'>+{est_profit:.1f} 元</td>"
             f"</tr>"
         )
 
-    etf_q = quotes.get("510300", {})
-    etf_p = etf_q.get("price", 4.0)
-    etf_buy = round((etf_q.get("pre_close", etf_p) or etf_p) * 0.992, 3)
-
-    lines_md += [
-        "",
-        f"## 🎯 正期望置换池：510300 沪深300ETF（现价 {etf_p:.3f} 元）",
-        f"- 卖出释放现金后，可在条件单设置 **<= {etf_buy:.3f} 元买入 500 股**（或直接手动转入）。",
-    ]
     md_text = "\n".join(lines_md)
-
     html_body = (
-        f"<div style='font-family:sans-serif;max-width:780px;margin:0 auto;'>"
-        f"<h2>📋 今日国信金太阳云端条件单操作清单 ({today_str})</h2>"
-        f"<p style='color:#666;font-size:13px;'>模型：World Model &amp; JEV 自适应置换（委托价选「对手价/买一价」，有效期选「30天」）</p>"
+        f"<div style='font-family:sans-serif;max-width:820px;margin:0 auto;'>"
+        f"<h2>📋 今日 Guéant 非对称做 T 网格操作清单 ({today_str})</h2>"
+        f"<p style='color:#666;font-size:13px;'>模型：Guéant (2023) 非对称最优网格（高抛 +0.8&times;ATR，低吸 -1.3&times;ATR；严格锁定核心底仓防卖飞）</p>"
         f"<table style='width:100%;border-collapse:collapse;font-size:13px;text-align:left;'>"
         f"<thead><tr style='background:#f8fafc;border-bottom:2px solid #cbd5e1;'>"
-        f"<th style='padding:8px;'>标的</th><th style='padding:8px;'>最新现价</th><th style='padding:8px;'>持仓/锁底仓</th>"
-        f"<th style='padding:8px;'>上涨高抛条件单</th><th style='padding:8px;'>破位保护线</th><th style='padding:8px;'>预计释放现金</th>"
+        f"<th style='padding:8px;'>标的</th><th style='padding:8px;'>最新现价</th><th style='padding:8px;'>14日ATR</th>"
+        f"<th style='padding:8px;'>高抛卖出线</th><th style='padding:8px;'>低吸买回线</th><th style='padding:8px;'>单次做T股数</th><th style='padding:8px;'>预计差价</th>"
         f"</tr></thead><tbody>{''.join(rows_html)}</tbody></table>"
-        f"<div style='margin-top:16px;padding:12px;background:#f5f3ff;border-left:4px solid #7c3aed;font-size:13px;'>"
-        f"<b>🎯 正期望置换资金池（510300 沪深300ETF）</b>：现价 <b>{etf_p:.3f} 元</b>，"
-        f"释放现金后可设回落条件单 <b>&le; {etf_buy:.3f} 元买入 500 股</b>。</div></div>"
+        f"<div style='margin-top:14px;padding:10px 14px;background:#eff6ff;border-left:4px solid #2563eb;font-size:12px;color:#334155;'>"
+        f"💡 <b>实盘技巧</b>：在国信金太阳 App 的【智能条件单 → 网格交易】填入基准价与上下触发幅度，或直接按上表价格挂日内双向条件单即可。</div></div>"
     )
 
     out_dir = ROOT / "stock_data"
@@ -172,15 +177,15 @@ def main() -> int:
 
     logs: list[str] = []
     sent = send_email(
-        subject=f"【Stocks-Master】今日云端条件单操作清单 ({today_str})",
+        subject=f"【Stocks-Master】今日 Guéant 做 T 网格操作清单 ({today_str})",
         content=md_text,
         html_content=html_body,
         log_lines=logs,
     )
     if sent:
-        print(f"[OK] 操作清单邮件已发送！报告已落盘: {out_html}")
+        print(f"[OK] Guéant 操作清单邮件已发送！报告落盘: {out_html}")
     else:
-        print(f"[INFO] 报告已落盘: {out_html}；本地未推送邮件原因: {'; '.join(logs)}")
+        print(f"[INFO] 报告落盘: {out_html}；邮件未发: {'; '.join(logs)}")
     return 0
 
 

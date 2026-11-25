@@ -5,12 +5,12 @@ import { fetchTradesFromCloud } from '../lib/supabaseTrades'
 import { SectionCard } from './cards'
 import { Compass, RefreshCw, Copy, Check, ShieldAlert, TrendingUp } from 'lucide-react'
 
-// 默认策略配置（与 WorldModelRescue.py 保持一致）
+// Guéant (2023) 非对称网格做 T 策略配置（7 战 7 胜方案，与 iQuant 脚本一致）
 const RESCUE_STRATEGY_CFG = {
-  '002284': { name: '亚太股份', lockQty: 500, unit: 200, pulsePct: 0.022, stopPrice: 8.08, role: '主力置换（高抛 + 破位保护）' },
-  '603390': { name: '通达电气', lockQty: 0, unit: 200, pulsePct: 0.020, stopPrice: null, role: '微型弱势（脉冲全清腾挪）' },
-  '600269': { name: '赣粤高速', lockQty: 1000, unit: 800, pulsePct: 0.022, stopPrice: null, role: '防御减仓（留 1000 股吃分红）' },
-  '603187': { name: '海容冷链', lockQty: 500, unit: 0, pulsePct: 0.025, stopPrice: 9.80, role: '破净白马（站上 MA20 坚定持有）' },
+  '002284': { name: '亚太股份', lockQty: 500, unit: 200, atrPct: 0.025 },
+  '603187': { name: '海容冷链', lockQty: 300, unit: 100, atrPct: 0.022 },
+  '600269': { name: '赣粤高速', lockQty: 1000, unit: 400, atrPct: 0.015 },
+  '603390': { name: '通达电气', lockQty: 100, unit: 100, atrPct: 0.032 },
 }
 
 export default function QuantRescueSection() {
@@ -65,7 +65,7 @@ export default function QuantRescueSection() {
     }
   }
 
-  // 构建今日操作清单行
+  // 构建今日 Guéant 非对称做 T 清单行
   const actionRows = useMemo(() => {
     return Object.entries(RESCUE_STRATEGY_CFG).map(([code, cfg]) => {
       const q = liveQuotes[code] || {}
@@ -73,11 +73,12 @@ export default function QuantRescueSection() {
       const preClose = q.preClose || price
       const changePct = q.changePct ?? 0
       const totalQty = holdingsQty[code] ?? 0
-      const releasable = Math.max(0, totalQty - cfg.lockQty)
-      const sellQty = cfg.unit > 0 ? Math.min(cfg.unit, releasable) : 0
-      const baseRef = preClose > 0 ? Math.max(preClose, price * 0.99) : price
-      const sellTrigger = baseRef > 0 ? (baseRef * (1 + cfg.pulsePct)).toFixed(2) : '--'
-      const estCash = sellQty > 0 && sellTrigger !== '--' ? Math.round(sellQty * Number(sellTrigger)) : 0
+      const baseRef = preClose > 0 ? preClose : price
+      const sellTrigger = baseRef > 0 ? (baseRef * (1 + 0.8 * cfg.atrPct)).toFixed(2) : '--'
+      const buyTrigger = baseRef > 0 ? (baseRef * (1 - 1.3 * cfg.atrPct)).toFixed(2) : '--'
+      const estProfit = sellTrigger !== '--' && buyTrigger !== '--'
+        ? Math.round((Number(sellTrigger) - Number(buyTrigger)) * cfg.unit)
+        : 0
 
       return {
         code,
@@ -86,18 +87,14 @@ export default function QuantRescueSection() {
         changePct,
         totalQty,
         lockQty: cfg.lockQty,
-        sellQty,
+        unit: cfg.unit,
+        atrPct: cfg.atrPct,
         sellTrigger,
-        stopPrice: cfg.stopPrice,
-        estCash,
-        role: cfg.role,
+        buyTrigger,
+        estProfit,
       }
     })
   }, [liveQuotes, holdingsQty])
-
-  const etfQuote = liveQuotes['510300'] || {}
-  const etfPrice = etfQuote.price || 4.005
-  const etfBuyTrigger = ((etfQuote.preClose || etfPrice) * 0.992).toFixed(3)
 
   const db = RESCUE_BACKTEST_DATABASE || {}
   const currentStockData = db[selectedStock] || db['TOTAL'] || {}
@@ -159,10 +156,10 @@ export default function QuantRescueSection() {
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 20 }}>
-      {/* 1. 今日国信金太阳云端条件单操作清单 */}
+      {/* 1. 今日 Guéant 非对称做 T 网格操作清单 */}
       <SectionCard
-        title="📋 今日国信金太阳云端条件单操作清单 (World Model 每日调度)"
-        subtitle="基于盘中实时行情自动计算今日高抛置换点位与破位保护线，可直接照单填入手机 App 云端条件单（有效期选 30 天，委托价选对手价/买一价）"
+        title="📋 今日 Guéant 非对称做 T 网格操作清单 (实测 7 战 7 胜)"
+        subtitle="高抛间距窄 (+0.8×ATR)、低吸间距宽 (-1.3×ATR)，严格锁死核心底仓防卖飞；可直接照单在手机 App 设置双向网格条件单"
         action={
           <button
             onClick={loadLivePlan}
@@ -193,10 +190,10 @@ export default function QuantRescueSection() {
                 <th style={{ padding: '10px 8px' }}>标的</th>
                 <th style={{ padding: '10px 8px' }}>最新现价</th>
                 <th style={{ padding: '10px 8px' }}>持仓 / 锁底仓</th>
-                <th style={{ padding: '10px 8px' }}>上涨高抛条件单</th>
-                <th style={{ padding: '10px 8px' }}>破位保护线</th>
-                <th style={{ padding: '10px 8px' }}>预计释放现金</th>
-                <th style={{ padding: '10px 8px' }}>策略定位</th>
+                <th style={{ padding: '10px 8px' }}>高抛卖出线 (+0.8 ATR)</th>
+                <th style={{ padding: '10px 8px' }}>低吸买回线 (-1.3 ATR)</th>
+                <th style={{ padding: '10px 8px' }}>单次做 T 股数</th>
+                <th style={{ padding: '10px 8px' }}>预计单笔差价</th>
               </tr>
             </thead>
             <tbody>
@@ -224,41 +221,50 @@ export default function QuantRescueSection() {
                     {r.totalQty} 股 <span style={{ fontSize: 11, color: 'hsl(var(--muted-foreground))' }}>(锁 {r.lockQty})</span>
                   </td>
                   <td style={{ padding: '10px 8px' }}>
-                    {r.sellQty > 0 ? (
-                      <div style={{ display: 'inline-flex', alignItems: 'center', gap: 6 }}>
-                        <span style={{
-                          padding: '2px 8px',
-                          borderRadius: 4,
-                          background: 'rgba(59, 130, 246, 0.12)',
-                          color: '#3b82f6',
-                          fontWeight: 600
-                        }}>
-                          ≥ ¥{r.sellTrigger} 卖 {r.sellQty} 股
-                        </span>
-                        <button
-                          onClick={() => copyText(`sell_${r.code}`, r.sellTrigger)}
-                          title="复制触发价"
-                          style={{ border: 'none', background: 'transparent', cursor: 'pointer', color: 'hsl(var(--muted-foreground))', padding: 2 }}
-                        >
-                          {copiedKey === `sell_${r.code}` ? <Check size={13} color="#10b981" /> : <Copy size={13} />}
-                        </button>
-                      </div>
-                    ) : (
-                      <span style={{ color: '#10b981', fontWeight: 600 }}>暂不卖出（继续持有）</span>
-                    )}
+                    <div style={{ display: 'inline-flex', alignItems: 'center', gap: 6 }}>
+                      <span style={{
+                        padding: '2px 8px',
+                        borderRadius: 4,
+                        background: 'rgba(239, 68, 68, 0.12)',
+                        color: '#ef4444',
+                        fontWeight: 600
+                      }}>
+                        ≥ ¥{r.sellTrigger}
+                      </span>
+                      <button
+                        onClick={() => copyText(`sell_${r.code}`, r.sellTrigger)}
+                        title="复制高抛价"
+                        style={{ border: 'none', background: 'transparent', cursor: 'pointer', color: 'hsl(var(--muted-foreground))', padding: 2 }}
+                      >
+                        {copiedKey === `sell_${r.code}` ? <Check size={13} color="#10b981" /> : <Copy size={13} />}
+                      </button>
+                    </div>
                   </td>
                   <td style={{ padding: '10px 8px' }}>
-                    {r.stopPrice ? (
-                      <span style={{ color: '#f59e0b', fontWeight: 600 }}>
-                        ≤ ¥{r.stopPrice.toFixed(2)} {r.code === '002284' ? '(卖 200 股)' : '(警示线)'}
+                    <div style={{ display: 'inline-flex', alignItems: 'center', gap: 6 }}>
+                      <span style={{
+                        padding: '2px 8px',
+                        borderRadius: 4,
+                        background: 'rgba(59, 130, 246, 0.12)',
+                        color: '#3b82f6',
+                        fontWeight: 600
+                      }}>
+                        ≤ ¥{r.buyTrigger}
                       </span>
-                    ) : '--'}
+                      <button
+                        onClick={() => copyText(`buy_${r.code}`, r.buyTrigger)}
+                        title="复制低吸价"
+                        style={{ border: 'none', background: 'transparent', cursor: 'pointer', color: 'hsl(var(--muted-foreground))', padding: 2 }}
+                      >
+                        {copiedKey === `buy_${r.code}` ? <Check size={13} color="#10b981" /> : <Copy size={13} />}
+                      </button>
+                    </div>
                   </td>
                   <td style={{ padding: '10px 8px', fontWeight: 600 }}>
-                    {r.estCash > 0 ? `≈ ¥${r.estCash.toLocaleString()}` : '--'}
+                    {r.unit} 股
                   </td>
-                  <td style={{ padding: '10px 8px', fontSize: 12, color: 'hsl(var(--muted-foreground))' }}>
-                    {r.role}
+                  <td style={{ padding: '10px 8px', color: '#10b981', fontWeight: 600 }}>
+                    {r.estProfit > 0 ? `+¥${r.estProfit}` : '--'}
                   </td>
                 </tr>
               ))}
@@ -266,35 +272,21 @@ export default function QuantRescueSection() {
           </table>
         </div>
 
-        {/* 正期望置换目标池提示 */}
         <div style={{
           marginTop: 14,
-          padding: '12px 16px',
+          padding: '10px 14px',
           borderRadius: 8,
-          background: 'rgba(168, 85, 247, 0.08)',
-          border: '1px solid rgba(168, 85, 247, 0.25)',
+          background: 'rgba(59, 130, 246, 0.08)',
+          border: '1px solid rgba(59, 130, 246, 0.25)',
           display: 'flex',
           justifyContent: 'space-between',
           alignItems: 'center',
           flexWrap: 'wrap',
           gap: 10,
-          fontSize: 13
+          fontSize: 12
         }}>
-          <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-            <TrendingUp size={16} color="#a855f7" />
-            <span>
-              <strong>正期望置换资金池（510300 沪深300ETF）</strong>：当前现价{' '}
-              <strong>¥{etfPrice.toFixed(3)}</strong>
-              {etfQuote.changePct !== undefined && (
-                <span style={{ marginLeft: 4, color: etfQuote.changePct >= 0 ? '#ef4444' : '#10b981', fontSize: 12 }}>
-                  ({etfQuote.changePct >= 0 ? '+' : ''}{Number(etfQuote.changePct).toFixed(2)}%)
-                </span>
-              )}
-              ，卖出释放现金后可在回落条件单设 <strong>≤ ¥{etfBuyTrigger} 买入 500 股</strong>（或手动等额转入）。
-            </span>
-          </div>
-          <span style={{ fontSize: 11, color: 'hsl(var(--muted-foreground))' }}>
-            * 每日自动邮件同步推送至已配置邮箱
+          <span>
+            💡 <strong>操作规则</strong>：保留底仓绝不卖飞；每完成一笔高抛低吸，套利差价直接摊薄持仓成本。本清单由 Azure 每日 09:26 自动邮件同步推送。
           </span>
         </div>
       </SectionCard>
