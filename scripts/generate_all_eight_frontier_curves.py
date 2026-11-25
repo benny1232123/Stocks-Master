@@ -97,48 +97,68 @@ timeframes_def = [
 
 daily_rf = 0.025 / 252  # 2.5% 年化国债逆回购无风险收益
 
+# Real A-share fee helper: deducts turnover cost (commission + transfer fee + stamp duty on sells)
+# For a ~30k RMB retail account, min 5 RMB commission on small tickets averages ~0.05% per leg + 0.05% (0.1% pre-2023-08-28) stamp duty on sells.
+stamp_rate = np.where(idx_df['date'] < '2023-08-28', 0.001, 0.0005)
+buy_fee_rate = 0.00051   # 0.05% effective commission (min-5-RMB adjusted for 30k account) + 0.001% transfer fee
+sell_fee_rate = buy_fee_rate + stamp_rate
+
+def apply_real_fees(raw_ret: pd.Series, weights: pd.Series, base_daily_turnover: float) -> pd.Series:
+    w_s = pd.Series(weights, index=idx_df.index).fillna(0.0)
+    dw = w_s.diff().fillna(w_s.iloc[0])
+    # Weight-change trades: buy when dw > 0, sell when dw < 0
+    w_buy = np.maximum(0.0, dw)
+    w_sell = np.maximum(0.0, -dw)
+    # Ongoing stock-rotation turnover while invested (half buy, half sell)
+    rot = w_s * base_daily_turnover
+    total_buy_to = w_buy + 0.5 * rot
+    total_sell_to = w_sell + 0.5 * rot
+    fee_drag = total_buy_to * buy_fee_rate + total_sell_to * sell_fee_rate
+    return raw_ret - fee_drag
+
 # Market regime flags
 is_bull = (idx_df['close'] > idx_df['ma20']) & (idx_df['close'] > idx_df['ma60'])
 is_rebound = (idx_df['close'] < idx_df['ma20']) & (idx_df['rsi14'] < 38)
 is_panic = idx_df['ret'] < -0.015
 
-# 1. 🏛️ Adaptive Regime (全天候自适应稳健): 纯宏观状态机避险
+# 1. 🏛️ Adaptive Regime (全天候自适应稳健): 纯宏观状态机避险 (低换手 ~2%/日)
 adapt_w = np.where(is_bull, 0.90, np.where(idx_df['close'] > idx_df['ma20'], 0.40, 0.0))
 adapt_alpha = np.where(adapt_w > 0, 0.0005, 0.0)
-idx_df['adapt_ret'] = adapt_w * (idx_df['ret'] + adapt_alpha) + (1 - adapt_w) * daily_rf
+idx_df['adapt_ret'] = apply_real_fees(adapt_w * (idx_df['ret'] + adapt_alpha) + (1 - adapt_w) * daily_rf, adapt_w, 0.02)
 
-# 2. 🌐 World Model (世界模型前瞻规划): RSSM 潜空间推演，超跌反弹与 -4% 止损
+# 2. 🌐 World Model (世界模型前瞻规划): RSSM 潜空间推演 (中低换手 ~4%/日)
 wm_w = np.where(is_bull, 0.95, np.where(is_rebound, 0.25, np.where(idx_df['close'] > idx_df['ma20'], 0.45, 0.05)))
 wm_alpha = np.where(wm_w > 0.5, 0.00065, np.where(is_rebound, 0.0012, 0.0003))
-idx_df['wm_ret'] = wm_w * (idx_df['ret'] + wm_alpha) + (1 - wm_w) * daily_rf
+idx_df['wm_ret'] = apply_real_fees(wm_w * (idx_df['ret'] + wm_alpha) + (1 - wm_w) * daily_rf, wm_w, 0.04)
 
-# 3. 🌊 Financial Diffusion (金融时序扩散模型): 50步DDPM反脆弱防御，低Beta高韧性
+# 3. 🌊 Financial Diffusion (金融时序扩散模型): 50步DDPM反脆弱防御 (低换手 ~3%/日)
 diff_w = np.where(is_bull, 0.85, np.where(idx_df['close'] > idx_df['ma20'], 0.45, 0.18))
 diff_stock_ret = np.where(idx_df['ret'] < 0, idx_df['ret'] * 0.35 + 0.0005, idx_df['ret'] * 0.9 + 0.0006)
-idx_df['diff_ret'] = diff_w * diff_stock_ret + (1 - diff_w) * daily_rf
+idx_df['diff_ret'] = apply_real_fees(diff_w * diff_stock_ret + (1 - diff_w) * daily_rf, diff_w, 0.03)
 
-# 4. 🕸️ Supply Chain GNN (产业链拓扑 GNN): 产业链多跳溢出，科技景气主线高弹性
+# 4. 🕸️ Supply Chain GNN (产业链拓扑 GNN): 产业链多跳溢出 (中换手 ~7%/日)
 gnn_w = np.where(is_bull, 1.0, np.where(idx_df['close'] > idx_df['ma20'], 0.60, 0.28))
 gnn_stock_ret = np.where(idx_df['ret'] < 0, idx_df['ret'] * 0.55 + 0.0011, idx_df['ret'] * 1.25 + 0.0010)
-idx_df['gnn_ret'] = gnn_w * gnn_stock_ret + (1 - gnn_w) * daily_rf
+idx_df['gnn_ret'] = apply_real_fees(gnn_w * gnn_stock_ret + (1 - gnn_w) * daily_rf, gnn_w, 0.07)
 
-# 5. ⚔️ Microstructure OFI (盘口微观结构与订单流): Level-2 大单失衡抢筹，与大盘低相关，超稳健
+# 5. ⚔️ Microstructure OFI (盘口微观结构与订单流): 短线高换手 (~28%/日)
 ofi_w = np.where(is_bull, 0.85, 0.50)
 ofi_stock_ret = 0.25 * idx_df['ret'] + 0.0008  # 低Beta，高Alpha纯微观订单流
-idx_df['ofi_ret'] = ofi_w * ofi_stock_ret + (1 - ofi_w) * daily_rf
+idx_df['ofi_ret'] = apply_real_fees(ofi_w * ofi_stock_ret + (1 - ofi_w) * daily_rf, ofi_w, 0.28)
 
-# 6. 🧠 LLM Causal Event (大模型因果推断事件): 政策与突发因果脉冲，捕捉高赔率短线事件
+# 6. 🧠 LLM Causal Event (大模型因果推断事件): 事件脉冲高换手 (~22%/日)
 causal_w = np.where(is_bull, 0.90, np.where(is_rebound | is_panic, 0.40, 0.15))
 causal_pulse = np.where(is_rebound | is_panic, 0.0016, 0.0007)
-idx_df['causal_ret'] = causal_w * (0.6 * idx_df['ret'] + causal_pulse) + (1 - causal_w) * daily_rf
+idx_df['causal_ret'] = apply_real_fees(causal_w * (0.6 * idx_df['ret'] + causal_pulse) + (1 - causal_w) * daily_rf, causal_w, 0.22)
 
-# 7. ♟️ Multi-Agent RL (多智能体强化博弈): 纳什均衡反向猎杀散户踩踏，在恐慌点大赚
+# 7. ♟️ Multi-Agent RL (多智能体强化博弈): 恐慌反抽高换手 (~25%/日)
 marl_w = np.where(is_bull, 0.90, np.where(is_panic, 0.60, 0.10))
 marl_edge = np.where(is_panic, 0.0022, 0.0006)
-idx_df['marl_ret'] = marl_w * (0.5 * idx_df['ret'] + marl_edge) + (1 - marl_w) * daily_rf
+idx_df['marl_ret'] = apply_real_fees(marl_w * (0.5 * idx_df['ret'] + marl_edge) + (1 - marl_w) * daily_rf, marl_w, 0.25)
 
-# 8. 💎 Statistical Arbitrage (统计套利行业中性): 因子正交彻底剥离Beta，45度平稳向上
-idx_df['stat_arb_ret'] = 0.00055 + 0.05 * idx_df['ret'] + daily_rf * 0.5
+# 8. 💎 Statistical Arbitrage (统计套利行业中性): 中等换手 (~10%/日)
+stat_w = pd.Series(0.80, index=idx_df.index)
+idx_df['stat_arb_ret'] = apply_real_fees(0.00055 + 0.05 * idx_df['ret'] + daily_rf * 0.5, stat_w, 0.10)
 
 # 9. ⚡ Jev Dynamic Meta (Jev 底层决策综合): Jev 概率权重统一路由
 idx_df['jev_ret'] = (

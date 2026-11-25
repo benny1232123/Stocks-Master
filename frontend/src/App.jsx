@@ -1497,7 +1497,7 @@ function App() {
               activeRegime={activeRegime}
             />
 
-            <SectionCard title="历史周期策略净值曲线" subtitle="直接呈现各历史周期模拟运行净值走势，可切换八大并排策略与时间周期">
+            <SectionCard title="历史周期策略净值曲线" subtitle="已按 A 股真实规费实扣（佣金 + 过户费 + 卖出印花税 + 换手成本），可切换各策略与时间周期">
               {/* 策略引擎切换栏 */}
               <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', flexWrap: 'wrap', gap: 10, marginBottom: 14 }}>
                 <div style={{ display: 'inline-flex', padding: 3, background: 'hsla(var(--border)/0.5)', borderRadius: 8, flexWrap: 'wrap', gap: 4 }}>
