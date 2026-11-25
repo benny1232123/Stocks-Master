@@ -30,7 +30,6 @@ import { factorTypesOfSource, getFactorTypeColor } from './lib/factorTypes'
 import { fetchLiveIndexSnapshot, fetchLiveMarketBreadth, fetchLiveStockQuotes } from './lib/realtimeQuotes'
 import { fetchLiveJevRegime, REGIME_STRATEGIES, computeDynamicWeights } from './lib/jevRegimeEngine'
 import { fetchTradesFromCloud, insertTradeToCloud } from './lib/supabaseTrades'
-import { RESCUE_BACKTEST_DATABASE } from './data/rescueBacktestData'
 import MACRO_CYCLES from './macro_cycles_curves.json'
 import WORLD_MODEL_CYCLES from './world_model_curves.json'
 import DIFFUSION_CYCLES from './diffusion_curves.json'
@@ -1640,23 +1639,6 @@ function App() {
                   </button>
                   <button
                     type="button"
-                    onClick={() => setSelectedStrategyModel('gueant_grid')}
-                    style={{
-                      border: 'none',
-                      cursor: 'pointer',
-                      padding: '5px 11px',
-                      borderRadius: 6,
-                      fontSize: '0.8rem',
-                      fontWeight: selectedStrategyModel === 'gueant_grid' ? 600 : 400,
-                      background: selectedStrategyModel === 'gueant_grid' ? '#e11d48' : 'transparent',
-                      color: selectedStrategyModel === 'gueant_grid' ? '#fff' : 'hsl(var(--muted))',
-                      transition: 'all 0.15s ease'
-                    }}
-                  >
-                    🛡️ Guéant 非对称网格
-                  </button>
-                  <button
-                    type="button"
                     onClick={() => setSelectedStrategyModel('jev_meta')}
                     style={{
                       border: 'none',
@@ -1682,7 +1664,6 @@ function App() {
                     : selectedStrategyModel === 'causal' ? '大模型结构因果推断网络 · 政策与突发利好因果图传导 · 前瞻事件驱动脉冲'
                     : selectedStrategyModel === 'marl' ? '多智能体沙盘博弈 · 纳什均衡最优反应 · 反向收割散户非理性恐慌踩踏'
                     : selectedStrategyModel === 'stat_arb' ? '因子正交施密特去共线 · 行业市值纯中性配对对冲 · 45度平稳向上复利'
-                    : selectedStrategyModel === 'gueant_grid' ? '交易管理存量做T主力 · Guéant 非对称限价做市网格 · 持仓高抛低吸摊薄成本'
                     : 'Jev底层毫秒级概率仲裁 · 随宏观周期动态调配八大并排策略权重'}
                 </span>
               </div>
@@ -1724,45 +1705,6 @@ function App() {
 
               {/* 周期核心指标条 */}
               {(() => {
-                const buildGueantCycles = () => {
-                  const rawSeries = RESCUE_BACKTEST_DATABASE?.TOTAL?.series || []
-                  if (rawSeries.length < 2) return WORLD_MODEL_CYCLES
-                  const sliceCfg = { day: 10, week: 5, month: 22, quarter: 66, year: 250, all: rawSeries.length }
-                  const out = {}
-                  Object.entries(sliceCfg).forEach(([k, len]) => {
-                    const sub = rawSeries.slice(-Math.min(len, rawSeries.length))
-                    const baseStrat = sub[0]?.gueant_val || 29336
-                    const baseBench = sub[0]?.bench_val || 29336
-                    let peak = 1
-                    let maxDd = 0
-                    const curve = sub.map((pt) => {
-                      const sRet = +(((pt.gueant_val / baseStrat) - 1) * 100).toFixed(2)
-                      const bRet = +(((pt.bench_val / baseBench) - 1) * 100).toFixed(2)
-                      const nav = pt.gueant_val / baseStrat
-                      if (nav > peak) peak = nav
-                      const dd = +(((nav - peak) / peak) * 100).toFixed(2)
-                      if (dd < maxDd) maxDd = dd
-                      return { date: pt.date, strategy_return: sRet, benchmark_return: bRet }
-                    })
-                    const last = curve[curve.length - 1]
-                    const totalStrat = last?.strategy_return ?? 0
-                    const totalBench = last?.benchmark_return ?? 0
-                    out[k] = {
-                      name: '🛡️ Guéant 非对称网格做 T（实盘全持仓联动）',
-                      start: sub[0].date,
-                      end: sub[sub.length - 1].date,
-                      days: sub.length,
-                      total_strategy_return: totalStrat,
-                      total_benchmark_return: totalBench,
-                      total_excess_return: +(totalStrat - totalBench).toFixed(2),
-                      max_drawdown: maxDd,
-                      benchmark_max_drawdown: -12.5,
-                      sharpe: maxDd < 0 ? +(Math.max(0.5, (totalStrat / Math.abs(maxDd)))).toFixed(2) : 1.5,
-                      curve
-                    }
-                  })
-                  return out
-                }
                 const STRATEGY_DATA_MAP = {
                   world_model: WORLD_MODEL_CYCLES,
                   adaptive: MACRO_CYCLES,
@@ -1772,7 +1714,6 @@ function App() {
                   causal: CAUSAL_CYCLES,
                   marl: MARL_CYCLES,
                   stat_arb: STAT_ARB_CYCLES,
-                  gueant_grid: buildGueantCycles(),
                   cash_defense: MACRO_CYCLES,
                   jev_meta: JEV_META_CYCLES,
                 }

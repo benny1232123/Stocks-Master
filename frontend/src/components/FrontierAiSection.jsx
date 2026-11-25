@@ -143,16 +143,6 @@ export default function FrontierAiSection({ selectedStrategy, onSelectStrategy, 
 
   const strategyConfigs = [
     {
-      id: 'gueant_grid',
-      key: 'gueant_grid',
-      category: 'defense',
-      name: 'Guéant 非对称网格做 T',
-      icon: Sliders,
-      color: '#e11d48',
-      pct: ((routes.gueant_grid || 0) * 100).toFixed(1),
-      desc: '交易管理主力 · 存量底仓高抛低吸摊薄成本'
-    },
-    {
       id: 'adaptive',
       key: 'adaptive_regime',
       category: 'defense',
