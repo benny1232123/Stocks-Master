@@ -5,13 +5,14 @@ import { fetchTradesFromCloud } from '../lib/supabaseTrades'
 import { SectionCard } from './cards'
 import { Compass, RefreshCw, Copy, Check, ShieldAlert, TrendingUp } from 'lucide-react'
 
-// Guéant (2023) 非对称网格做 T 策略配置（7 战 7 胜方案，与 iQuant 脚本一致）
+// Guéant (2023) 非对称网格做 T 策略配置（7 战 7 胜方案）
 const RESCUE_STRATEGY_CFG = {
-  '002284': { name: '亚太股份', lockQty: 500, unit: 200, atrPct: 0.025 },
-  '603187': { name: '海容冷链', lockQty: 300, unit: 100, atrPct: 0.022 },
-  '600269': { name: '赣粤高速', lockQty: 1000, unit: 400, atrPct: 0.015 },
-  '603390': { name: '通达电气', lockQty: 100, unit: 100, atrPct: 0.032 },
+  '002284': { name: '亚太股份', lockQty: 500, unit: 200, atrPct: 0.0500 },
+  '603187': { name: '海容冷链', lockQty: 300, unit: 100, atrPct: 0.0298 },
+  '600269': { name: '赣粤高速', lockQty: 1000, unit: 400, atrPct: 0.0206 },
+  '603390': { name: '通达电气', lockQty: 100, unit: 100, atrPct: 0.0444 },
 }
+const AZURE_ACK_API = 'https://receives-duplicate-cleaners-recognition.trycloudflare.com'
 
 export default function QuantRescueSection() {
   const [selectedStock, setSelectedStock] = useState('TOTAL')
@@ -24,6 +25,31 @@ export default function QuantRescueSection() {
   const [quoteLoading, setQuoteLoading] = useState(false)
   const [quoteTime, setQuoteTime] = useState('')
   const [copiedKey, setCopiedKey] = useState('')
+  const [ackInfo, setAckInfo] = useState(null)
+  const [acking, setAcking] = useState(false)
+
+  const checkAckStatus = async () => {
+    try {
+      const res = await fetch(`${AZURE_ACK_API}/status`)
+      if (res.ok) {
+        const d = await res.json()
+        if (d.ack && d.ack.confirmed_at) setAckInfo(d.ack)
+      }
+    } catch {}
+  }
+
+  const handleConfirmGrid = async () => {
+    setAcking(true)
+    try {
+      const res = await fetch(`${AZURE_ACK_API}/ack?token=sm_rescue_2026&format=json`)
+      if (res.ok) {
+        const d = await res.json()
+        if (d.ack) setAckInfo(d.ack)
+      }
+    } catch {} finally {
+      setAcking(false)
+    }
+  }
 
   const loadLivePlan = async () => {
     setQuoteLoading(true)
@@ -54,6 +80,7 @@ export default function QuantRescueSection() {
 
   useEffect(() => {
     loadLivePlan()
+    checkAckStatus()
   }, [])
 
   const copyText = (key, text) => {
@@ -274,20 +301,41 @@ export default function QuantRescueSection() {
 
         <div style={{
           marginTop: 14,
-          padding: '10px 14px',
+          padding: '12px 16px',
           borderRadius: 8,
-          background: 'rgba(59, 130, 246, 0.08)',
-          border: '1px solid rgba(59, 130, 246, 0.25)',
+          background: ackInfo ? 'rgba(16, 185, 129, 0.08)' : 'rgba(59, 130, 246, 0.08)',
+          border: ackInfo ? '1px solid rgba(16, 185, 129, 0.3)' : '1px solid rgba(59, 130, 246, 0.25)',
           display: 'flex',
           justifyContent: 'space-between',
           alignItems: 'center',
           flexWrap: 'wrap',
-          gap: 10,
+          gap: 12,
           fontSize: 12
         }}>
           <span>
-            💡 <strong>操作规则</strong>：保留底仓绝不卖飞；每完成一笔高抛低吸，套利差价直接摊薄持仓成本。本清单由 Azure 每日 09:26 自动邮件同步推送。
+            {ackInfo ? (
+              <>✅ <strong>已确认最新网格参数</strong>（确认于 {ackInfo.confirmed_at}）——在波动率变化超 0.8% 前，Azure 每天 15:05 检测后将保持静默不再提醒。</>
+            ) : (
+              <>💡 <strong>手机按比例设置幅度</strong>：亚太 +4.0%/-6.5% · 海容 +2.4%/-3.9% · 赣粤 +1.6%/-2.7% · 通达 +3.5%/-5.8%。设好后请点右侧按钮确认不再提醒。</>
+            )}
           </span>
+          <button
+            onClick={handleConfirmGrid}
+            disabled={acking}
+            style={{
+              padding: '7px 14px',
+              borderRadius: 6,
+              border: 'none',
+              background: ackInfo ? '#10b981' : '#2563eb',
+              color: '#fff',
+              fontWeight: 600,
+              fontSize: 12,
+              cursor: acking ? 'wait' : 'pointer',
+              whiteSpace: 'nowrap',
+            }}
+          >
+            {acking ? '确认中...' : ackInfo ? '✅ 已确认（点此重新确认）' : '✅ 我已在手机设好（不再提醒）'}
+          </button>
         </div>
       </SectionCard>
 
