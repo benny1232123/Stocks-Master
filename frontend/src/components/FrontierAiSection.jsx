@@ -484,45 +484,6 @@ export default function FrontierAiSection({ selectedStrategy, onSelectStrategy, 
             </div>
           )
         })()}
-
-        {/* Jev 底层优选标的池展示区 */}
-        <div style={{
-          background: 'hsla(var(--muted)/0.04)',
-          borderRadius: 8,
-          border: '1px solid hsla(var(--border)/0.5)',
-          padding: '12px 14px',
-          display: 'flex',
-          flexDirection: 'column',
-          gap: 8,
-        }}>
-          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: 6 }}>
-            <span style={{ fontWeight: 600, fontSize: '0.84rem', color: 'hsl(var(--foreground))', whiteSpace: 'nowrap', flexShrink: 0 }}>
-              🎯 Jev 底层实时协同打分优选
-            </span>
-            <span style={{ fontSize: '0.76rem', color: 'hsl(var(--muted))', whiteSpace: 'nowrap', flexShrink: 0 }}>
-              催化主线: <strong style={{ color: '#2563eb' }}>{active.gnn_active_catalyst}</strong>
-            </span>
-          </div>
-
-          <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
-            {active.top_picks.map((p) => (
-              <span
-                key={p.code}
-                className="chip"
-                style={{
-                  background: 'rgba(37, 99, 235, 0.08)',
-                  borderColor: 'rgba(37, 99, 235, 0.25)',
-                  color: '#2563eb',
-                  fontSize: '0.76rem',
-                  fontWeight: 500,
-                  whiteSpace: 'nowrap'
-                }}
-              >
-                {p.name} ({p.code}) · 综合 {p.frontier_ai_score}分 [{p.suggested_action}]
-              </span>
-            ))}
-          </div>
-        </div>
       </div>
     </div>
   )
