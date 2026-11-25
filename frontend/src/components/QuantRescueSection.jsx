@@ -174,17 +174,19 @@ export default function QuantRescueSection({ jevLive, activeRegime }) {
   const rawSeries = currentStockData.series || []
 
   const periodRanges = [
-    { id: 'all', label: '🏆 全周期 (2020~2026 穿越牛熊)', start: '2020-01-01', end: '2099-12-31' },
-    { id: 'bull20_21', label: '📈 2020~2021 结构牛市', start: '2020-01-01', end: '2021-12-31' },
-    { id: 'grind22_24', label: '〰️ 2022~2024 震荡 + 924快牛', start: '2022-01-01', end: '2024-12-31' },
-    { id: 'bear25_26', label: '📉 2025-08~至今 实盘套牢期', start: '2025-08-27', end: '2099-12-31' },
+    { id: 'day', label: '日', title: '日频 (近10个交易日)', count: 10 },
+    { id: 'week', label: '周', title: '周度 (近1周5个交易日)', count: 5 },
+    { id: 'month', label: '月', title: '月度 (近1月22个交易日)', count: 22 },
+    { id: 'quarter', label: '季', title: '季度 (近1季66个交易日)', count: 66 },
+    { id: 'year', label: '年', title: '年度 (近1年250个交易日)', count: 250 },
+    { id: 'all', label: '全部', title: '全部 (2020~至今全景)', count: null },
   ]
 
   // 根据所选周期切片并按区间起点归一化收益率
   const data = useMemo(() => {
     if (!rawSeries.length) return []
-    const rng = periodRanges.find((p) => p.id === selectedPeriod) || periodRanges[0]
-    const sliced = rawSeries.filter((pt) => pt.date >= rng.start && pt.date <= rng.end)
+    const rng = periodRanges.find((p) => p.id === selectedPeriod) || periodRanges[periodRanges.length - 1]
+    const sliced = rng.count ? rawSeries.slice(-Math.min(rng.count, rawSeries.length)) : rawSeries
     const active = sliced.length >= 2 ? sliced : rawSeries
     const basePt = active[0]
     const keys = ['bench', 'gueant', 'fernholz', 'jev', 'avellaneda', 'almgren', 'ppo']
@@ -464,38 +466,42 @@ export default function QuantRescueSection({ jevLive, activeRegime }) {
         title="🔬 前沿量化拯救算法全周期回测中心 (Quant Rescue Lab · 2020~2026 穿越牛熊)"
         subtitle="覆盖 2020~2026 全周期（1671 交易日），已按 A 股真实规费实扣（佣金万2.5最低5元 + 卖出印花税0.05%/0.1% + 过户费）"
       >
-        <div style={{
-          display: 'flex',
-          gap: 8,
-          flexWrap: 'wrap',
-          marginBottom: 12,
-        }}>
-          {periodRanges.map((pr) => {
-            const active = selectedPeriod === pr.id
-            return (
-              <button
-                key={pr.id}
-                type="button"
-                onClick={() => {
-                  setSelectedPeriod(pr.id)
-                  setHoverIdx(null)
-                }}
-                style={{
-                  padding: '6px 12px',
-                  borderRadius: 6,
-                  fontSize: 12,
-                  fontWeight: active ? 600 : 400,
-                  border: active ? '1px solid hsl(var(--primary))' : '1px solid hsl(var(--border))',
-                  background: active ? 'hsl(var(--primary))' : 'hsl(var(--secondary) / 0.5)',
-                  color: active ? '#fff' : 'hsl(var(--foreground))',
-                  cursor: 'pointer',
-                  transition: 'all 0.15s'
-                }}
-              >
-                {pr.label}
-              </button>
-            )
-          })}
+        <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap', marginBottom: 14 }}>
+          <span style={{ fontSize: '0.82rem', color: 'hsl(var(--muted))', fontWeight: 500, marginRight: 2 }}>
+            周期切换:
+          </span>
+          <div style={{ display: 'inline-flex', padding: 2, background: 'hsla(var(--border)/0.4)', borderRadius: 8, gap: 4 }}>
+            {periodRanges.map((pr) => {
+              const active = selectedPeriod === pr.id
+              return (
+                <button
+                  key={pr.id}
+                  type="button"
+                  title={pr.title}
+                  onClick={() => {
+                    setSelectedPeriod(pr.id)
+                    setHoverIdx(null)
+                  }}
+                  style={{
+                    border: 'none',
+                    padding: '6px 16px',
+                    borderRadius: 6,
+                    fontSize: '0.82rem',
+                    fontWeight: active ? 600 : 400,
+                    background: active ? 'hsl(var(--primary))' : 'transparent',
+                    color: active ? '#fff' : 'hsl(var(--foreground))',
+                    cursor: 'pointer',
+                    transition: 'all 0.15s ease'
+                  }}
+                >
+                  {pr.label}
+                </button>
+              )
+            })}
+          </div>
+          <span style={{ fontSize: '0.76rem', color: 'hsl(var(--muted))', marginLeft: 6 }}>
+            (已更新至最近收盘 · {rawSeries[rawSeries.length - 1]?.date || '最新'})
+          </span>
         </div>
         <div style={{
           display: 'flex',
