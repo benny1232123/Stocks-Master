@@ -918,6 +918,89 @@ export default function QuantRescueSection({ jevLive, activeRegime }) {
           </svg>
         </div>
 
+        {/* 拯救策略核心风控与性价比排行榜 (按当前所选股票与周期动态重算) */}
+        {data.length >= 2 && (() => {
+          const RESCUE_META = [
+            { id: 'fernholz', label: 'Fernholz 波动率收割 + ETF', color: '#10b981' },
+            { id: 'ppo', label: 'PPO 深度强化学习做 T', color: '#ec4899' },
+            { id: 'almgren', label: 'Almgren-Chriss 最优冲击', color: '#06b6d4' },
+            { id: 'avellaneda', label: 'Avellaneda-Stoikov 库存做市', color: '#f59e0b' },
+            { id: 'gueant', label: 'Guéant 非对称做 T', color: '#3b82f6' },
+            { id: 'jev', label: 'World Model & JEV 自适应', color: '#a855f7' },
+            { id: 'bench', label: '散户死扛基准 (Buy & Hold)', color: '#ef4444' },
+          ]
+          const days = data.length
+          const benchRet = Number(lastPoint.bench_return || 0)
+          const rows = RESCUE_META.map((m) => {
+            const vals = data.map((d) => Number(d[`${m.id}_val`] || 0))
+            let peak = vals[0] || 1
+            let maxDd = 0
+            let upDays = 0
+            for (let i = 0; i < vals.length; i++) {
+              if (vals[i] > peak) peak = vals[i]
+              const dd = peak > 0 ? ((vals[i] - peak) / peak) * 100 : 0
+              if (dd < maxDd) maxDd = dd
+              if (i > 0 && vals[i] > vals[i - 1]) upDays++
+            }
+            const totalRet = Number(lastPoint[`${m.id}_return`] || 0)
+            const cagr = days >= 20
+              ? +((Math.pow(Math.max(0.01, 1 + totalRet / 100), 252 / days) - 1) * 100).toFixed(2)
+              : totalRet
+            const ddRounded = +maxDd.toFixed(2)
+            const calmar = Math.abs(ddRounded) > 0.1 ? +(cagr / Math.abs(ddRounded)).toFixed(2) : (cagr > 0 ? 9.99 : 0)
+            const excess = +(totalRet - benchRet).toFixed(2)
+            const winRate = +((upDays / Math.max(1, days - 1)) * 100).toFixed(1)
+            return { ...m, totalRet, cagr, maxDd: ddRounded, calmar, excess, winRate }
+          }).sort((a, b) => b.calmar - a.calmar)
+
+          return (
+            <div style={{ marginTop: 16, padding: '14px 16px', borderRadius: 8, background: 'hsla(var(--muted)/0.04)', border: '1px solid hsl(var(--border))' }}>
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: 8, marginBottom: 10 }}>
+                <span style={{ fontSize: 13, fontWeight: 700, color: 'hsl(var(--foreground))' }}>
+                  📊 当前区间综合指标排行榜（按卡玛比率降序 · 同步随标的与周期重算）
+                </span>
+                <span style={{ fontSize: 11, color: 'hsl(var(--muted-foreground))' }}>
+                  卡玛越高代表“抗跌性价比”越高 · 相对死扛为正则跑赢躺平
+                </span>
+              </div>
+              <div style={{ overflowX: 'auto' }}>
+                <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 12, textAlign: 'left' }}>
+                  <thead>
+                    <tr style={{ borderBottom: '1px solid hsl(var(--border))', color: 'hsl(var(--muted-foreground))' }}>
+                      <th style={{ padding: '7px 8px' }}>排名 / 策略</th>
+                      <th style={{ padding: '7px 8px' }}>卡玛比率</th>
+                      <th style={{ padding: '7px 8px' }}>年化收益 (CAGR)</th>
+                      <th style={{ padding: '7px 8px' }}>最大回撤</th>
+                      <th style={{ padding: '7px 8px' }}>相对死扛超额</th>
+                      <th style={{ padding: '7px 8px' }}>日胜率</th>
+                      <th style={{ padding: '7px 8px' }}>区间收益</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {rows.map((r, idx) => (
+                      <tr key={r.id} style={{ borderBottom: '1px solid hsl(var(--border) / 0.4)' }}>
+                        <td style={{ padding: '7px 8px', fontWeight: 600 }}>
+                          <span style={{ color: 'hsl(var(--muted-foreground))', marginRight: 6 }}>#{idx + 1}</span>
+                          <span style={{ display: 'inline-block', width: 8, height: 8, borderRadius: '50%', background: r.color, marginRight: 6 }} />
+                          {r.label}
+                        </td>
+                        <td style={{ padding: '7px 8px', fontWeight: 700, color: r.calmar >= 0.5 ? '#10b981' : '#d97706' }}>{r.calmar}</td>
+                        <td style={{ padding: '7px 8px', color: r.cagr >= 0 ? '#10b981' : '#ef4444' }}>{r.cagr >= 0 ? '+' : ''}{r.cagr}%</td>
+                        <td style={{ padding: '7px 8px', color: '#ef4444' }}>{r.maxDd}%</td>
+                        <td style={{ padding: '7px 8px', fontWeight: 600, color: r.excess >= 0 ? '#2563eb' : '#ef4444' }}>
+                          {r.id === 'bench' ? '基准 0.00%' : `${r.excess >= 0 ? '+' : ''}${r.excess}%`}
+                        </td>
+                        <td style={{ padding: '7px 8px' }}>{r.winRate}%</td>
+                        <td style={{ padding: '7px 8px', color: r.totalRet >= 0 ? '#10b981' : '#ef4444' }}>{r.totalRet >= 0 ? '+' : ''}{r.totalRet}%</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            </div>
+          )
+        })()}
+
         <div style={{
           marginTop: 16,
           padding: '14px 18px',

@@ -1761,6 +1761,99 @@ function App() {
                     </div>
 
                     <OverallEquityChart curve={activeCurve} />
+
+                    {/* 全策略核心风控与性价比指标排行榜 (卡玛比率/年化/回撤/夏普/胜率) */}
+                    {(() => {
+                      const STRAT_META = [
+                        { id: 'adaptive', label: '🏛️ 自适应稳健' },
+                        { id: 'world_model', label: '🌐 世界模型' },
+                        { id: 'diffusion', label: '🌊 时序扩散' },
+                        { id: 'gnn', label: '🕸️ 拓扑 GNN' },
+                        { id: 'ofi', label: '⚔️ 盘口订单流' },
+                        { id: 'causal', label: '🧠 因果事件' },
+                        { id: 'marl', label: '♟️ 博弈 RL' },
+                        { id: 'stat_arb', label: '💎 统计套利' },
+                        { id: 'jev_meta', label: '⚡ Jev 综合' },
+                      ]
+                      const rows = STRAT_META.map((m) => {
+                        const store = STRATEGY_DATA_MAP[m.id]
+                        const d = store?.[activeCycleKey] || store?.['all']
+                        if (!d) return null
+                        const totalRet = Number(d.total_strategy_return || 0)
+                        const days = Math.max(1, Number(d.days || 1))
+                        const cagr = days >= 20
+                          ? +((Math.pow(Math.max(0.01, 1 + totalRet / 100), 252 / days) - 1) * 100).toFixed(2)
+                          : totalRet
+                        const maxDd = Number(d.max_drawdown || 0)
+                        const calmar = Math.abs(maxDd) > 0.05 ? +(cagr / Math.abs(maxDd)).toFixed(2) : (cagr > 0 ? 9.99 : 0)
+                        return {
+                          id: m.id,
+                          label: m.label,
+                          totalRet,
+                          cagr,
+                          maxDd,
+                          calmar,
+                          sharpe: Number(d.sharpe || 0),
+                          winRate: Number(d.win_rate || 50),
+                        }
+                      }).filter(Boolean).sort((a, b) => b.calmar - a.calmar)
+
+                      return (
+                        <div style={{ marginTop: 18, padding: '14px 16px', borderRadius: 10, background: 'hsla(var(--muted)/0.04)', border: '1px solid hsla(var(--border)/0.6)' }}>
+                          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: 8, marginBottom: 10 }}>
+                            <span style={{ fontSize: '0.88rem', fontWeight: 700, color: 'hsl(var(--foreground))' }}>
+                              📊 全策略综合性价比排行榜（按卡玛比率 = 年化收益 ÷ 最大回撤 降序，点击可切换曲线）
+                            </span>
+                            <span style={{ fontSize: '0.74rem', color: 'hsl(var(--muted))' }}>
+                              卡玛 ≥ 1.0 优秀 · 最大回撤越浅越拿得住
+                            </span>
+                          </div>
+                          <div style={{ overflowX: 'auto' }}>
+                            <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: '0.78rem', textAlign: 'left' }}>
+                              <thead>
+                                <tr style={{ borderBottom: '1px solid hsla(var(--border)/0.7)', color: 'hsl(var(--muted))' }}>
+                                  <th style={{ padding: '7px 8px' }}>排名 / 策略</th>
+                                  <th style={{ padding: '7px 8px' }}>卡玛比率</th>
+                                  <th style={{ padding: '7px 8px' }}>年化收益 (CAGR)</th>
+                                  <th style={{ padding: '7px 8px' }}>最大回撤</th>
+                                  <th style={{ padding: '7px 8px' }}>夏普比率</th>
+                                  <th style={{ padding: '7px 8px' }}>日胜率</th>
+                                  <th style={{ padding: '7px 8px' }}>区间累计</th>
+                                </tr>
+                              </thead>
+                              <tbody>
+                                {rows.map((r, idx) => {
+                                  const isSel = selectedStrategyModel === r.id
+                                  return (
+                                    <tr
+                                      key={r.id}
+                                      onClick={() => setSelectedStrategyModel(r.id)}
+                                      style={{
+                                        cursor: 'pointer',
+                                        borderBottom: '1px solid hsla(var(--border)/0.35)',
+                                        background: isSel ? 'hsla(var(--primary)/0.09)' : 'transparent',
+                                        fontWeight: isSel ? 600 : 400,
+                                      }}
+                                    >
+                                      <td style={{ padding: '7px 8px' }}>
+                                        <span style={{ color: 'hsl(var(--muted))', marginRight: 6 }}>#{idx + 1}</span>
+                                        {r.label}
+                                      </td>
+                                      <td style={{ padding: '7px 8px', fontWeight: 700, color: r.calmar >= 1 ? '#059669' : '#d97706' }}>{r.calmar}</td>
+                                      <td style={{ padding: '7px 8px', color: r.cagr >= 0 ? '#16a34a' : '#dc2626' }}>{r.cagr >= 0 ? '+' : ''}{r.cagr}%</td>
+                                      <td style={{ padding: '7px 8px', color: '#dc2626' }}>{r.maxDd}%</td>
+                                      <td style={{ padding: '7px 8px' }}>{r.sharpe}</td>
+                                      <td style={{ padding: '7px 8px' }}>{r.winRate}%</td>
+                                      <td style={{ padding: '7px 8px', color: 'hsl(var(--muted))' }}>{r.totalRet >= 0 ? '+' : ''}{r.totalRet}%</td>
+                                    </tr>
+                                  )
+                                })}
+                              </tbody>
+                            </table>
+                          </div>
+                        </div>
+                      )
+                    })()}
                   </div>
                 )
               })()}
