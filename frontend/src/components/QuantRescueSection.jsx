@@ -16,6 +16,7 @@ const AZURE_ACK_API = 'https://receives-duplicate-cleaners-recognition.trycloudf
 
 export default function QuantRescueSection({ jevLive, activeRegime }) {
   const [selectedStock, setSelectedStock] = useState('TOTAL')
+  const [selectedPeriod, setSelectedPeriod] = useState('all')
   const [activeTab, setActiveTab] = useState('val')
   const [hoverIdx, setHoverIdx] = useState(null)
 
@@ -126,49 +127,32 @@ export default function QuantRescueSection({ jevLive, activeRegime }) {
   const db = RESCUE_BACKTEST_DATABASE || {}
   const currentStockData = db[selectedStock] || db['TOTAL'] || {}
   const rawSeries = currentStockData.series || []
-  const initCap = currentStockData.init_capital || currentStockData.cost || 1
 
-  // 在原有 3 大拯救算法基础上，扩展 3 个前沿做 T / 库存控制拯救策略同台对比
+  const periodRanges = [
+    { id: 'all', label: '🏆 全周期 (2020~2026 穿越牛熊)', start: '2020-01-01', end: '2099-12-31' },
+    { id: 'bull20_21', label: '📈 2020~2021 结构牛市', start: '2020-01-01', end: '2021-12-31' },
+    { id: 'grind22_24', label: '〰️ 2022~2024 震荡 + 924快牛', start: '2022-01-01', end: '2024-12-31' },
+    { id: 'bear25_26', label: '📉 2025-08~至今 实盘套牢期', start: '2025-08-27', end: '2099-12-31' },
+  ]
+
+  // 根据所选周期切片并按区间起点归一化收益率
   const data = useMemo(() => {
     if (!rawSeries.length) return []
-    const baseCost = Number(currentStockData.cost || 1)
-    return rawSeries.map((pt, i) => {
-      const bench = Number(pt.bench_val || 0)
-      const g = Number(pt.gueant_val || 0)
-      const f = Number(pt.fernholz_val || 0)
-      const j = Number(pt.jev_val || 0)
-
-      // 1. Almgren-Chriss 最优冲击执行：分批低吸减滑点，走势介于 Guéant 与 Fernholz 之间并带微弱低冲击平滑
-      const almgrenVal = +(0.58 * g + 0.42 * f + Math.max(0, (g - bench) * 0.08)).toFixed(1)
-      // 2. Avellaneda-Stoikov 库存风险做市：重仓深套时主动下移保留价加速降成本
-      const drawdownRatio = Math.max(0, (initCap - bench) / (initCap || 1))
-      const avellanedaVal = +(g * (1 + Math.min(0.035, drawdownRatio * 0.12)) + (j - bench) * 0.15).toFixed(1)
-      // 3. PPO 深度强化学习动态做 T：仅在高胜率波段出手，波动控制最优
-      const ppoVal = +(0.52 * g + 0.48 * j + (i > 5 ? Math.max(0, (g - f) * 0.25) : 0)).toFixed(1)
-
-      const bCost = Number(pt.bench_cost || baseCost)
-      const gCost = Number(pt.gueant_cost || baseCost)
-      const fCost = Number(pt.fernholz_cost || baseCost)
-      const jCost = Number(pt.jev_cost || baseCost)
-
-      const almgrenCost = +(0.58 * gCost + 0.42 * fCost).toFixed(2)
-      const avellanedaCost = +(Math.max(0.01, gCost - Math.max(0, (bCost - gCost) * 0.18))).toFixed(2)
-      const ppoCost = +(0.52 * gCost + 0.48 * jCost).toFixed(2)
-
-      return {
-        ...pt,
-        almgren_val: almgrenVal,
-        avellaneda_val: avellanedaVal,
-        ppo_val: ppoVal,
-        almgren_cost: almgrenCost,
-        avellaneda_cost: avellanedaCost,
-        ppo_cost: ppoCost,
-        almgren_return: +(((almgrenVal / initCap) - 1) * 100).toFixed(2),
-        avellaneda_return: +(((avellanedaVal / initCap) - 1) * 100).toFixed(2),
-        ppo_return: +(((ppoVal / initCap) - 1) * 100).toFixed(2),
-      }
+    const rng = periodRanges.find((p) => p.id === selectedPeriod) || periodRanges[0]
+    const sliced = rawSeries.filter((pt) => pt.date >= rng.start && pt.date <= rng.end)
+    const active = sliced.length >= 2 ? sliced : rawSeries
+    const basePt = active[0]
+    const keys = ['bench', 'gueant', 'fernholz', 'jev', 'avellaneda', 'almgren', 'ppo']
+    return active.map((pt) => {
+      const next = { ...pt }
+      keys.forEach((k) => {
+        const bVal = Number(basePt[`${k}_val`] || 1)
+        const cVal = Number(pt[`${k}_val`] || bVal)
+        next[`${k}_return`] = +(((cVal / bVal) - 1) * 100).toFixed(2)
+      })
+      return next
     })
-  }, [rawSeries, initCap, currentStockData.cost])
+  }, [rawSeries, selectedPeriod])
 
   const summary = currentStockData.summary || {}
 
@@ -418,9 +402,42 @@ export default function QuantRescueSection({ jevLive, activeRegime }) {
 
       {/* 2. 前沿量化拯救算法全真回测曲线中心 */}
       <SectionCard
-        title="🔬 前沿量化拯救算法全真回测中心 (Quant Rescue Lab · 6大算法同台对比)"
-        subtitle="针对你的 4 只套牢持仓，全真对比 6 大前沿做 T / 库存控制 / 风控置换算法在下跌与震荡中的回血成效与成本压降走势"
+        title="🔬 前沿量化拯救算法全周期回测中心 (Quant Rescue Lab · 2020~2026 穿越牛熊)"
+        subtitle="覆盖 2020~2021 结构牛、2022~2024 震荡+924快牛、2025~2026 单边套牢全周期（1600+ 交易日），真实检验 6 大算法牛市防卖飞与熊市降本能力"
       >
+        <div style={{
+          display: 'flex',
+          gap: 8,
+          flexWrap: 'wrap',
+          marginBottom: 12,
+        }}>
+          {periodRanges.map((pr) => {
+            const active = selectedPeriod === pr.id
+            return (
+              <button
+                key={pr.id}
+                type="button"
+                onClick={() => {
+                  setSelectedPeriod(pr.id)
+                  setHoverIdx(null)
+                }}
+                style={{
+                  padding: '6px 12px',
+                  borderRadius: 6,
+                  fontSize: 12,
+                  fontWeight: active ? 600 : 400,
+                  border: active ? '1px solid hsl(var(--primary))' : '1px solid hsl(var(--border))',
+                  background: active ? 'hsl(var(--primary))' : 'hsl(var(--secondary) / 0.5)',
+                  color: active ? '#fff' : 'hsl(var(--foreground))',
+                  cursor: 'pointer',
+                  transition: 'all 0.15s'
+                }}
+              >
+                {pr.label}
+              </button>
+            )
+          })}
+        </div>
         <div style={{
           display: 'flex',
           gap: 8,

@@ -301,7 +301,7 @@ jobs:
         run: |
           python scripts/export_web_data.py
           python scripts/generate_all_eight_frontier_curves.py
-          python scripts/update_rescue_backtest_data.py
+          python scripts/build_full_cycle_rescue_backtest.py
 
       - name: 重对齐-清除目标日旧回测产物（强制重算）
         # 仅手动补跑信号日（workflow_dispatch 带 signal_date）时生效；
