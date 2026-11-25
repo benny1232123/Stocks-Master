@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react'
+import React, { useState, useEffect, useMemo } from 'react'
 import {
   Zap,
   Network,
@@ -17,49 +17,13 @@ import {
   LineChart
 } from 'lucide-react'
 import { SectionCard } from './cards'
+import { REGIME_STRATEGIES, computeDynamicWeights } from '../lib/jevRegimeEngine'
 
-const REGIME_STRATEGIES = [
-  {
-    id: 'bear_rescue',
-    label: '📉 弱势阴跌 / 套牢自救期',
-    condition: '大盘或个股跌破 MA20/MA60，上方抛压重',
-    primaryModel: 'jev_meta',
-    primaryName: 'Guéant 非对称网格做 T + 现金防御',
-    action: '不盲目补仓、不割在地板，留足核心底仓，用手机云端非对称网格吃日内波动降成本。',
-    color: '#3b82f6',
-  },
-  {
-    id: 'range_grind',
-    label: '〰️ 宽幅震荡 / 磨底轮动期',
-    condition: '指数箱体拉锯，成交量温和，无明确主线',
-    primaryModel: 'statistical_arbitrage',
-    primaryName: 'Statistical Arbitrage (统计套利) + OFI',
-    action: '高抛低吸不追涨，靠高低切换与红利低波底仓吃差价。',
-    color: '#10b981',
-  },
-  {
-    id: 'bull_trend',
-    label: '📈 多头趋势 / 主升浪确立期',
-    condition: '大盘放量站稳 MA20 & MA60，均线多头排列',
-    primaryModel: 'world_model',
-    primaryName: 'World Model (世界模型) + Macro Cycles',
-    action: '停止高频卖出做 T，顺势拿住核心趋势标的或 510300 宽基 ETF 吃完整波段。',
-    color: '#a855f7',
-  },
-  {
-    id: 'mania_catalyst',
-    label: '🔥 情绪狂热 / 题材主线爆发期',
-    condition: '成交额破万亿，主线产业链出现强催化扩散',
-    primaryModel: 'gnn',
-    primaryName: 'GNN (产业链图谱) + Diffusion (扩散模型)',
-    action: '聚焦核心主线龙头，同时挂载 5% 移动跟踪止盈防范高波动急跌。',
-    color: '#f59e0b',
-  },
-]
-
-export default function FrontierAiSection({ selectedStrategy, onSelectStrategy }) {
+export default function FrontierAiSection({ selectedStrategy, onSelectStrategy, jevLive, activeRegime: propRegime, onChangeRegime }) {
   const [data, setData] = useState(null)
-  const [activeRegime, setActiveRegime] = useState('bear_rescue')
+  const [localRegime, setLocalRegime] = useState('bear_rescue')
+  const activeRegime = propRegime || localRegime
+  const setActiveRegime = onChangeRegime || setLocalRegime
 
   useEffect(() => {
     let alive = true
@@ -168,7 +132,14 @@ export default function FrontierAiSection({ selectedStrategy, onSelectStrategy }
   }
 
   const active = data || defaultData
-  const routes = active.jev_strategy_route || defaultData.jev_strategy_route
+  const distMa20 = jevLive && jevLive.ma20 > 0 ? (jevLive.livePrice - jevLive.ma20) / jevLive.ma20 : 0
+  const vol20 = jevLive ? jevLive.vol20 / 100 : 0.015
+  const routes = useMemo(() => {
+    if (jevLive && activeRegime === jevLive.regimeId && jevLive.weights) {
+      return jevLive.weights
+    }
+    return computeDynamicWeights(activeRegime, distMa20, vol20)
+  }, [activeRegime, jevLive, distMa20, vol20])
 
   const strategyConfigs = [
     {

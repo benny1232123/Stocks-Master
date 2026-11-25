@@ -14,7 +14,7 @@ const RESCUE_STRATEGY_CFG = {
 }
 const AZURE_ACK_API = 'https://receives-duplicate-cleaners-recognition.trycloudflare.com'
 
-export default function QuantRescueSection() {
+export default function QuantRescueSection({ jevLive, activeRegime }) {
   const [selectedStock, setSelectedStock] = useState('TOTAL')
   const [activeTab, setActiveTab] = useState('val')
   const [hoverIdx, setHoverIdx] = useState(null)
@@ -183,6 +183,36 @@ export default function QuantRescueSection() {
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 20 }}>
+      {/* 0. JEV 实时市场时期联动状态条 */}
+      {jevLive && jevLive.regimeObj && (
+        <div style={{
+          padding: '12px 16px',
+          borderRadius: 10,
+          background: `${jevLive.regimeObj.color}12`,
+          border: `1px solid ${jevLive.regimeObj.color}40`,
+          display: 'flex',
+          justifyContent: 'space-between',
+          alignItems: 'center',
+          flexWrap: 'wrap',
+          gap: 10,
+          fontSize: 13
+        }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap' }}>
+            <span style={{ fontWeight: 700, color: jevLive.regimeObj.color }}>
+              🧭 JEV 实时联动：{jevLive.regimeObj.label}
+            </span>
+            {jevLive.livePrice > 0 && (
+              <span style={{ fontSize: 12, color: 'hsl(var(--muted-foreground))' }}>
+                (沪深300现价 <strong>{jevLive.livePrice}</strong> | MA20: {jevLive.ma20} | MA60: {jevLive.ma60})
+              </span>
+            )}
+          </div>
+          <div style={{ fontSize: 12, fontWeight: 600, color: 'hsl(var(--foreground))' }}>
+            {jevLive.regimeObj.tradeAdvice}
+          </div>
+        </div>
+      )}
+
       {/* 1. 今日 Guéant 非对称做 T 网格操作清单 */}
       <SectionCard
         title="📋 今日 Guéant 非对称做 T 网格操作清单 (实测 7 战 7 胜)"

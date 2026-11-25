@@ -28,6 +28,7 @@ import FrontierAiSection from './components/FrontierAiSection'
 import { cn } from './lib/utils'
 import { factorTypesOfSource, getFactorTypeColor } from './lib/factorTypes'
 import { fetchLiveIndexSnapshot, fetchLiveMarketBreadth, fetchLiveStockQuotes } from './lib/realtimeQuotes'
+import { fetchLiveJevRegime, REGIME_STRATEGIES, computeDynamicWeights } from './lib/jevRegimeEngine'
 import { insertTradeToCloud } from './lib/supabaseTrades'
 import MACRO_CYCLES from './macro_cycles_curves.json'
 import WORLD_MODEL_CYCLES from './world_model_curves.json'
@@ -622,6 +623,21 @@ function App() {
   const [btDateOpen, setBtDateOpen] = useState(false)    // 回测日期选择器是否展开
   const [activeCycleKey, setActiveCycleKey] = useState('all')
   const [selectedStrategyModel, setSelectedStrategyModel] = useState('world_model') // 'world_model' | 'adaptive'
+  const [jevLive, setJevLive] = useState(null)
+  const [activeRegime, setActiveRegime] = useState('bear_rescue')
+
+  useEffect(() => {
+    let alive = true
+    fetchLiveJevRegime().then((res) => {
+      if (!alive || !res) return
+      setJevLive(res)
+      setActiveRegime(res.regimeId)
+      if (res.regimeObj?.primaryModel) {
+        setSelectedStrategyModel(res.regimeObj.primaryModel)
+      }
+    }).catch(() => {})
+    return () => { alive = false }
+  }, [])
   const [tradeForm, setTradeForm] = useState({
     date: localDateStr(),
     code: '', name: '', side: 'buy', price: 0, qty: 100, fee: 0, notes: '',
@@ -1457,6 +1473,13 @@ function App() {
             <FrontierAiSection
               selectedStrategy={selectedStrategyModel}
               onSelectStrategy={(id) => setSelectedStrategyModel(id)}
+              jevLive={jevLive}
+              activeRegime={activeRegime}
+              onChangeRegime={(regId) => {
+                setActiveRegime(regId)
+                const reg = REGIME_STRATEGIES.find((r) => r.id === regId)
+                if (reg?.primaryModel) setSelectedStrategyModel(reg.primaryModel)
+              }}
             />
 
             {/* 真实资金金额模拟：10,000 元账户整手交易与实扣规费 */}
@@ -1743,7 +1766,7 @@ function App() {
               fetch('/api/portfolio').then(r => r.json()).then(setPortfolio).catch(() => {})
             }} />
             <div style={{ marginTop: 24 }}>
-              <QuantRescueSection />
+              <QuantRescueSection jevLive={jevLive} activeRegime={activeRegime} />
             </div>
         </section>
         )}
