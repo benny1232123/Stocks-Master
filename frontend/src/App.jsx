@@ -1219,14 +1219,6 @@ function App() {
             >
               🤖 AI 投研
             </button>
-            <button
-              type="button"
-              className={cn("c-nav-btn", activeView === 'signals' && "active")}
-              onClick={() => { setActiveView('signals'); window.scrollTo({ top: 0, behavior: 'smooth' }) }}
-              style={{ opacity: 0.78 }}
-            >
-              📦 今日选股 (已归档)
-            </button>
           </nav>
         </div>
         <div className="command-right">
