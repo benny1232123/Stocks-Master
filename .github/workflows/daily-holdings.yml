@@ -149,6 +149,7 @@ jobs:
           SMTP_TO: ${{ secrets.SMTP_TO }}
         run: |
           python scripts/notify_holdings_analysis.py
+          python scripts/send_rescue_action_plan.py
           F="stock_data/holdings_analysis_${{ steps.gate.outputs.today }}.html"
           echo "### 持仓分析产出" >> $GITHUB_STEP_SUMMARY
           if [ -f "$F" ]; then
