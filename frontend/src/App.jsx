@@ -40,8 +40,6 @@ import OFI_CYCLES from './microstructure_ofi_curves.json'
 import CAUSAL_CYCLES from './causal_event_curves.json'
 import MARL_CYCLES from './multi_agent_rl_curves.json'
 import STAT_ARB_CYCLES from './statistical_arbitrage_curves.json'
-import REAL_CAPITAL_10K from './real_capital_10k_backtest.json'
-import RealCapital10kSection from './components/RealCapital10kSection'
 
 const TIMEFRAME_OPTIONS = [
   { id: 'day', short_name: '日', label: '日频 (近阶段逐日滚动)' },
@@ -1500,25 +1498,6 @@ function App() {
               activeRegime={activeRegime}
             />
 
-            {/* 真实资金金额模拟：联动当前实盘持仓本金与选中策略 */}
-            <RealCapital10kSection
-              data={REAL_CAPITAL_10K}
-              capitalBase={userCapitalBase}
-              activeStrategyName={
-                selectedStrategyModel === 'gueant_grid' ? 'Guéant 非对称网格做 T'
-                  : selectedStrategyModel === 'world_model' ? '世界模型前瞻规划'
-                  : selectedStrategyModel === 'adaptive' ? '全天候自适应稳健'
-                  : selectedStrategyModel === 'diffusion' ? '金融时序扩散模型'
-                  : selectedStrategyModel === 'gnn' ? '产业链拓扑 GNN'
-                  : selectedStrategyModel === 'ofi' ? '盘口微观订单流'
-                  : selectedStrategyModel === 'causal' ? '大模型因果事件'
-                  : selectedStrategyModel === 'marl' ? '多智能体强化博弈'
-                  : selectedStrategyModel === 'stat_arb' ? '统计套利行业中性'
-                  : selectedStrategyModel === 'cash_defense' ? '国债逆回购 / 现金防守'
-                  : 'Jev 底层综合路由'
-              }
-            />
-
             <SectionCard title="历史周期策略净值曲线" subtitle="直接呈现各历史周期模拟运行净值走势，可切换八大并排策略与时间周期">
               {/* 策略引擎切换栏 */}
               <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', flexWrap: 'wrap', gap: 10, marginBottom: 14 }}>
@@ -1739,7 +1718,7 @@ function App() {
                   })}
                 </div>
                 <span style={{ fontSize: '0.76rem', color: 'hsl(var(--muted))', marginLeft: 6 }}>
-                  (已全部实时更新至今日收盘 · 2026-11-23)
+                  (已更新至最近收盘 · {WORLD_MODEL_CYCLES?.all?.end || '最新'})
                 </span>
               </div>
 

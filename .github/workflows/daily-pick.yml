@@ -298,7 +298,9 @@ jobs:
         env:
           SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
           SUPABASE_KEY: ${{ secrets.SUPABASE_KEY }}
-        run: python scripts/export_web_data.py
+        run: |
+          python scripts/export_web_data.py
+          python scripts/generate_all_eight_frontier_curves.py
 
       - name: 重对齐-清除目标日旧回测产物（强制重算）
         # 仅手动补跑信号日（workflow_dispatch 带 signal_date）时生效；
@@ -366,6 +368,8 @@ jobs:
           ls stock_data/Stock-Selection-*.csv >/dev/null 2>&1 && git add -f stock_data/Stock-Selection-*.csv || true
           # 看板静态数据快照：Render 端点快照优先直读，网站首屏毫秒级
           [ -d stock_data/web_data/ ] && git add -f stock_data/web_data/ || true
+          [ -f stock_data/index_cache/sh000300_full.csv ] && git add -f stock_data/index_cache/sh000300_full.csv || true
+          ls frontend/src/*_curves.json >/dev/null 2>&1 && git add -f frontend/src/*_curves.json || true
           [ -f stock_data/backtest_status.txt ] && git add -f stock_data/backtest_status.txt || true
           if git diff --cached --quiet; then
             echo "无变更，跳过提交"

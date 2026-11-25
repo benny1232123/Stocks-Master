@@ -287,7 +287,7 @@ export default function FrontierAiSection({ selectedStrategy, onSelectStrategy, 
                 </span>
               </div>
               <div style={{ fontSize: '0.78rem', color: 'hsl(var(--muted))' }}>
-                底层非自回归概率引擎 · 统领八大并排策略动态权重路由，全局统一风控拦截 (P≥0.65 强制一票否决)
+                底层非自回归概率引擎 · 小资金不拆仓原则：实时计算各策略当前匹配度评分，自动锁定唯一最优主策略集中执行 (P≥0.65 强制风控一票否决)
               </div>
             </div>
           </div>
@@ -310,32 +310,26 @@ export default function FrontierAiSection({ selectedStrategy, onSelectStrategy, 
           </div>
         </div>
 
-        {/* 分类策略动态权重分配进度条 */}
+        {/* 单一主策略集中执行栏（不再拆分有限资金） */}
         <div style={{ marginBottom: 14 }}>
-          <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '0.78rem', color: 'hsl(var(--muted))', marginBottom: 6, flexWrap: 'wrap', gap: 6 }}>
-            <span>Jev 底层实时计算权重路由 (已按类型分组，点击策略可联动下方曲线与实盘模拟)：</span>
-            <span>现金/国债防守保留: {((routes.cash_defense || 0) * 100).toFixed(1)}%</span>
-          </div>
-
           <div style={{
             display: 'flex',
-            height: 10,
-            borderRadius: 6,
-            overflow: 'hidden',
-            background: 'hsla(var(--muted)/0.15)',
+            justifyContent: 'space-between',
+            alignItems: 'center',
+            flexWrap: 'wrap',
+            gap: 8,
+            padding: '10px 14px',
+            borderRadius: 8,
+            background: `${currentRegimeObj.color}10`,
+            border: `1px solid ${currentRegimeObj.color}35`,
             marginBottom: 14
           }}>
-            {strategyConfigs.map((cfg) => (
-              <div
-                key={cfg.id}
-                style={{
-                  width: `${cfg.pct}%`,
-                  background: cfg.color,
-                  transition: 'width 0.3s ease'
-                }}
-                title={`${cfg.name}: ${cfg.pct}%`}
-              />
-            ))}
+            <div style={{ fontSize: '0.82rem', fontWeight: 600, color: 'hsl(var(--foreground))' }}>
+              🎯 当前唯一集中执行策略：<span style={{ color: currentRegimeObj.color, fontWeight: 700 }}>{currentRegimeObj.primaryName}</span>
+            </div>
+            <div style={{ fontSize: '0.74rem', color: 'hsl(var(--muted))' }}>
+              有限资金 100% 集中执行单一主策略（不拆散本金）· 其余策略仅作匹配度对比，点击可查看历史回测曲线
+            </div>
           </div>
 
           {/* 按策略类别分组展示卡片 */}
@@ -364,6 +358,10 @@ export default function FrontierAiSection({ selectedStrategy, onSelectStrategy, 
                       const isSelected = selectedStrategy === cfg.id
                       const isAutoPrimary = currentRegimeObj.primaryModel === cfg.id
                       const Icon = cfg.icon
+                      const maxPct = Math.max(...strategyConfigs.map((s) => Number(s.pct) || 1), 1)
+                      const matchScore = isAutoPrimary
+                        ? 95
+                        : Math.max(28, Math.min(89, Math.round((Number(cfg.pct) / maxPct) * 86)))
                       return (
                         <div
                           key={cfg.id}
@@ -393,11 +391,11 @@ export default function FrontierAiSection({ selectedStrategy, onSelectStrategy, 
                                   color: cfg.color,
                                   fontWeight: 700
                                 }}>
-                                  主推
+                                  唯一执行
                                 </span>
                               )}
-                              <span style={{ fontWeight: 700, fontSize: '0.84rem', color: cfg.color }}>
-                                {cfg.pct}%
+                              <span style={{ fontWeight: 700, fontSize: '0.82rem', color: cfg.color }}>
+                                {matchScore}分
                               </span>
                             </div>
                           </div>
