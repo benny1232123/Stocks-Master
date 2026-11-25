@@ -143,136 +143,117 @@ export default function FrontierAiSection({ selectedStrategy, onSelectStrategy, 
 
   const strategyConfigs = [
     {
-      id: 'gnn',
-      key: 'supply_chain_gnn',
-      name: '产业链拓扑 GNN',
-      icon: Network,
-      color: '#2563eb',
-      pct: (routes.supply_chain_gnn * 100).toFixed(1),
-      desc: '图卷积多跳特征传导 · 捕捉景气扩散 Alpha'
-    },
-    {
-      id: 'causal',
-      key: 'causal_event',
-      name: '大模型因果事件',
-      icon: Sparkles,
-      color: '#ec4899',
-      pct: (routes.causal_event * 100).toFixed(1),
-      desc: '结构因果图传导 · 捕捉政策与突发脉冲'
-    },
-    {
-      id: 'world_model',
-      key: 'world_model',
-      name: '世界模型前瞻规划',
-      icon: Globe2,
-      color: '#7c3aed',
-      pct: (routes.world_model * 100).toFixed(1),
-      desc: 'RSSM 潜空间推演 · 500次轨迹反事实规划'
-    },
-    {
-      id: 'ofi',
-      key: 'microstructure_ofi',
-      name: '盘口微观订单流',
-      icon: Crosshair,
-      color: '#0284c7',
-      pct: (routes.microstructure_ofi * 100).toFixed(1),
-      desc: 'Level-2 订单失衡 OFI · 主力大单吸筹博弈'
+      id: 'gueant_grid',
+      key: 'gueant_grid',
+      category: 'defense',
+      name: 'Guéant 非对称网格做 T',
+      icon: Sliders,
+      color: '#e11d48',
+      pct: ((routes.gueant_grid || 0) * 100).toFixed(1),
+      desc: '交易管理主力 · 存量底仓高抛低吸摊薄成本'
     },
     {
       id: 'adaptive',
       key: 'adaptive_regime',
+      category: 'defense',
       name: '全天候自适应稳健',
       icon: CheckCircle2,
       color: '#059669',
-      pct: (routes.adaptive_regime * 100).toFixed(1),
-      desc: '宏观周期状态机 · 均线破位避险'
+      pct: ((routes.adaptive_regime || 0) * 100).toFixed(1),
+      desc: '宏观周期状态机 · 均线破位刚性避险'
     },
     {
       id: 'stat_arb',
       key: 'statistical_arbitrage',
+      category: 'defense',
       name: '统计套利行业中性',
       icon: LineChart,
       color: '#0d9488',
-      pct: (routes.statistical_arbitrage * 100).toFixed(1),
+      pct: ((routes.statistical_arbitrage || 0) * 100).toFixed(1),
       desc: '因子正交去 Beta · 45度平稳向上复利'
+    },
+    {
+      id: 'cash_defense',
+      key: 'cash_defense',
+      category: 'defense',
+      name: '国债逆回购 / 现金防守',
+      icon: ShieldCheck,
+      color: '#64748b',
+      pct: ((routes.cash_defense || 0) * 100).toFixed(1),
+      desc: '空仓保留流动性 · 年化 ~2.5% 无风险底息'
+    },
+    {
+      id: 'world_model',
+      key: 'world_model',
+      category: 'trend',
+      name: '世界模型前瞻规划',
+      icon: Globe2,
+      color: '#7c3aed',
+      pct: ((routes.world_model || 0) * 100).toFixed(1),
+      desc: 'RSSM 潜空间推演 · 500次轨迹反事实规划'
+    },
+    {
+      id: 'gnn',
+      key: 'supply_chain_gnn',
+      category: 'trend',
+      name: '产业链拓扑 GNN',
+      icon: Network,
+      color: '#2563eb',
+      pct: ((routes.supply_chain_gnn || 0) * 100).toFixed(1),
+      desc: '图卷积多跳特征传导 · 捕捉景气扩散 Alpha'
     },
     {
       id: 'diffusion',
       key: 'diffusion_stress',
+      category: 'trend',
       name: '金融时序扩散模型',
       icon: Waves,
       color: '#d97706',
-      pct: (routes.diffusion_stress * 100).toFixed(1),
+      pct: ((routes.diffusion_stress || 0) * 100).toFixed(1),
       desc: '50步生成式极限压力测试 · 极值反脆弱'
+    },
+    {
+      id: 'ofi',
+      key: 'microstructure_ofi',
+      category: 'alpha',
+      name: '盘口微观订单流',
+      icon: Crosshair,
+      color: '#0284c7',
+      pct: ((routes.microstructure_ofi || 0) * 100).toFixed(1),
+      desc: 'Level-2 订单失衡 OFI · 主力大单吸筹博弈'
+    },
+    {
+      id: 'causal',
+      key: 'causal_event',
+      category: 'alpha',
+      name: '大模型因果事件',
+      icon: Sparkles,
+      color: '#ec4899',
+      pct: ((routes.causal_event || 0) * 100).toFixed(1),
+      desc: '结构因果图传导 · 捕捉政策与突发脉冲'
     },
     {
       id: 'marl',
       key: 'multi_agent_rl',
+      category: 'alpha',
       name: '多智能体强化博弈',
       icon: Users,
       color: '#f97316',
-      pct: (routes.multi_agent_rl * 100).toFixed(1),
+      pct: ((routes.multi_agent_rl || 0) * 100).toFixed(1),
       desc: '沙盘纳什均衡 · 反向猎杀散户恐慌踩踏'
     }
+  ]
+
+  const categoryGroups = [
+    { key: 'defense', title: '🛡️ 存量防卫 / 解套类（偏震荡与回撤控制）', color: '#e11d48' },
+    { key: 'trend', title: '📈 趋势 / 周期配置类（中线景气与宏观轮动）', color: '#2563eb' },
+    { key: 'alpha', title: '🚀 高弹性 / 事件驱动类（强攻主升与资金博弈）', color: '#d97706' }
   ]
 
   const currentRegimeObj = REGIME_STRATEGIES.find((r) => r.id === activeRegime) || REGIME_STRATEGIES[0]
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 16, marginBottom: 16 }}>
-      {/* JEV 分时期自适应策略路由器 */}
-      <div className="glass-card" style={{ padding: '16px 20px', borderRadius: 12, border: `1px solid ${currentRegimeObj.color}40` }}>
-        <div style={{ fontWeight: 600, fontSize: '0.98rem', marginBottom: 4 }}>
-          🧭 JEV 分时期策略路由器 (不同市场时期选用不同主策略)
-        </div>
-        <div style={{ fontSize: '0.78rem', color: 'hsl(var(--muted))', marginBottom: 12 }}>
-          不再每天高频换股——点击切换当前市场时期，JEV 自动匹配最适合该阶段的主力策略并联动下方净值曲线：
-        </div>
-        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(210px, 1fr))', gap: 10, marginBottom: 12 }}>
-          {REGIME_STRATEGIES.map((r) => {
-            const isSel = activeRegime === r.id
-            return (
-              <button
-                key={r.id}
-                type="button"
-                onClick={() => {
-                  setActiveRegime(r.id)
-                  if (onSelectStrategy) onSelectStrategy(r.primaryModel)
-                }}
-                style={{
-                  textAlign: 'left',
-                  padding: '10px 12px',
-                  borderRadius: 8,
-                  border: isSel ? `1.5px solid ${r.color}` : '1px solid hsl(var(--border))',
-                  background: isSel ? `${r.color}14` : 'hsl(var(--secondary) / 0.35)',
-                  cursor: 'pointer',
-                  transition: 'all 0.2s',
-                }}
-              >
-                <div style={{ fontSize: 13, fontWeight: 600, color: isSel ? r.color : 'hsl(var(--foreground))' }}>{r.label}</div>
-                <div style={{ fontSize: 11, color: 'hsl(var(--muted-foreground))', marginTop: 4 }}>{r.condition}</div>
-              </button>
-            )
-          })}
-        </div>
-        <div style={{
-          padding: '10px 14px',
-          borderRadius: 8,
-          background: `${currentRegimeObj.color}10`,
-          borderLeft: `4px solid ${currentRegimeObj.color}`,
-          fontSize: 13,
-          lineHeight: 1.6
-        }}>
-          <div>
-            <strong>当前时期推荐主策略：</strong>
-            <span style={{ color: currentRegimeObj.color, fontWeight: 700 }}>{currentRegimeObj.primaryName}</span>
-          </div>
-          <div style={{ fontSize: 12, color: 'hsl(var(--muted-foreground))', marginTop: 2 }}>
-            实操指令：{currentRegimeObj.action}
-          </div>
-        </div>
-      </div>
-
       {/* Jev 底层决策选择器核心架构卡片 */}
       <div className="glass-card" style={{ padding: '16px 20px', borderRadius: 12 }}>
         <div style={{
@@ -311,19 +292,29 @@ export default function FrontierAiSection({ selectedStrategy, onSelectStrategy, 
             </div>
           </div>
 
-          <div style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: '0.78rem' }}>
-            <span style={{ color: 'hsl(var(--muted))' }}>统一风控状态:</span>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: '0.78rem', flexWrap: 'wrap' }}>
+            <span className="chip" style={{
+              color: currentRegimeObj.color,
+              borderColor: `${currentRegimeObj.color}50`,
+              background: `${currentRegimeObj.color}12`,
+              fontSize: '0.74rem',
+              fontWeight: 600
+            }}>
+              🧭 底层自动识别：{currentRegimeObj.label}
+              {jevLive && jevLive.livePrice > 0 ? ` · 沪深300 ${jevLive.livePrice} (MA20 ${jevLive.ma20})` : ''}
+              {' '}→ 主推：{currentRegimeObj.primaryName}
+            </span>
             <span style={{ color: '#059669', display: 'inline-flex', alignItems: 'center', gap: 4, fontWeight: 500 }}>
               <ShieldCheck className="w-4 h-4" /> 正常放行 (P=0.31)
             </span>
           </div>
         </div>
 
-        {/* 八大并排策略动态权重分配进度条 */}
+        {/* 分类策略动态权重分配进度条 */}
         <div style={{ marginBottom: 14 }}>
-          <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '0.78rem', color: 'hsl(var(--muted))', marginBottom: 6 }}>
-            <span>Jev 底层当前实时权重路由 (点击策略卡片可直达下方曲线)：</span>
-            <span>现金/国债防守保留: {(routes.cash_defense * 100).toFixed(1)}%</span>
+          <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '0.78rem', color: 'hsl(var(--muted))', marginBottom: 6, flexWrap: 'wrap', gap: 6 }}>
+            <span>Jev 底层实时计算权重路由 (已按类型分组，点击策略可联动下方曲线与实盘模拟)：</span>
+            <span>现金/国债防守保留: {((routes.cash_defense || 0) * 100).toFixed(1)}%</span>
           </div>
 
           <div style={{
@@ -332,7 +323,7 @@ export default function FrontierAiSection({ selectedStrategy, onSelectStrategy, 
             borderRadius: 6,
             overflow: 'hidden',
             background: 'hsla(var(--muted)/0.15)',
-            marginBottom: 10
+            marginBottom: 14
           }}>
             {strategyConfigs.map((cfg) => (
               <div
@@ -345,50 +336,77 @@ export default function FrontierAiSection({ selectedStrategy, onSelectStrategy, 
                 title={`${cfg.name}: ${cfg.pct}%`}
               />
             ))}
-            <div
-              style={{
-                width: `${(routes.cash_defense * 100).toFixed(1)}%`,
-                background: 'hsl(var(--muted))',
-                opacity: 0.4
-              }}
-              title={`现金防守: ${(routes.cash_defense * 100).toFixed(1)}%`}
-            />
           </div>
 
-          {/* 8大并排策略卡片网格 */}
-          <div style={{
-            display: 'grid',
-            gridTemplateColumns: 'repeat(auto-fit, minmax(200px, 1fr))',
-            gap: 10
-          }}>
-            {strategyConfigs.map((cfg) => {
-              const isSelected = selectedStrategy === cfg.id
-              const Icon = cfg.icon
+          {/* 按策略类别分组展示卡片 */}
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
+            {categoryGroups.map((grp) => {
+              const items = strategyConfigs.filter((c) => c.category === grp.key)
               return (
-                <div
-                  key={cfg.id}
-                  onClick={() => onSelectStrategy && onSelectStrategy(cfg.id)}
-                  style={{
-                    padding: '10px 12px',
-                    borderRadius: 8,
-                    cursor: 'pointer',
-                    background: isSelected ? 'hsla(var(--primary)/0.08)' : 'hsla(var(--muted)/0.04)',
-                    border: isSelected ? `1.5px solid ${cfg.color}` : '1px solid hsla(var(--border)/0.6)',
-                    boxShadow: isSelected ? `0 0 10px ${cfg.color}20` : 'none',
-                    transition: 'all 0.15s ease'
-                  }}
-                >
-                  <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 4 }}>
-                    <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
-                      <Icon className="w-3.5 h-3.5" style={{ color: cfg.color }} />
-                      <span style={{ fontWeight: 600, fontSize: '0.82rem' }}>{cfg.name}</span>
-                    </div>
-                    <span style={{ fontWeight: 700, fontSize: '0.84rem', color: cfg.color }}>
-                      {cfg.pct}%
-                    </span>
+                <div key={grp.key}>
+                  <div style={{
+                    fontSize: '0.78rem',
+                    fontWeight: 700,
+                    color: grp.color,
+                    marginBottom: 8,
+                    display: 'flex',
+                    alignItems: 'center',
+                    gap: 6
+                  }}>
+                    <span>{grp.title}</span>
                   </div>
-                  <div style={{ fontSize: '0.72rem', color: 'hsl(var(--muted))', lineHeight: 1.3 }}>
-                    {cfg.desc}
+                  <div style={{
+                    display: 'grid',
+                    gridTemplateColumns: 'repeat(auto-fit, minmax(210px, 1fr))',
+                    gap: 10
+                  }}>
+                    {items.map((cfg) => {
+                      const isSelected = selectedStrategy === cfg.id
+                      const isAutoPrimary = currentRegimeObj.primaryModel === cfg.id
+                      const Icon = cfg.icon
+                      return (
+                        <div
+                          key={cfg.id}
+                          onClick={() => onSelectStrategy && onSelectStrategy(cfg.id)}
+                          style={{
+                            padding: '10px 12px',
+                            borderRadius: 8,
+                            cursor: 'pointer',
+                            background: isSelected ? 'hsla(var(--primary)/0.08)' : 'hsla(var(--muted)/0.04)',
+                            border: isSelected ? `1.5px solid ${cfg.color}` : '1px solid hsla(var(--border)/0.6)',
+                            boxShadow: isSelected ? `0 0 10px ${cfg.color}20` : 'none',
+                            transition: 'all 0.15s ease'
+                          }}
+                        >
+                          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 4, gap: 6 }}>
+                            <div style={{ display: 'flex', alignItems: 'center', gap: 6, minWidth: 0 }}>
+                              <Icon className="w-3.5 h-3.5" style={{ color: cfg.color, flexShrink: 0 }} />
+                              <span style={{ fontWeight: 600, fontSize: '0.82rem', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{cfg.name}</span>
+                            </div>
+                            <div style={{ display: 'flex', alignItems: 'center', gap: 4, flexShrink: 0 }}>
+                              {isAutoPrimary && (
+                                <span style={{
+                                  fontSize: '0.66rem',
+                                  padding: '1px 5px',
+                                  borderRadius: 4,
+                                  background: `${cfg.color}18`,
+                                  color: cfg.color,
+                                  fontWeight: 700
+                                }}>
+                                  主推
+                                </span>
+                              )}
+                              <span style={{ fontWeight: 700, fontSize: '0.84rem', color: cfg.color }}>
+                                {cfg.pct}%
+                              </span>
+                            </div>
+                          </div>
+                          <div style={{ fontSize: '0.72rem', color: 'hsl(var(--muted))', lineHeight: 1.3 }}>
+                            {cfg.desc}
+                          </div>
+                        </div>
+                      )
+                    })}
                   </div>
                 </div>
               )
