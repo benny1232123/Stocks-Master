@@ -1,9 +1,7 @@
 name: 保活 Ping
 
-# 每 10 分钟访问一次 Render URL，防止免费版休眠
+# Render 已停用，取消每 10 分钟定时保活（仅保留手动触发）
 on:
-  schedule:
-    - cron: "*/10 * * * *"
   workflow_dispatch:
 
 concurrency:

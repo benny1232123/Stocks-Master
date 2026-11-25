@@ -63,6 +63,7 @@ export default function QuantRescueSection({ jevLive, activeRegime }) {
 
   // 实时操作清单状态
   const [liveQuotes, setLiveQuotes] = useState({})
+  const [stockTech, setStockTech] = useState({})
   const [holdingsQty, setHoldingsQty] = useState({ '002284': 900, '603187': 500, '600269': 1800, '603390': 200 })
   const [quoteLoading, setQuoteLoading] = useState(false)
   const [quoteTime, setQuoteTime] = useState('')
@@ -96,11 +97,48 @@ export default function QuantRescueSection({ jevLive, activeRegime }) {
   const loadLivePlan = async () => {
     setQuoteLoading(true)
     try {
-      const [quotes, trades] = await Promise.all([
-        fetchLiveStockQuotes(['002284', '603187', '600269', '603390', '510300']),
+      const codes = ['002284', '603187', '600269', '603390']
+      const fetchTech = async (c) => {
+        const sym = c.startsWith('6') ? `sh${c}` : `sz${c}`
+        try {
+          const r = await fetch(`https://web.ifzq.gtimg.cn/appstock/app/fqkline/get?param=${sym},day,,,65,qfq`)
+          if (!r.ok) return null
+          const json = await r.json()
+          const bars = json?.data?.[sym]?.qfqday || json?.data?.[sym]?.day || []
+          if (bars.length < 20) return null
+          const closes = bars.map((b) => Number(b[2] || 0))
+          const ma20 = closes.slice(-20).reduce((a, b) => a + b, 0) / 20
+          const ma60 = closes.slice(-Math.min(60, closes.length)).reduce((a, b) => a + b, 0) / Math.min(60, closes.length)
+          const trs = []
+          for (let i = 1; i < bars.length; i++) {
+            const h = Number(bars[i][3] || 0)
+            const l = Number(bars[i][4] || 0)
+            const pc = Number(bars[i - 1][2] || 0)
+            trs.push(Math.max(h - l, Math.abs(h - pc), Math.abs(l - pc)))
+          }
+          const atr14 = trs.slice(-14).reduce((a, b) => a + b, 0) / Math.min(14, trs.length)
+          const lastC = closes[closes.length - 1] || 1
+          return {
+            ma20: +ma20.toFixed(2),
+            ma60: +ma60.toFixed(2),
+            atrPct: Math.max(0.015, Math.min(0.055, atr14 / lastC)),
+          }
+        } catch {
+          return null
+        }
+      }
+
+      const [quotes, trades, techList] = await Promise.all([
+        fetchLiveStockQuotes([...codes, '510300']),
         fetchTradesFromCloud().catch(() => null),
+        Promise.all(codes.map(fetchTech)),
       ])
       setLiveQuotes(quotes || {})
+      const techMap = {}
+      codes.forEach((c, idx) => {
+        if (techList[idx]) techMap[c] = techList[idx]
+      })
+      if (Object.keys(techMap).length > 0) setStockTech(techMap)
       setQuoteTime(new Date().toLocaleTimeString('zh-CN', { hour12: false }))
 
       if (Array.isArray(trades) && trades.length > 0) {
@@ -134,42 +172,95 @@ export default function QuantRescueSection({ jevLive, activeRegime }) {
     }
   }
 
-  // 构建今日「一票一策」专属做 T / 减仓清单行
+  // 构建今日「一票一策」自动状态机切换清单行（实时 MA20/MA60/ATR + 市值驱动）
   const actionRows = useMemo(() => {
     return Object.entries(RESCUE_STRATEGY_CFG).map(([code, cfg]) => {
       const q = liveQuotes[code] || {}
+      const tech = stockTech[code] || null
       const price = q.price || 0
       const preClose = q.preClose || price
       const changePct = q.changePct ?? 0
       const totalQty = holdingsQty[code] ?? 0
       const baseRef = price > 0 ? price : preClose
-      const sellTrigger = baseRef > 0 ? (baseRef * (1 + cfg.sellMult * cfg.atrPct)).toFixed(2) : '--'
-      const buyTrigger = cfg.noBuy ? null : (baseRef > 0 ? (baseRef * (1 - cfg.buyMult * cfg.atrPct)).toFixed(2) : '--')
-      const estProfit = !cfg.noBuy && sellTrigger !== '--' && buyTrigger && buyTrigger !== '--'
+      const atrPct = tech?.atrPct || cfg.atrPct
+      const mktVal = baseRef * totalQty
+
+      // 自动判定每只股票当前最优策略
+      let strategy = cfg.strategy
+      let strategyColor = cfg.strategyColor
+      let sellMult = cfg.sellMult
+      let buyMult = cfg.buyMult
+      let noBuy = !!cfg.noBuy
+      let noSell = false
+      let tip = cfg.tip
+
+      if (tech && baseRef > 0) {
+        const isBull = baseRef > tech.ma20 && tech.ma20 > tech.ma60
+        if (isBull) {
+          strategy = '🔒 多头主升锁仓'
+          strategyColor = '#7c3aed'
+          noSell = true
+          noBuy = true
+          tip = `已站稳MA20(${tech.ma20})&MA60(${tech.ma60})多头，锁仓不卖防踏空`
+        } else if (mktVal > 0 && mktVal < 3000) {
+          strategy = 'PPO 极值反抽减仓'
+          strategyColor = '#ec4899'
+          sellMult = 1.60
+          buyMult = 1.60
+          noBuy = true
+          tip = '市值<3000停高频网格！仅放量急拉高抛100股减仓'
+        } else if (atrPct < 0.024) {
+          strategy = 'Fernholz 低频平衡'
+          strategyColor = '#10b981'
+          sellMult = 1.50
+          buyMult = 1.50
+          noBuy = false
+          tip = `实时ATR ${(atrPct * 100).toFixed(1)}% 偏低，仅极端偏离调仓防5元磨损`
+        } else if (atrPct < 0.038) {
+          strategy = 'Avellaneda 库存偏移'
+          strategyColor = '#f59e0b'
+          sellMult = 0.70
+          buyMult = 1.30
+          noBuy = false
+          tip = `弱势重仓先高抛腾现金，站稳MA20(${tech.ma20})即停卖`
+        } else {
+          strategy = 'Almgren-Chriss 宽幅'
+          strategyColor = '#06b6d4'
+          sellMult = 1.05
+          buyMult = 1.15
+          noBuy = false
+          tip = `高波(ATR ${(atrPct * 100).toFixed(1)}%)大振幅再成交，防5元磨损`
+        }
+      }
+
+      const sellTrigger = noSell ? null : (baseRef > 0 ? (baseRef * (1 + sellMult * atrPct)).toFixed(2) : '--')
+      const buyTrigger = noBuy ? null : (baseRef > 0 ? (baseRef * (1 - buyMult * atrPct)).toFixed(2) : '--')
+      const estProfit = !noBuy && !noSell && sellTrigger && sellTrigger !== '--' && buyTrigger && buyTrigger !== '--'
         ? Math.round((Number(sellTrigger) - Number(buyTrigger)) * cfg.unit - 10)
         : 0
 
       return {
         code,
         name: cfg.name,
-        strategy: cfg.strategy,
-        strategyColor: cfg.strategyColor,
-        noBuy: !!cfg.noBuy,
-        tip: cfg.tip,
-        sellPctStr: `+${(cfg.sellMult * cfg.atrPct * 100).toFixed(1)}%`,
-        buyPctStr: `-${(cfg.buyMult * cfg.atrPct * 100).toFixed(1)}%`,
+        strategy,
+        strategyColor,
+        noBuy,
+        noSell,
+        tip,
+        sellPctStr: `+${(sellMult * atrPct * 100).toFixed(1)}%`,
+        buyPctStr: `-${(buyMult * atrPct * 100).toFixed(1)}%`,
         price,
         changePct,
         totalQty,
         lockQty: cfg.lockQty,
         unit: cfg.unit,
-        atrPct: cfg.atrPct,
+        atrPct,
         sellTrigger,
         buyTrigger,
         estProfit,
       }
     })
-  }, [liveQuotes, holdingsQty])
+  }, [liveQuotes, stockTech, holdingsQty])
 
   const db = RESCUE_BACKTEST_DATABASE || {}
   const currentStockData = db[selectedStock] || db['TOTAL'] || {}
@@ -372,24 +463,37 @@ export default function QuantRescueSection({ jevLive, activeRegime }) {
                     {r.totalQty} 股 <span style={{ fontSize: 11, color: 'hsl(var(--muted-foreground))' }}>(锁 {r.lockQty})</span>
                   </td>
                   <td style={{ padding: '10px 8px' }}>
-                    <div style={{ display: 'inline-flex', alignItems: 'center', gap: 6 }}>
+                    {r.noSell ? (
                       <span style={{
                         padding: '2px 8px',
                         borderRadius: 4,
-                        background: 'rgba(239, 68, 68, 0.12)',
-                        color: '#ef4444',
+                        background: 'rgba(124, 58, 237, 0.12)',
+                        color: '#7c3aed',
+                        fontSize: 12,
                         fontWeight: 600
                       }}>
-                        ≥ ¥{r.sellTrigger} ({r.sellPctStr})
+                        🔒 锁仓不卖（拿住主升）
                       </span>
-                      <button
-                        onClick={() => copyText(`sell_${r.code}`, r.sellTrigger)}
-                        title="复制高抛价"
-                        style={{ border: 'none', background: 'transparent', cursor: 'pointer', color: 'hsl(var(--muted-foreground))', padding: 2 }}
-                      >
-                        {copiedKey === `sell_${r.code}` ? <Check size={13} color="#10b981" /> : <Copy size={13} />}
-                      </button>
-                    </div>
+                    ) : (
+                      <div style={{ display: 'inline-flex', alignItems: 'center', gap: 6 }}>
+                        <span style={{
+                          padding: '2px 8px',
+                          borderRadius: 4,
+                          background: 'rgba(239, 68, 68, 0.12)',
+                          color: '#ef4444',
+                          fontWeight: 600
+                        }}>
+                          ≥ ¥{r.sellTrigger} ({r.sellPctStr})
+                        </span>
+                        <button
+                          onClick={() => copyText(`sell_${r.code}`, r.sellTrigger)}
+                          title="复制高抛价"
+                          style={{ border: 'none', background: 'transparent', cursor: 'pointer', color: 'hsl(var(--muted-foreground))', padding: 2 }}
+                        >
+                          {copiedKey === `sell_${r.code}` ? <Check size={13} color="#10b981" /> : <Copy size={13} />}
+                        </button>
+                      </div>
+                    )}
                   </td>
                   <td style={{ padding: '10px 8px' }}>
                     {r.noBuy ? (
