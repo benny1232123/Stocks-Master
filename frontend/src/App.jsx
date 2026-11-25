@@ -595,7 +595,7 @@ function FilterSeg({ value, onChange }) {
 }
 
 function App() {
-  const [activeView, setActiveView] = useState('signals')
+  const [activeView, setActiveView] = useState('trades')
   const [dashboard, setDashboard] = useState(null)
   const [refreshing, setRefreshing] = useState(false)
   const [nowTick, setNowTick] = useState(Date.now())
@@ -1200,10 +1200,17 @@ function App() {
           <nav className="command-nav">
             <button
               type="button"
-              className={cn("c-nav-btn", activeView === 'signals' && "active")}
-              onClick={() => { setActiveView('signals'); window.scrollTo({ top: 0, behavior: 'smooth' }) }}
+              className={cn("c-nav-btn", activeView === 'trades' && "active")}
+              onClick={() => { setActiveView('trades'); window.scrollTo({ top: 0, behavior: 'smooth' }) }}
             >
-              ⚡ 今日选股
+              💼 交易管理
+            </button>
+            <button
+              type="button"
+              className={cn("c-nav-btn", activeView === 'backtest' && "active")}
+              onClick={() => { setActiveView('backtest'); window.scrollTo({ top: 0, behavior: 'smooth' }) }}
+            >
+              📈 策略调度与回测
             </button>
             <button
               type="button"
@@ -1214,17 +1221,11 @@ function App() {
             </button>
             <button
               type="button"
-              className={cn("c-nav-btn", activeView === 'backtest' && "active")}
-              onClick={() => { setActiveView('backtest'); window.scrollTo({ top: 0, behavior: 'smooth' }) }}
+              className={cn("c-nav-btn", activeView === 'signals' && "active")}
+              onClick={() => { setActiveView('signals'); window.scrollTo({ top: 0, behavior: 'smooth' }) }}
+              style={{ opacity: 0.78 }}
             >
-              📈 策略回测
-            </button>
-            <button
-              type="button"
-              className={cn("c-nav-btn", activeView === 'trades' && "active")}
-              onClick={() => { setActiveView('trades'); window.scrollTo({ top: 0, behavior: 'smooth' }) }}
-            >
-              💼 交易管理
+              📦 今日选股 (已归档)
             </button>
           </nav>
         </div>
@@ -1298,8 +1299,20 @@ function App() {
           </div>
         ) : null}
 
-        {/* 1. 今日策略信号 (Daily Action List) & 市场宏观快照 */}
+        {/* 1. 今日策略信号 (Daily Action List · 已归档) */}
         {activeView === 'signals' && (
+        <>
+        <div style={{
+          marginBottom: 14,
+          padding: '10px 14px',
+          borderRadius: 8,
+          background: 'rgba(245, 158, 11, 0.08)',
+          border: '1px solid rgba(245, 158, 11, 0.25)',
+          fontSize: 12,
+          color: 'hsl(var(--muted-foreground))'
+        }}>
+          📦 <strong>已归档说明</strong>：本页为 5 日短线高频轮动选股池（换手较快），已归档备查；当前主力操作已迁移至 <strong>【💼 交易管理 (Guéant 做 T)】</strong> 与 <strong>【📈 策略调度与回测 (JEV 分时期路由)】</strong>。
+        </div>
         <section id="section-signals" className="hero animate-fade-in">
           {/* 左侧：今日信号卡片 */}
           <div className="hero-card">
@@ -1426,9 +1439,8 @@ function App() {
             </div>
           </div>
         </section>
+        </>
         )}
-
-        {/* 2. 智谱 AI 投研早报与深度穿透 */}
         {activeView === 'ai' && (
         <section id="section-ai" className="page-section">
           <div className="page-section-head">
