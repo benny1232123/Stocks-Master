@@ -732,19 +732,48 @@ export default function QuantRescueSection({ jevLive, activeRegime }) {
           borderRadius: 8,
           fontSize: 12,
           color: 'hsl(var(--muted-foreground))',
-          lineHeight: 1.8
+          lineHeight: 1.7
         }}>
-          <div style={{ fontWeight: 600, color: 'hsl(var(--foreground))', marginBottom: 6, display: 'flex', alignItems: 'center', gap: 6 }}>
-            <Compass size={15} /> 4 只标的组合拯救全真回测启示：
+          <div style={{ fontWeight: 700, color: 'hsl(var(--foreground))', marginBottom: 10, display: 'flex', alignItems: 'center', gap: 6, fontSize: 13 }}>
+            <Compass size={15} /> 📖 6 大拯救策略具体操作手册（怎么买 / 怎么卖 / 锁多少仓 / 适用行情）
           </div>
-          <div>
-            • <span style={{ color: '#ef4444', fontWeight: 600 }}>全部持仓合并死扛</span>：总资金从 29,336 元一路缩水至 21,531 元，总亏损 <strong>-24.8%</strong>；
-          </div>
-          <div>
-            • <span style={{ color: '#3b82f6', fontWeight: 600 }}>Guéant (2023) 全组合做 T 算法</span>：4 只股票各自利用机动仓日内非对称套利，累计收割 <strong>+¥3,421.49 纯现金</strong>，把全账户总亏损大幅压低至 <strong>-13.1%</strong>！
-          </div>
-          <div>
-            • <span style={{ color: '#a855f7', fontWeight: 600 }}>World Model & JEV 动态置换</span>：通达电气和亚太股份在破位初期果断将机动仓置换至高分 Alpha 因子池，最终亏损收窄至 <strong>-8.5%</strong>，极大保全了总本金！
+          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(280px, 1fr))', gap: 10 }}>
+            <div style={{ padding: '10px 12px', borderRadius: 6, background: 'hsl(var(--card))', border: '1px solid rgba(59, 130, 246, 0.25)' }}>
+              <div style={{ fontWeight: 700, color: '#3b82f6', marginBottom: 4 }}>1. Guéant 非对称网格做 T</div>
+              <div>• <strong>仓位：</strong>锁死 50% 核心底仓，其余作为机动做 T 仓位。</div>
+              <div>• <strong>操作：</strong>手机设网格条件单，涨 <strong>+0.8×ATR</strong> 高抛卖出、跌 <strong>-1.3×ATR</strong> 低吸买回。</div>
+              <div>• <strong>注意：</strong>阴跌/震荡市降本极强，但牛市主升需暂停卖出防卖飞。</div>
+            </div>
+            <div style={{ padding: '10px 12px', borderRadius: 6, background: 'hsl(var(--card))', border: '1px solid rgba(16, 185, 129, 0.25)' }}>
+              <div style={{ fontWeight: 700, color: '#10b981', marginBottom: 4 }}>2. Fernholz 波动率收割 + ETF（全周期最优）</div>
+              <div>• <strong>仓位：</strong>目标维持 82% 股票 + 18% 现金（或宽基 ETF）动态平衡。</div>
+              <div>• <strong>操作：</strong>每当股价上涨导致持仓占比偏离超 1 手就自动卖 1 手落袋，下跌偏离超 1 手就自动低吸补回。</div>
+              <div>• <strong>注意：</strong>涨跌都能自动收割波动率，穿越牛熊表现最稳。</div>
+            </div>
+            <div style={{ padding: '10px 12px', borderRadius: 6, background: 'hsl(var(--card))', border: '1px solid rgba(236, 72, 153, 0.25)' }}>
+              <div style={{ fontWeight: 700, color: '#ec4899', marginBottom: 4 }}>3. PPO 深度强化学习做 T（门控防卖飞）</div>
+              <div>• <strong>仓位：</strong>同样保留 50% 底仓，但加入均线趋势门控开关。</div>
+              <div>• <strong>操作：</strong>多头主升期只买不卖；非主升期偏离 MA20 超 <strong>+1.6×ATR</strong> 才高抛、跌破 <strong>-1.4×ATR</strong> 才低吸。</div>
+              <div>• <strong>注意：</strong>大幅减少无效手续费磨损，兼顾牛市不踏空与熊市降本。</div>
+            </div>
+            <div style={{ padding: '10px 12px', borderRadius: 6, background: 'hsl(var(--card))', border: '1px solid rgba(245, 158, 11, 0.25)' }}>
+              <div style={{ fontWeight: 700, color: '#f59e0b', marginBottom: 4 }}>4. Avellaneda-Stoikov 库存做市</div>
+              <div>• <strong>仓位：</strong>根据当前库存占初始仓位比例动态调节挂单价。</div>
+              <div>• <strong>操作：</strong>满仓深套时自动下移卖出触发价加速减仓降成本，轻仓时上移买回价积极回补；牛市关闭卖出。</div>
+              <div>• <strong>注意：</strong>适合仓位过重、急需腾出现金缓冲的账户。</div>
+            </div>
+            <div style={{ padding: '10px 12px', borderRadius: 6, background: 'hsl(var(--card))', border: '1px solid rgba(6, 182, 212, 0.25)' }}>
+              <div style={{ fontWeight: 700, color: '#06b6d4', marginBottom: 4 }}>5. Almgren-Chriss 最优冲击执行</div>
+              <div>• <strong>仓位：</strong>每次仅用最小整手（100 股）分批微调。</div>
+              <div>• <strong>操作：</strong>平时静默不交易，仅在日内振幅 ≥ <strong>1.5×ATR</strong> 的大波动日按 +1.05×ATR 卖 / -1.15×ATR 买。</div>
+              <div>• <strong>注意：</strong>滑点与规费磨损最低，套牢期回撤控制极佳。</div>
+            </div>
+            <div style={{ padding: '10px 12px', borderRadius: 6, background: 'hsl(var(--card))', border: '1px solid rgba(168, 85, 247, 0.25)' }}>
+              <div style={{ fontWeight: 700, color: '#a855f7', marginBottom: 4 }}>6. World Model & JEV 自适应置换</div>
+              <div>• <strong>仓位：</strong>牛市 100% 满仓持有；破位 MA20 & MA60 时将机动仓砍至 60%。</div>
+              <div>• <strong>操作：</strong>不纠结日内做 T，跌破均线直接减仓转入国债逆回购或置换为高评分 Alpha 标的。</div>
+              <div>• <strong>注意：</strong>专防个股基本面恶化导致的长期阴跌深套。</div>
+            </div>
           </div>
         </div>
       </SectionCard>
