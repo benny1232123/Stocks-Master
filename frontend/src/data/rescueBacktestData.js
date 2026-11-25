@@ -4791,19 +4791,51 @@ export const RESCUE_BACKTEST_DATABASE = {
         "jev_val": 9895.1,
         "jev_cost": 12.32,
         "jev_return": -16.39
+      },
+      {
+        "date": "2026-11-24",
+        "price": 8.3,
+        "bench_val": 7470.0,
+        "bench_cost": 13.15,
+        "bench_return": -36.88,
+        "gueant_val": 9198.4,
+        "gueant_cost": 11.23,
+        "gueant_return": -22.28,
+        "fernholz_val": 8984.2,
+        "fernholz_cost": 11.48,
+        "fernholz_return": -24.09,
+        "jev_val": 9791.5,
+        "jev_cost": 12.31,
+        "jev_return": -17.27
+      },
+      {
+        "date": "2026-11-25",
+        "price": 7.88,
+        "bench_val": 7092.0,
+        "bench_cost": 13.15,
+        "bench_return": -40.08,
+        "gueant_val": 8810.8,
+        "gueant_cost": 11.22,
+        "gueant_return": -25.55,
+        "fernholz_val": 8612.6,
+        "fernholz_cost": 11.47,
+        "fernholz_return": -27.23,
+        "jev_val": 9438.7,
+        "jev_cost": 12.3,
+        "jev_return": -20.25
       }
     ],
     "summary": {
-      "last_price": 8.44,
-      "bench_return": -35.82,
+      "last_price": 7.88,
+      "bench_return": -40.08,
       "bench_cost": 13.15,
-      "gueant_return": -21.32,
-      "gueant_cost": 11.24,
+      "gueant_return": -25.55,
+      "gueant_cost": 11.22,
       "gueant_cash": 1715.37,
-      "fernholz_return": -23.16,
-      "fernholz_cost": 11.49,
-      "jev_return": -16.39,
-      "jev_cost": 12.32
+      "fernholz_return": -27.23,
+      "fernholz_cost": 11.47,
+      "jev_return": -20.25,
+      "jev_cost": 12.3
     }
   },
   "603187": {
@@ -9709,19 +9741,51 @@ export const RESCUE_BACKTEST_DATABASE = {
         "jev_val": 6535.9,
         "jev_cost": 11.74,
         "jev_return": -4.24
+      },
+      {
+        "date": "2026-11-24",
+        "price": 10.51,
+        "bench_val": 5255.0,
+        "bench_cost": 13.65,
+        "bench_return": -23.0,
+        "gueant_val": 5864.2,
+        "gueant_cost": 12.45,
+        "gueant_return": -14.08,
+        "fernholz_val": 5789.1,
+        "fernholz_cost": 12.61,
+        "fernholz_return": -15.18,
+        "jev_val": 6426.0,
+        "jev_cost": 11.73,
+        "jev_return": -5.85
+      },
+      {
+        "date": "2026-11-25",
+        "price": 10.21,
+        "bench_val": 5105.0,
+        "bench_cost": 13.65,
+        "bench_return": -25.2,
+        "gueant_val": 5731.2,
+        "gueant_cost": 12.43,
+        "gueant_return": -16.03,
+        "fernholz_val": 5659.7,
+        "fernholz_cost": 12.6,
+        "fernholz_return": -17.07,
+        "jev_val": 6301.0,
+        "jev_cost": 11.72,
+        "jev_return": -7.68
       }
     ],
     "summary": {
-      "last_price": 10.78,
-      "bench_return": -21.03,
+      "last_price": 10.21,
+      "bench_return": -25.2,
       "bench_cost": 13.65,
-      "gueant_return": -12.36,
-      "gueant_cost": 12.47,
+      "gueant_return": -16.03,
+      "gueant_cost": 12.43,
       "gueant_cash": 591.44,
-      "fernholz_return": -13.51,
-      "fernholz_cost": 12.62,
-      "jev_return": -4.24,
-      "jev_cost": 11.74
+      "fernholz_return": -17.07,
+      "fernholz_cost": 12.6,
+      "jev_return": -7.68,
+      "jev_cost": 11.72
     }
   },
   "600269": {
@@ -15331,18 +15395,50 @@ export const RESCUE_BACKTEST_DATABASE = {
         "jev_val": 8524.5,
         "jev_cost": 4.0,
         "jev_return": 5.01
+      },
+      {
+        "date": "2026-11-24",
+        "price": 3.94,
+        "bench_val": 7092.0,
+        "bench_cost": 4.51,
+        "bench_return": -12.64,
+        "gueant_val": 7453.0,
+        "gueant_cost": 4.31,
+        "gueant_return": -8.19,
+        "fernholz_val": 7412.0,
+        "fernholz_cost": 4.35,
+        "fernholz_return": -8.7,
+        "jev_val": 8445.5,
+        "jev_cost": 4.0,
+        "jev_return": 4.03
+      },
+      {
+        "date": "2026-11-25",
+        "price": 3.95,
+        "bench_val": 7110.0,
+        "bench_cost": 4.51,
+        "bench_return": -12.42,
+        "gueant_val": 7488.3,
+        "gueant_cost": 4.3,
+        "gueant_return": -7.76,
+        "fernholz_val": 7444.9,
+        "fernholz_cost": 4.35,
+        "fernholz_return": -8.29,
+        "jev_val": 8478.5,
+        "jev_cost": 4.0,
+        "jev_return": 4.44
       }
     ],
     "summary": {
-      "last_price": 4.0,
-      "bench_return": -11.31,
+      "last_price": 3.95,
+      "bench_return": -12.42,
       "bench_cost": 4.51,
-      "gueant_return": -7.2,
-      "gueant_cost": 4.32,
+      "gueant_return": -7.76,
+      "gueant_cost": 4.3,
       "gueant_cash": 333.86,
-      "fernholz_return": -7.71,
+      "fernholz_return": -8.29,
       "fernholz_cost": 4.35,
-      "jev_return": 5.01,
+      "jev_return": 4.44,
       "jev_cost": 4.0
     }
   },
@@ -20953,19 +21049,51 @@ export const RESCUE_BACKTEST_DATABASE = {
         "jev_val": 3008.8,
         "jev_cost": 8.58,
         "jev_return": 17.62
+      },
+      {
+        "date": "2026-11-24",
+        "price": 8.57,
+        "bench_val": 1714.0,
+        "bench_cost": 12.79,
+        "bench_return": -32.99,
+        "gueant_val": 2500.5,
+        "gueant_cost": 8.88,
+        "gueant_return": -2.25,
+        "fernholz_val": 2417.8,
+        "fernholz_cost": 9.29,
+        "fernholz_return": -5.48,
+        "jev_val": 3012.2,
+        "jev_cost": 8.57,
+        "jev_return": 17.76
+      },
+      {
+        "date": "2026-11-25",
+        "price": 8.26,
+        "bench_val": 1652.0,
+        "bench_cost": 12.79,
+        "bench_return": -35.42,
+        "gueant_val": 2427.0,
+        "gueant_cost": 8.87,
+        "gueant_return": -5.12,
+        "fernholz_val": 2347.9,
+        "fernholz_cost": 9.28,
+        "fernholz_return": -8.21,
+        "jev_val": 2936.3,
+        "jev_cost": 8.56,
+        "jev_return": 14.79
       }
     ],
     "summary": {
-      "last_price": 8.58,
-      "bench_return": -32.92,
+      "last_price": 8.26,
+      "bench_return": -35.42,
       "bench_cost": 12.79,
-      "gueant_return": -2.39,
-      "gueant_cost": 8.89,
+      "gueant_return": -5.12,
+      "gueant_cost": 8.87,
       "gueant_cash": 780.82,
-      "fernholz_return": -5.6,
-      "fernholz_cost": 9.3,
-      "jev_return": 17.62,
-      "jev_cost": 8.58
+      "fernholz_return": -8.21,
+      "fernholz_cost": 9.28,
+      "jev_return": 14.79,
+      "jev_cost": 8.56
     }
   },
   "TOTAL": {
@@ -25759,19 +25887,51 @@ export const RESCUE_BACKTEST_DATABASE = {
         "jev_val": 27964.3,
         "jev_cost": 23273.7,
         "jev_return": -4.68
+      },
+      {
+        "date": "2026-11-24",
+        "price": 100.0,
+        "bench_val": 21531.0,
+        "bench_cost": 29336.0,
+        "bench_return": -26.61,
+        "gueant_val": 25016.1,
+        "gueant_cost": 26547.9,
+        "gueant_return": -14.73,
+        "fernholz_val": 24603.1,
+        "fernholz_cost": 26878.3,
+        "fernholz_return": -16.13,
+        "jev_val": 27675.2,
+        "jev_cost": 24420.6,
+        "jev_return": -5.66
+      },
+      {
+        "date": "2026-11-25",
+        "price": 100.0,
+        "bench_val": 20959.0,
+        "bench_cost": 29336.0,
+        "bench_return": -28.56,
+        "gueant_val": 24457.3,
+        "gueant_cost": 26537.4,
+        "gueant_return": -16.63,
+        "fernholz_val": 24065.1,
+        "fernholz_cost": 26851.1,
+        "fernholz_return": -17.97,
+        "jev_val": 27154.5,
+        "jev_cost": 24379.6,
+        "jev_return": -7.44
       }
     ],
     "summary": {
       "last_price": 100.0,
-      "bench_return": -25.34,
+      "bench_return": -28.56,
       "bench_cost": 29336.0,
-      "gueant_return": -13.68,
-      "gueant_cost": 25914.5,
+      "gueant_return": -16.63,
+      "gueant_cost": 26537.4,
       "gueant_cash": 3421.49,
-      "fernholz_return": -15.11,
-      "fernholz_cost": 26334.1,
-      "jev_return": -4.68,
-      "jev_cost": 23273.7
+      "fernholz_return": -17.97,
+      "fernholz_cost": 26851.1,
+      "jev_return": -7.44,
+      "jev_cost": 24379.6
     }
   }
 };
