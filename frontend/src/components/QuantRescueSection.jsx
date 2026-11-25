@@ -403,7 +403,7 @@ export default function QuantRescueSection({ jevLive, activeRegime }) {
       {/* 2. 前沿量化拯救算法全真回测曲线中心 */}
       <SectionCard
         title="🔬 前沿量化拯救算法全周期回测中心 (Quant Rescue Lab · 2020~2026 穿越牛熊)"
-        subtitle="覆盖 2020~2021 结构牛、2022~2024 震荡+924快牛、2025~2026 单边套牢全周期（1600+ 交易日），真实检验 6 大算法牛市防卖飞与熊市降本能力"
+        subtitle="覆盖 2020~2026 全周期（1671 交易日），已按 A 股真实规费实扣（佣金万2.5最低5元 + 卖出印花税0.05%/0.1% + 过户费）"
       >
         <div style={{
           display: 'flex',
@@ -658,11 +658,20 @@ export default function QuantRescueSection({ jevLive, activeRegime }) {
           <div style={{ fontSize: 13, color: 'hsl(var(--muted-foreground))' }}>
             观测日期: <strong>{current.date}</strong> |
             {selectedStock !== 'TOTAL' && <span> 股票现价: <strong>¥{current.price}</strong> |</span>}
-            {activeTab === 'val' ? (
-              <span> 拯救挽回: <strong style={{ color: '#10b981' }}>+¥{(current.gueant_val - current.bench_val).toFixed(0)}</strong></span>
-            ) : (
-              <span> 成本压降: <strong style={{ color: '#3b82f6' }}>-¥{(currentStockData.cost - current.gueant_cost).toFixed(2)}</strong></span>
-            )}
+            {(() => {
+              const baseVal = Number(data[0]?.bench_val || 1)
+              const periodRescue = Math.round(baseVal * ((current.gueant_return - current.bench_return) / 100))
+              const costDrop = Number((currentStockData.cost - current.gueant_cost).toFixed(2))
+              return activeTab === 'val' ? (
+                <span> 区间相对死扛挽回: <strong style={{ color: periodRescue >= 0 ? '#10b981' : '#ef4444' }}>
+                  {periodRescue >= 0 ? `+¥${periodRescue}` : `-¥${Math.abs(periodRescue)}`}
+                </strong></span>
+              ) : (
+                <span> 成本压降: <strong style={{ color: costDrop >= 0 ? '#3b82f6' : '#ef4444' }}>
+                  {costDrop >= 0 ? `-¥${costDrop}` : `+¥${Math.abs(costDrop)}`}
+                </strong></span>
+              )
+            })()}
           </div>
         </div>
 

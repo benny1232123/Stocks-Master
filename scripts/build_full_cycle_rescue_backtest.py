@@ -72,12 +72,24 @@ def simulate_stock(code: str, cfg: dict, bars: list):
     }
 
     series = []
-    fee_rate = 0.0008  # commission + stamp duty avg
+
+    def calc_fee(amount: float, is_sell: bool, date_str: str) -> float:
+        if amount <= 0:
+            return 0.0
+        comm = max(5.0, amount * 0.00025)  # 万2.5佣金，最低5元起收
+        transfer = amount * 0.00001        # 万0.1过户费
+        stamp = 0.0
+        if is_sell:
+            stamp = amount * (0.001 if date_str < "2023-08-28" else 0.0005)
+        return comm + transfer + stamp
+
+    fees = {k: 0.0 for k in states}
 
     for i, b in enumerate(bars):
         px = b["close"]
         hi = b["high"]
         lo = b["low"]
+        d_str = b["date"]
         ma20 = sum(closes[max(0, i - 19):i + 1]) / min(i + 1, 20)
         ma60 = sum(closes[max(0, i - 59):i + 1]) / min(i + 1, 60)
         atr = sum(atrs[max(0, i - 13):i + 1]) / min(i + 1, 14)
@@ -92,24 +104,37 @@ def simulate_stock(code: str, cfg: dict, bars: list):
             sell_th = prev_px * (1 + 0.8 * atr)
             buy_th = prev_px * (1 - 1.3 * atr)
             if hi >= sell_th and states["gueant"]["shares"] - trade_unit >= lock_shares:
+                amt = trade_unit * sell_th
+                f_cost = calc_fee(amt, True, d_str)
                 states["gueant"]["shares"] -= trade_unit
-                states["gueant"]["cash"] += trade_unit * sell_th * (1 - fee_rate)
-            elif lo <= buy_th and states["gueant"]["cash"] >= trade_unit * buy_th * 1.001:
-                states["gueant"]["shares"] += trade_unit
-                states["gueant"]["cash"] -= trade_unit * buy_th * (1 + fee_rate)
+                states["gueant"]["cash"] += amt - f_cost
+                fees["gueant"] += f_cost
+            elif lo <= buy_th:
+                amt = trade_unit * buy_th
+                f_cost = calc_fee(amt, False, d_str)
+                if states["gueant"]["cash"] >= amt + f_cost:
+                    states["gueant"]["shares"] += trade_unit
+                    states["gueant"]["cash"] -= amt + f_cost
+                    fees["gueant"] += f_cost
 
-            # 2. Fernholz volatility harvesting (target ~75% equity + 25% cash rebalance on >2.5% drift)
+            # 2. Fernholz volatility harvesting (target ~82% equity + 18% cash rebalance)
             f_val = states["fernholz"]["shares"] * px + states["fernholz"]["cash"]
             target_sh = int((f_val * 0.82) / px / 100) * 100
             diff_sh = target_sh - states["fernholz"]["shares"]
             if abs(diff_sh) >= trade_unit:
                 step = trade_unit if diff_sh > 0 else -trade_unit
-                if step > 0 and states["fernholz"]["cash"] >= step * px * 1.001:
-                    states["fernholz"]["shares"] += step
-                    states["fernholz"]["cash"] -= step * px * (1 + fee_rate)
+                amt = abs(step) * px
+                if step > 0:
+                    f_cost = calc_fee(amt, False, d_str)
+                    if states["fernholz"]["cash"] >= amt + f_cost:
+                        states["fernholz"]["shares"] += step
+                        states["fernholz"]["cash"] -= amt + f_cost
+                        fees["fernholz"] += f_cost
                 elif step < 0 and states["fernholz"]["shares"] + step >= lock_shares:
+                    f_cost = calc_fee(amt, True, d_str)
                     states["fernholz"]["shares"] += step
-                    states["fernholz"]["cash"] -= step * px * (1 - fee_rate)
+                    states["fernholz"]["cash"] += amt - f_cost
+                    fees["fernholz"] += f_cost
 
             # 3. World Model & JEV adaptive hedge (holds 100% in bull, trims to 60% in bear)
             j_target_ratio = 1.0 if is_bull else (0.60 if is_bear else 0.85)
@@ -117,45 +142,73 @@ def simulate_stock(code: str, cfg: dict, bars: list):
             j_target_sh = min(qty + trade_unit, max(lock_shares, int((j_val * j_target_ratio) / px / 100) * 100))
             j_diff = j_target_sh - states["jev"]["shares"]
             if abs(j_diff) >= 100:
-                if j_diff > 0 and states["jev"]["cash"] >= j_diff * px * 1.001:
-                    states["jev"]["shares"] += j_diff
-                    states["jev"]["cash"] -= j_diff * px * (1 + fee_rate)
+                if j_diff > 0:
+                    amt = j_diff * px
+                    f_cost = calc_fee(amt, False, d_str)
+                    if states["jev"]["cash"] >= amt + f_cost:
+                        states["jev"]["shares"] += j_diff
+                        states["jev"]["cash"] -= amt + f_cost
+                        fees["jev"] += f_cost
                 elif j_diff < 0:
                     sell_q = min(-j_diff, max(0, states["jev"]["shares"] - lock_shares))
                     if sell_q >= 100:
+                        amt = sell_q * px
+                        f_cost = calc_fee(amt, True, d_str)
                         states["jev"]["shares"] -= sell_q
-                        states["jev"]["cash"] += sell_q * px * (1 - fee_rate)
+                        states["jev"]["cash"] += amt - f_cost
+                        fees["jev"] += f_cost
 
-            # 4. Avellaneda-Stoikov inventory-skewed market making (skews sell closer when inventory is full, pauses sell in strong bull)
+            # 4. Avellaneda-Stoikov inventory-skewed market making
             inv_ratio = states["avellaneda"]["shares"] / max(qty, 1)
             skew = (inv_ratio - 0.7) * 0.4 * atr
             a_sell = prev_px * (1 + max(0.008, (1.1 if is_bull else 0.75) * atr - skew))
             a_buy = prev_px * (1 - max(0.010, (0.9 if is_bull else 1.25) * atr + skew))
             if hi >= a_sell and not is_bull and states["avellaneda"]["shares"] - trade_unit >= lock_shares:
+                amt = trade_unit * a_sell
+                f_cost = calc_fee(amt, True, d_str)
                 states["avellaneda"]["shares"] -= trade_unit
-                states["avellaneda"]["cash"] += trade_unit * a_sell * (1 - fee_rate)
-            elif lo <= a_buy and states["avellaneda"]["cash"] >= trade_unit * a_buy * 1.001:
-                states["avellaneda"]["shares"] += trade_unit
-                states["avellaneda"]["cash"] -= trade_unit * a_buy * (1 + fee_rate)
+                states["avellaneda"]["cash"] += amt - f_cost
+                fees["avellaneda"] += f_cost
+            elif lo <= a_buy:
+                amt = trade_unit * a_buy
+                f_cost = calc_fee(amt, False, d_str)
+                if states["avellaneda"]["cash"] >= amt + f_cost:
+                    states["avellaneda"]["shares"] += trade_unit
+                    states["avellaneda"]["cash"] -= amt + f_cost
+                    fees["avellaneda"] += f_cost
 
             # 5. Almgren-Chriss optimal execution (slices trades on wide intraday swings >= 1.5*ATR)
             if (hi - lo) / max(prev_px, 0.01) >= 1.5 * atr:
                 ac_sell = prev_px * (1 + 1.05 * atr)
                 ac_buy = prev_px * (1 - 1.15 * atr)
                 if hi >= ac_sell and states["almgren"]["shares"] - 100 >= lock_shares:
+                    amt = 100 * ac_sell
+                    f_cost = calc_fee(amt, True, d_str)
                     states["almgren"]["shares"] -= 100
-                    states["almgren"]["cash"] += 100 * ac_sell * (1 - fee_rate * 0.6)
-                elif lo <= ac_buy and states["almgren"]["cash"] >= 100 * ac_buy * 1.001:
-                    states["almgren"]["shares"] += 100
-                    states["almgren"]["cash"] -= 100 * ac_buy * (1 + fee_rate * 0.6)
+                    states["almgren"]["cash"] += amt - f_cost
+                    fees["almgren"] += f_cost
+                elif lo <= ac_buy:
+                    amt = 100 * ac_buy
+                    f_cost = calc_fee(amt, False, d_str)
+                    if states["almgren"]["cash"] >= amt + f_cost:
+                        states["almgren"]["shares"] += 100
+                        states["almgren"]["cash"] -= amt + f_cost
+                        fees["almgren"] += f_cost
 
-            # 6. PPO RL gated T-trading (only sells on overbought spike > ma20*(1+1.8*atr), buys on oversold < ma20*(1-1.5*atr))
+            # 6. PPO RL gated T-trading
             if px > ma20 * (1 + 1.6 * atr) and not is_bull and states["ppo"]["shares"] - trade_unit >= lock_shares:
+                amt = trade_unit * px
+                f_cost = calc_fee(amt, True, d_str)
                 states["ppo"]["shares"] -= trade_unit
-                states["ppo"]["cash"] += trade_unit * px * (1 - fee_rate)
-            elif px < ma20 * (1 - 1.4 * atr) and states["ppo"]["cash"] >= trade_unit * px * 1.001:
-                states["ppo"]["shares"] += trade_unit
-                states["ppo"]["cash"] -= trade_unit * px * (1 + fee_rate)
+                states["ppo"]["cash"] += amt - f_cost
+                fees["ppo"] += f_cost
+            elif px < ma20 * (1 - 1.4 * atr):
+                amt = trade_unit * px
+                f_cost = calc_fee(amt, False, d_str)
+                if states["ppo"]["cash"] >= amt + f_cost:
+                    states["ppo"]["shares"] += trade_unit
+                    states["ppo"]["cash"] -= amt + f_cost
+                    fees["ppo"] += f_cost
 
             # Idle cash earns 2.2% annualized repo interest
             for st in states.values():
