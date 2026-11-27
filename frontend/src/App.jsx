@@ -1819,12 +1819,14 @@ function App() {
                                   <th style={{ padding: '7px 8px' }}>最大回撤</th>
                                   <th style={{ padding: '7px 8px' }}>夏普比率</th>
                                   <th style={{ padding: '7px 8px' }}>日胜率</th>
+                                  <th style={{ padding: '7px 8px' }}>每1万元赚 (元)</th>
                                   <th style={{ padding: '7px 8px' }}>区间累计</th>
                                 </tr>
                               </thead>
                               <tbody>
                                 {rows.map((r, idx) => {
                                   const isSel = selectedStrategyModel === r.id
+                                  const profitPer10k = Math.round(10000 * (r.totalRet / 100))
                                   return (
                                     <tr
                                       key={r.id}
@@ -1845,6 +1847,9 @@ function App() {
                                       <td style={{ padding: '7px 8px', color: '#dc2626' }}>{r.maxDd}%</td>
                                       <td style={{ padding: '7px 8px' }}>{r.sharpe}</td>
                                       <td style={{ padding: '7px 8px' }}>{r.winRate}%</td>
+                                      <td style={{ padding: '7px 8px', fontWeight: 700, color: profitPer10k >= 0 ? '#16a34a' : '#dc2626' }}>
+                                        {profitPer10k >= 0 ? '+' : '-'}¥{Math.abs(profitPer10k).toLocaleString()}
+                                      </td>
                                       <td style={{ padding: '7px 8px', color: 'hsl(var(--muted))' }}>{r.totalRet >= 0 ? '+' : ''}{r.totalRet}%</td>
                                     </tr>
                                   )

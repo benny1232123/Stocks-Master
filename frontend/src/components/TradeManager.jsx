@@ -106,14 +106,19 @@ export default function TradeManager({ onTradeChange }) {
       const code = String(t.code || '').padStart(6, '0')
       if (!code) continue
       if (!byCode[code]) {
-        byCode[code] = { code, name: t.name || code, qty: 0, buyAmt: 0, sellAmt: 0, fee: 0 }
+        byCode[code] = { code, name: t.name || code, qty: 0, buyAmt: 0, sellAmt: 0, fee: 0, initQty: 0, initAmt: 0, tradeCount: 0 }
       }
       if (t.name) byCode[code].name = t.name
       const q = Number(t.quantity || 0)
       const p = Number(t.price || 0)
       const f = Number(t.fee || 0)
       byCode[code].fee += f
+      byCode[code].tradeCount += 1
       if (String(t.side || '').toUpperCase() === 'BUY') {
+        if (byCode[code].tradeCount === 1) {
+          byCode[code].initQty = q
+          byCode[code].initAmt = q * p
+        }
         byCode[code].qty += q
         byCode[code].buyAmt += q * p
       } else {
@@ -128,7 +133,11 @@ export default function TradeManager({ onTradeChange }) {
       const dilutedCost = r.qty > 0 ? netCostTotal / r.qty : 0
       const totalPnl = livePx > 0 ? (mktVal + r.sellAmt - r.buyAmt - r.fee) : null
       const pnlPct = totalPnl !== null && r.buyAmt > 0 ? (totalPnl / r.buyAmt) * 100 : null
-      return { ...r, livePx, mktVal, netCostTotal, dilutedCost, totalPnl, pnlPct }
+      const holdPnl = livePx > 0 && r.initQty > 0 ? (r.initQty * livePx - r.initAmt) : null
+      const stratAlphaRmb = (totalPnl !== null && holdPnl !== null && r.tradeCount > 1)
+        ? +(totalPnl - holdPnl).toFixed(0)
+        : null
+      return { ...r, livePx, mktVal, netCostTotal, dilutedCost, totalPnl, pnlPct, stratAlphaRmb }
     })
     const totalMktVal = rows.reduce((s, r) => s + r.mktVal, 0)
     const totalFee = rows.reduce((s, r) => s + r.fee, 0)
@@ -197,6 +206,7 @@ export default function TradeManager({ onTradeChange }) {
                   <th style={{ padding: '8px' }}>摊薄保本成本</th>
                   <th style={{ padding: '8px' }}>累计卖出回笼</th>
                   <th style={{ padding: '8px' }}>实扣手续费</th>
+                  <th style={{ padding: '8px' }}>策略增厚 (vs 死扛)</th>
                   <th style={{ padding: '8px' }}>净盈亏 (元/%)</th>
                 </tr>
               </thead>
@@ -209,6 +219,9 @@ export default function TradeManager({ onTradeChange }) {
                     <td style={{ padding: '8px', fontWeight: 600 }}>{r.qty > 0 ? `¥${r.dilutedCost.toFixed(2)}` : '已清仓'}</td>
                     <td style={{ padding: '8px', color: '#2563eb' }}>{r.sellAmt > 0 ? `+¥${r.sellAmt.toFixed(0)}` : '¥0'}</td>
                     <td style={{ padding: '8px', color: 'hsl(var(--muted-foreground))' }}>¥{r.fee.toFixed(2)}</td>
+                    <td style={{ padding: '8px', fontWeight: 600, color: r.stratAlphaRmb === null ? 'hsl(var(--muted-foreground))' : (r.stratAlphaRmb >= 0 ? '#16a34a' : '#d97706') }}>
+                      {r.stratAlphaRmb === null ? '¥0 (未做T)' : `${r.stratAlphaRmb >= 0 ? '+' : '-'}¥${Math.abs(r.stratAlphaRmb)}`}
+                    </td>
                     <td style={{ padding: '8px', fontWeight: 700, color: r.totalPnl !== null && r.totalPnl >= 0 ? '#16a34a' : '#ef4444' }}>
                       {r.totalPnl !== null ? `${r.totalPnl >= 0 ? '+' : '-'}¥${Math.abs(r.totalPnl).toFixed(0)} (${r.pnlPct !== null ? `${r.pnlPct >= 0 ? '+' : ''}${r.pnlPct.toFixed(1)}%` : '--'})` : '--'}
                     </td>

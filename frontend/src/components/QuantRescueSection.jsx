@@ -956,6 +956,7 @@ export default function QuantRescueSection({ jevLive, activeRegime, refreshTick 
           ]
           const days = data.length
           const benchRet = Number(lastPoint.bench_return || 0)
+          const benchRmb = Math.round(Number(lastPoint.bench_val || 0) - Number(data[0]?.bench_val || 0))
           const rows = RESCUE_META.map((m) => {
             const vals = data.map((d) => Number(d[`${m.id}_val`] || 0))
             let peak = vals[0] || 1
@@ -968,6 +969,8 @@ export default function QuantRescueSection({ jevLive, activeRegime, refreshTick 
               if (i > 0 && vals[i] > vals[i - 1]) upDays++
             }
             const totalRet = Number(lastPoint[`${m.id}_return`] || 0)
+            const rmbPnl = Math.round((vals[vals.length - 1] || 0) - (vals[0] || 0))
+            const excessRmb = rmbPnl - benchRmb
             const cagr = days >= 20
               ? +((Math.pow(Math.max(0.01, 1 + totalRet / 100), 252 / days) - 1) * 100).toFixed(2)
               : totalRet
@@ -975,7 +978,7 @@ export default function QuantRescueSection({ jevLive, activeRegime, refreshTick 
             const calmar = Math.abs(ddRounded) > 0.1 ? +(cagr / Math.abs(ddRounded)).toFixed(2) : (cagr > 0 ? 9.99 : 0)
             const excess = +(totalRet - benchRet).toFixed(2)
             const winRate = +((upDays / Math.max(1, days - 1)) * 100).toFixed(1)
-            return { ...m, totalRet, cagr, maxDd: ddRounded, calmar, excess, winRate }
+            return { ...m, totalRet, rmbPnl, excessRmb, cagr, maxDd: ddRounded, calmar, excess, winRate }
           }).sort((a, b) => b.calmar - a.calmar)
 
           return (
@@ -997,8 +1000,8 @@ export default function QuantRescueSection({ jevLive, activeRegime, refreshTick 
                       <th style={{ padding: '7px 8px' }}>年化收益 (CAGR)</th>
                       <th style={{ padding: '7px 8px' }}>最大回撤</th>
                       <th style={{ padding: '7px 8px' }}>相对死扛超额</th>
-                      <th style={{ padding: '7px 8px' }}>日胜率</th>
-                      <th style={{ padding: '7px 8px' }}>区间收益</th>
+                      <th style={{ padding: '7px 8px' }}>区间盈亏 (元 / %)</th>
+                      <th style={{ padding: '7px 8px' }}>相对死扛多赚 (元)</th>
                     </tr>
                   </thead>
                   <tbody>
@@ -1016,7 +1019,12 @@ export default function QuantRescueSection({ jevLive, activeRegime, refreshTick 
                           {r.id === 'bench' ? '基准 0.00%' : `${r.excess >= 0 ? '+' : ''}${r.excess}%`}
                         </td>
                         <td style={{ padding: '7px 8px' }}>{r.winRate}%</td>
-                        <td style={{ padding: '7px 8px', color: r.totalRet >= 0 ? '#10b981' : '#ef4444' }}>{r.totalRet >= 0 ? '+' : ''}{r.totalRet}%</td>
+                        <td style={{ padding: '7px 8px', fontWeight: 600, color: r.rmbPnl >= 0 ? '#10b981' : '#ef4444' }}>
+                          {r.rmbPnl >= 0 ? '+' : '-'}¥{Math.abs(r.rmbPnl).toLocaleString()} ({r.totalRet >= 0 ? '+' : ''}{r.totalRet}%)
+                        </td>
+                        <td style={{ padding: '7px 8px', fontWeight: 700, color: r.excessRmb >= 0 ? '#2563eb' : '#ef4444' }}>
+                          {r.id === 'bench' ? '基准 ¥0' : `${r.excessRmb >= 0 ? '+' : '-'}¥${Math.abs(r.excessRmb).toLocaleString()}`}
+                        </td>
                       </tr>
                     ))}
                   </tbody>
