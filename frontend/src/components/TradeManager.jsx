@@ -102,7 +102,10 @@ export default function TradeManager({ onTradeChange }) {
 
   const pnlStats = useMemo(() => {
     const byCode = {}
-    for (const t of trades) {
+    const orderedTrades = [...trades].sort((a, b) =>
+      String(a.trade_date || a.date || '').localeCompare(String(b.trade_date || b.date || ''))
+    )
+    for (const t of orderedTrades) {
       const code = String(t.code || '').padStart(6, '0')
       if (!code) continue
       if (!byCode[code]) {

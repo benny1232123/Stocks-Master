@@ -1000,6 +1000,7 @@ export default function QuantRescueSection({ jevLive, activeRegime, refreshTick 
                       <th style={{ padding: '7px 8px' }}>年化收益 (CAGR)</th>
                       <th style={{ padding: '7px 8px' }}>最大回撤</th>
                       <th style={{ padding: '7px 8px' }}>相对死扛超额</th>
+                      <th style={{ padding: '7px 8px' }}>日胜率</th>
                       <th style={{ padding: '7px 8px' }}>区间盈亏 (元 / %)</th>
                       <th style={{ padding: '7px 8px' }}>相对死扛多赚 (元)</th>
                     </tr>
