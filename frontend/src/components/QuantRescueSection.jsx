@@ -55,7 +55,7 @@ const RESCUE_STRATEGY_CFG = {
 }
 const AZURE_ACK_API = 'https://receives-duplicate-cleaners-recognition.trycloudflare.com'
 
-export default function QuantRescueSection({ jevLive, activeRegime }) {
+export default function QuantRescueSection({ jevLive, activeRegime, refreshTick = 0 }) {
   const [selectedStock, setSelectedStock] = useState('TOTAL')
   const [selectedPeriod, setSelectedPeriod] = useState('all')
   const [activeTab, setActiveTab] = useState('val')
@@ -64,6 +64,7 @@ export default function QuantRescueSection({ jevLive, activeRegime }) {
   // 实时操作清单状态
   const [liveQuotes, setLiveQuotes] = useState({})
   const [stockTech, setStockTech] = useState({})
+  const [latestFills, setLatestFills] = useState({})
   const [holdingsQty, setHoldingsQty] = useState({ '002284': 900, '603187': 500, '600269': 1800, '603390': 200 })
   const [quoteLoading, setQuoteLoading] = useState(false)
   const [quoteTime, setQuoteTime] = useState('')
@@ -143,13 +144,22 @@ export default function QuantRescueSection({ jevLive, activeRegime }) {
 
       if (Array.isArray(trades) && trades.length > 0) {
         const net = {}
+        const latest = {}
         for (const t of trades) {
           const c = String(t.code || '').padStart(6, '0')
           const q = Number(t.quantity || 0)
+          const p = Number(t.price || 0)
+          const d = String(t.trade_date || t.date || '')
           const side = String(t.side || 'BUY').toUpperCase()
           net[c] = (net[c] || 0) + (side === 'BUY' ? q : -q)
+          if (d >= '2026-11-24' && p > 0) {
+            if (!latest[c] || d >= latest[c].date) {
+              latest[c] = { date: d, price: p, side }
+            }
+          }
         }
         setHoldingsQty((prev) => ({ ...prev, ...net }))
+        setLatestFills(latest)
       }
     } catch (e) {
       // 忽略网络错误，保留已有报价
@@ -161,7 +171,7 @@ export default function QuantRescueSection({ jevLive, activeRegime }) {
   useEffect(() => {
     loadLivePlan()
     checkAckStatus()
-  }, [])
+  }, [refreshTick])
 
   const copyText = (key, text) => {
     if (navigator?.clipboard?.writeText) {
@@ -172,18 +182,20 @@ export default function QuantRescueSection({ jevLive, activeRegime }) {
     }
   }
 
-  // 构建今日「一票一策」自动状态机切换清单行（实时 MA20/MA60/ATR + 市值驱动）
+  // 构建今日「一票一策」自动状态机切换清单行（实时 MA20/MA60/ATR + 市值驱动 + 成交/昨收基准价）
   const actionRows = useMemo(() => {
     return Object.entries(RESCUE_STRATEGY_CFG).map(([code, cfg]) => {
       const q = liveQuotes[code] || {}
       const tech = stockTech[code] || null
+      const fill = latestFills[code] || null
       const price = q.price || 0
       const preClose = q.preClose || price
       const changePct = q.changePct ?? 0
       const totalQty = holdingsQty[code] ?? 0
-      const baseRef = price > 0 ? price : preClose
+      const baseRef = fill ? fill.price : (preClose > 0 ? preClose : price)
+      const baseSource = fill ? `成交锚定 (${fill.date})` : '昨收锚定 (盘中固定)'
       const atrPct = tech?.atrPct || cfg.atrPct
-      const mktVal = baseRef * totalQty
+      const mktVal = (price > 0 ? price : baseRef) * totalQty
 
       // 自动判定每只股票当前最优策略
       let strategy = cfg.strategy
@@ -247,6 +259,8 @@ export default function QuantRescueSection({ jevLive, activeRegime }) {
         noBuy,
         noSell,
         tip,
+        baseRef,
+        baseSource,
         sellPctStr: `+${(sellMult * atrPct * 100).toFixed(1)}%`,
         buyPctStr: `-${(buyMult * atrPct * 100).toFixed(1)}%`,
         price,
@@ -387,7 +401,7 @@ export default function QuantRescueSection({ jevLive, activeRegime }) {
       {/* 1. 今日「一票一策」专属做 T / 减仓操作清单 */}
       <SectionCard
         title="📋 今日「一票一策」专属条件单清单 (已扣最低5元佣金净差价)"
-        subtitle="按每只股票波动率、市值与 5 元最低佣金占比匹配最优策略：亚太用 Almgren 宽幅、海容用 Avellaneda 库存偏移、赣粤低频平衡、通达停网格等急拉减仓"
+        subtitle="基准价规则：有近期录入成交则以「最新成交价」为锚，否则以「昨收价」盘中固定锚定；录入新成交后自动刷新基准与持仓，策略变动同步发邮件提醒"
         action={
           <button
             onClick={loadLivePlan}
@@ -417,6 +431,7 @@ export default function QuantRescueSection({ jevLive, activeRegime }) {
               <tr style={{ borderBottom: '1px solid hsl(var(--border))', color: 'hsl(var(--muted-foreground))', textAlign: 'left' }}>
                 <th style={{ padding: '10px 8px' }}>标的 / 专属策略</th>
                 <th style={{ padding: '10px 8px' }}>最新现价</th>
+                <th style={{ padding: '10px 8px' }}>网格基准价</th>
                 <th style={{ padding: '10px 8px' }}>持仓 / 锁底仓</th>
                 <th style={{ padding: '10px 8px' }}>高抛卖出线</th>
                 <th style={{ padding: '10px 8px' }}>低吸买回线</th>
@@ -457,6 +472,16 @@ export default function QuantRescueSection({ jevLive, activeRegime }) {
                           {r.changePct >= 0 ? '+' : ''}{r.changePct.toFixed(2)}%
                         </span>
                       </>
+                    ) : '--'}
+                  </td>
+                  <td style={{ padding: '10px 8px' }}>
+                    {r.baseRef > 0 ? (
+                      <div>
+                        <strong>¥{r.baseRef.toFixed(2)}</strong>
+                        <div style={{ fontSize: 10.5, color: r.baseSource.startsWith('成交') ? '#2563eb' : 'hsl(var(--muted-foreground))' }}>
+                          {r.baseSource}
+                        </div>
+                      </div>
                     ) : '--'}
                   </td>
                   <td style={{ padding: '10px 8px' }}>
@@ -505,7 +530,7 @@ export default function QuantRescueSection({ jevLive, activeRegime }) {
                         fontSize: 12,
                         fontWeight: 500
                       }}>
-                        ⏸ 暂停低吸（只减不加）
+                        {r.noSell ? '⏸ 暂停低吸（拿住底仓）' : '⏸ 暂停低吸（只减不加）'}
                       </span>
                     ) : (
                       <div style={{ display: 'inline-flex', alignItems: 'center', gap: 6 }}>
@@ -531,8 +556,8 @@ export default function QuantRescueSection({ jevLive, activeRegime }) {
                   <td style={{ padding: '10px 8px', fontWeight: 600 }}>
                     {r.unit} 股
                   </td>
-                  <td style={{ padding: '10px 8px', color: r.noBuy ? 'hsl(var(--muted-foreground))' : '#10b981', fontWeight: 600 }}>
-                    {r.noBuy ? '单向减仓兑现' : (r.estProfit > 0 ? `+¥${r.estProfit}` : '--')}
+                  <td style={{ padding: '10px 8px', color: (r.noBuy || r.noSell) ? 'hsl(var(--muted-foreground))' : '#10b981', fontWeight: 600 }}>
+                    {r.noSell ? '主升锁仓吃波段' : r.noBuy ? '单向减仓兑现' : (r.estProfit > 0 ? `+¥${r.estProfit}` : '--')}
                   </td>
                 </tr>
               ))}

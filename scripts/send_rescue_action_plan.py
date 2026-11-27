@@ -37,29 +37,35 @@ def load_dotenv(path: Path) -> None:
         os.environ.setdefault(k.strip(), v.strip().strip('"').strip("'"))
 
 
-def fetch_net_holdings() -> dict[str, int]:
+def fetch_holdings_and_latest_fills() -> tuple[dict[str, int], dict[str, dict]]:
     defaults = {"002284": 900, "603187": 500, "600269": 1800, "603390": 200}
     sb_url = os.getenv("SUPABASE_URL", "").strip()
     sb_key = os.getenv("SUPABASE_KEY", "").strip()
     if not sb_url or not sb_key:
-        return defaults
+        return defaults, {}
     try:
         req = urllib.request.Request(
-            f"{sb_url}/rest/v1/trades?select=code,side,quantity",
+            f"{sb_url}/rest/v1/trades?select=id,code,side,quantity,price,trade_date",
             headers={"apikey": sb_key, "Authorization": f"Bearer {sb_key}"},
         )
         opener = urllib.request.build_opener(urllib.request.ProxyHandler({}))
         with opener.open(req, timeout=8) as resp:
             rows = json.loads(resp.read().decode("utf-8"))
         net: dict[str, int] = {}
+        latest_fills: dict[str, dict] = {}
         for r in rows:
             c = str(r.get("code", "")).zfill(6)
             q = int(r.get("quantity", 0))
+            p = float(r.get("price", 0) or 0)
+            d = str(r.get("trade_date", "") or "")
             side = str(r.get("side", "BUY")).upper()
             net[c] = net.get(c, 0) + (q if side == "BUY" else -q)
-        return {k: v for k, v in net.items() if v > 0} or defaults
+            if d >= "2026-11-24" and p > 0:
+                if c not in latest_fills or d >= latest_fills[c]["date"]:
+                    latest_fills[c] = {"id": r.get("id"), "date": d, "price": p, "side": side}
+        return ({k: v for k, v in net.items() if v > 0} or defaults), latest_fills
     except Exception:
-        return defaults
+        return defaults, {}
 
 
 def to_tencent_sym(code: str) -> str:
@@ -93,20 +99,26 @@ def fetch_quotes_and_atr(codes: list[str]) -> dict[str, dict]:
     for c in codes:
         sym = to_tencent_sym(c)
         try:
-            kurl = f"http://web.ifzq.gtimg.cn/appstock/app/fqkline/get?param={sym},day,,,16,qfq"
+            kurl = f"http://web.ifzq.gtimg.cn/appstock/app/fqkline/get?param={sym},day,,,65,qfq"
             with opener.open(urllib.request.Request(kurl, headers={"User-Agent": "Mozilla/5.0"}), timeout=6) as resp:
-                raw = json.loads(resp.read().decode("utf-8"))["data"][sym]["qfqday"]
-            if len(raw) >= 15 and c in out:
+                sym_data = json.loads(resp.read().decode("utf-8"))["data"][sym]
+                raw = sym_data.get("qfqday") or sym_data.get("day") or []
+            if len(raw) >= 20 and c in out:
+                closes = [float(bar[2]) for bar in raw]
+                ma20 = sum(closes[-20:]) / 20.0
+                ma60 = sum(closes[-min(60, len(closes)):]) / min(60, len(closes))
                 trs = []
                 for i in range(1, len(raw)):
                     h = float(raw[i][3])
                     l = float(raw[i][4])
                     pc = float(raw[i - 1][2])
                     trs.append(max(h - l, abs(h - pc), abs(l - pc)))
-                atr = sum(trs[-14:]) / 14.0
-                last_c = float(raw[-1][2])
+                atr = sum(trs[-14:]) / min(14, len(trs))
+                last_c = closes[-1]
                 if last_c > 0:
-                    out[c]["atr_pct"] = max(0.015, min(0.050, atr / last_c))
+                    out[c]["atr_pct"] = max(0.015, min(0.055, atr / last_c))
+                    out[c]["ma20"] = round(ma20, 2)
+                    out[c]["ma60"] = round(ma60, 2)
         except Exception:
             pass
     return out
@@ -116,36 +128,88 @@ def main() -> int:
     load_dotenv(ROOT / ".env")
     force = "--force" in sys.argv
     today_str = datetime.now().strftime("%Y-%m-%d")
-    holdings = fetch_net_holdings()
+    holdings, latest_fills = fetch_holdings_and_latest_fills()
     quotes = fetch_quotes_and_atr(list(GUEANT_CFG.keys()))
 
     current_atrs: dict[str, float] = {}
+    current_strategies: dict[str, str] = {}
+    current_bases: dict[str, float] = {}
     grid_info: dict[str, dict] = {}
     for code, cfg in GUEANT_CFG.items():
-        atr = quotes.get(code, {}).get("atr_pct", 0.025)
+        q = quotes.get(code, {})
+        price = float(q.get("price", 0.0) or 0.0)
+        atr = float(q.get("atr_pct", 0.025) or 0.025)
+        ma20 = float(q.get("ma20", 0.0) or 0.0)
+        ma60 = float(q.get("ma60", 0.0) or 0.0)
+        qty = holdings.get(code, 0)
+        fill = latest_fills.get(code)
+        base_ref = float(fill["price"]) if fill else price
+        base_source = f"成交锚定({fill['date']})" if fill else "最新收盘锚定"
+        mkt_val = price * qty
+
+        strategy = cfg["strategy"]
+        sell_mult, buy_mult = cfg["sell_mult"], cfg["buy_mult"]
+        no_sell, no_buy = False, (code == "603390")
+        if price > 0 and ma20 > 0 and ma60 > 0:
+            if price > ma20 and ma20 > ma60:
+                strategy = "多头主升锁仓"
+                no_sell, no_buy = True, True
+            elif 0 < mkt_val < 3000:
+                strategy = "PPO 极值反抽减仓"
+                sell_mult, buy_mult, no_buy = 1.60, 1.60, True
+            elif atr < 0.024:
+                strategy = "Fernholz 低频平衡"
+                sell_mult, buy_mult, no_buy = 1.50, 1.50, False
+            elif atr < 0.038:
+                strategy = "Avellaneda 库存偏移"
+                sell_mult, buy_mult, no_buy = 0.70, 1.30, False
+            else:
+                strategy = "Almgren-Chriss 宽幅"
+                sell_mult, buy_mult, no_buy = 1.05, 1.15, False
+
         current_atrs[code] = round(atr, 4)
+        current_strategies[code] = strategy
+        current_bases[code] = round(base_ref, 2)
         grid_info[code] = {
-            "sell_pct": round(cfg["sell_mult"] * atr * 100, 1),
-            "buy_pct": round(cfg["buy_mult"] * atr * 100, 1),
+            "strategy": strategy,
+            "base_ref": round(base_ref, 2),
+            "base_source": base_source,
+            "no_sell": no_sell,
+            "no_buy": no_buy,
+            "sell_mult": sell_mult,
+            "buy_mult": buy_mult,
+            "sell_pct": round(sell_mult * atr * 100, 1),
+            "buy_pct": round(buy_mult * atr * 100, 1),
         }
 
     pending_file = ROOT / "pending_plan.json"
     pending_file.write_text(
-        json.dumps({"date": today_str, "atrs": current_atrs, "grid": grid_info}, ensure_ascii=False, indent=2),
+        json.dumps({"date": today_str, "atrs": current_atrs, "strategies": current_strategies, "bases": current_bases, "grid": grid_info}, ensure_ascii=False, indent=2),
         encoding="utf-8",
     )
 
     ack_file = ROOT / "ack_state.json"
     changed_codes: list[str] = []
+    change_reasons: dict[str, list[str]] = {}
     need_notify = force or (not ack_file.exists())
     if ack_file.exists() and not force:
         try:
             ack_data = json.loads(ack_file.read_text(encoding="utf-8"))
             ack_atrs = ack_data.get("atrs", {})
+            ack_strats = ack_data.get("strategies", {})
+            ack_bases = ack_data.get("bases", {})
             for code in GUEANT_CFG:
+                reasons = []
                 old_atr = float(ack_atrs.get(code, 0.0))
                 if old_atr == 0.0 or abs(current_atrs[code] - old_atr) >= ATR_DIFF_THRESHOLD:
+                    reasons.append("ATR波动率变化")
+                if ack_strats.get(code) and ack_strats.get(code) != current_strategies[code]:
+                    reasons.append(f"策略切换为[{current_strategies[code]}]")
+                if ack_bases.get(code) and latest_fills.get(code) and abs(float(ack_bases.get(code, 0)) - current_bases[code]) > 0.005:
+                    reasons.append("新成交更新基准价")
+                if reasons:
                     changed_codes.append(code)
+                    change_reasons[code] = reasons
             if changed_codes:
                 need_notify = True
         except Exception:
@@ -154,7 +218,7 @@ def main() -> int:
         changed_codes = list(GUEANT_CFG.keys())
 
     if not need_notify:
-        print(f"[SKIP] {today_str} 各股 ATR 相比已确认基线变化均 < 0.8%，无需调整手机条件单，静默跳过。")
+        print(f"[SKIP] {today_str} 策略/基准价/ATR 均无显著变化，静默跳过。")
         return 0
 
     tunnel_file = ROOT / "tunnel_url.txt"
@@ -176,28 +240,33 @@ def main() -> int:
         price = q.get("price", 0.0)
         chg = q.get("change_pct", 0.0)
         atr = current_atrs[code]
-        sell_pct = grid_info[code]["sell_pct"]
-        buy_pct = grid_info[code]["buy_pct"]
+        g_info = grid_info[code]
+        sell_pct = g_info["sell_pct"]
+        buy_pct = g_info["buy_pct"]
+        base_ref = g_info["base_ref"]
         total_qty = holdings.get(code, 0)
         unit = cfg["unit"]
         max_qty = total_qty + unit
-        p_sell = round(price * (1.0 + cfg["sell_mult"] * atr), 2) if price > 0 else 0.0
-        p_buy = round(price * (1.0 - cfg["buy_mult"] * atr), 2) if price > 0 else 0.0
+        p_sell = round(base_ref * (1.0 + g_info["sell_mult"] * atr), 2) if base_ref > 0 else 0.0
+        p_buy = round(base_ref * (1.0 - g_info["buy_mult"] * atr), 2) if base_ref > 0 else 0.0
         chg_str = f"{chg:+.2f}%"
-        badge = " <span style='background:#fef3c7;color:#d97706;padding:1px 6px;border-radius:4px;font-size:11px;'>建议调整</span>" if code in changed_codes else ""
+        r_text = " / ".join(change_reasons.get(code, ["建议调整"]))
+        badge = f" <span style='background:#fef3c7;color:#d97706;padding:1px 6px;border-radius:4px;font-size:11px;'>{r_text}</span>" if code in changed_codes else ""
+        sell_cell = "🔒 多头锁仓不卖" if g_info["no_sell"] else f"+{sell_pct:.1f}% (&ge;{p_sell:.2f})"
+        buy_cell = "⏸ 暂停低吸" if g_info["no_buy"] else f"-{buy_pct:.1f}% (&le;{p_buy:.2f})"
 
         lines_md.append(
-            f"| {cfg['name']} ({code}) [{cfg['strategy']}] | {price:.2f} ({chg_str}) | {atr*100:.2f}% | +{sell_pct:.1f}% (>= {p_sell:.2f}) | -{buy_pct:.1f}% (<= {p_buy:.2f}) | {unit} 股 | 留{cfg['lock_qty']} / 上限{max_qty} |"
+            f"| {cfg['name']} ({code}) [{g_info['strategy']}] | {price:.2f} ({chg_str}) | 基准 {base_ref:.2f} ({g_info['base_source']}) | {sell_cell} | {buy_cell} | {unit} 股 | 留{cfg['lock_qty']} / 现{total_qty} |"
         )
         rows_html.append(
             f"<tr>"
-            f"<td style='padding:8px;border-bottom:1px solid #eee;'><b>{cfg['name']}</b> ({code}){badge}<br><span style='font-size:11px;color:#2563eb;'>{cfg['strategy']}</span></td>"
+            f"<td style='padding:8px;border-bottom:1px solid #eee;'><b>{cfg['name']}</b> ({code}){badge}<br><span style='font-size:11px;color:#2563eb;'>{g_info['strategy']} · 基准 ¥{base_ref:.2f} ({g_info['base_source']})</span></td>"
             f"<td style='padding:8px;border-bottom:1px solid #eee;'>{price:.2f} ({chg_str})</td>"
             f"<td style='padding:8px;border-bottom:1px solid #eee;'>{atr*100:.2f}%</td>"
-            f"<td style='padding:8px;border-bottom:1px solid #eee;color:#ef4444;font-weight:bold;'>+{sell_pct:.1f}% <span style='font-weight:normal;color:#64748b;font-size:11px;'>(&ge;{p_sell:.2f})</span></td>"
-            f"<td style='padding:8px;border-bottom:1px solid #eee;color:#2563eb;font-weight:bold;'>-{buy_pct:.1f}% <span style='font-weight:normal;color:#64748b;font-size:11px;'>(&le;{p_buy:.2f})</span></td>"
+            f"<td style='padding:8px;border-bottom:1px solid #eee;color:#ef4444;font-weight:bold;'>{sell_cell}</td>"
+            f"<td style='padding:8px;border-bottom:1px solid #eee;color:#2563eb;font-weight:bold;'>{buy_cell}</td>"
             f"<td style='padding:8px;border-bottom:1px solid #eee;'>{unit} 股</td>"
-            f"<td style='padding:8px;border-bottom:1px solid #eee;font-size:12px;color:#475569;'>留{cfg['lock_qty']} / 上限{max_qty}</td>"
+            f"<td style='padding:8px;border-bottom:1px solid #eee;font-size:12px;color:#475569;'>留{cfg['lock_qty']} / 现{total_qty}</td>"
             f"</tr>"
         )
 

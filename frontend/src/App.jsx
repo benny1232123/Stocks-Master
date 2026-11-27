@@ -623,6 +623,7 @@ function App() {
   const [selectedStrategyModel, setSelectedStrategyModel] = useState('world_model') // 'world_model' | 'adaptive'
   const [jevLive, setJevLive] = useState(null)
   const [activeRegime, setActiveRegime] = useState('bear_rescue')
+  const [tradeRefreshTick, setTradeRefreshTick] = useState(0)
   const [userCapitalBase, setUserCapitalBase] = useState(29336)
 
   useEffect(() => {
@@ -1869,10 +1870,11 @@ function App() {
               <p>交易记录管理 · Supabase 云端数据库直连（支持录入与删除），状态实时同步</p>
             </div>
             <TradeManager onTradeChange={() => {
+              setTradeRefreshTick((n) => n + 1)
               fetch('/api/portfolio').then(r => r.json()).then(setPortfolio).catch(() => {})
             }} />
             <div style={{ marginTop: 24 }}>
-              <QuantRescueSection jevLive={jevLive} activeRegime={activeRegime} />
+              <QuantRescueSection jevLive={jevLive} activeRegime={activeRegime} refreshTick={tradeRefreshTick} />
             </div>
         </section>
         )}
