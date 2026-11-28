@@ -6,18 +6,25 @@ name: 每日选股兜底触发
 # 本工作流用**稀疏**槽位经 API dispatch daily-pick（GITHUB_TOKEN 的 workflow_dispatch
 # 属于可触发下游工作流的例外事件）；gate 自带窗口自检 + 当日防重，重复触发无害：
 # 已跑过 → gate 秒级跳过；16:35 那枪失败 → 18:35 自动重试。
+#
+# 21:00 槽位是「静默未运行」检测：管线故障会开告警 issue（有红色信号），但
+# 「该跑没跑」（schedule 被吞）不产生任何运行、无任何信号——本槽位补上这块盲区。
+# 判据：stock_data 里 Daily-Action-List 最新日期 ≥ 10 天前即告警（A股最长休市
+# 连假约 8 天，10 天窗口不会误报）。
 on:
-  schedule:
-    - cron: "35 8 * * 1-5"    # 北京 16:35（cron-job.org 16:30 之后 5 分钟兜底）
-    - cron: "35 10 * * 1-5"   # 北京 18:35（第二Chance：数据源延迟 / 上一枪失败）
   workflow_dispatch: {}
 
 permissions:
   actions: write
   contents: read
+  issues: write
 
 jobs:
   trigger:
+    if: |
+      github.event_name == 'workflow_dispatch' ||
+      github.event.schedule == '35 8 * * 1-5' ||
+      github.event.schedule == '35 10 * * 1-5'
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
@@ -28,3 +35,53 @@ jobs:
         run: |
           gh workflow run "每日选股"
           echo "已派发 每日选股（推送窗口 / 当日防重由其 gate 自行判定）"
+
+  staleness-check:
+    if: github.event.schedule == '0 13 * * 1-5'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: 检查 DAL 是否静默停摆（≥10 天未落库即告警）
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_REPO: ${{ github.repository }}
+        run: |
+          gh label create daily-pick-failure --color D93F0B --description "每日选股链路失败告警" --force >/dev/null 2>&1 || true
+          python3 - <<'PY'
+          import json, os, re, subprocess, time
+          from datetime import date, datetime
+
+          def gh(*args):
+              r = subprocess.run(["gh", "api"] + list(args), capture_output=True, text=True)
+              if r.returncode != 0:
+                  raise RuntimeError(r.stderr[:300])
+              return json.loads(r.stdout)
+
+          tip = gh("repos/{repo}/branches/master".format(repo=os.environ["GH_REPO"]))["commit"]["sha"]
+          tree = gh(f"repos/{repo}/git/trees/{tip}?recursive=1".format(repo=os.environ["GH_REPO"]))
+          dal_dates = [m.group(1) for p in tree.get("tree", [])
+                       if (m := re.search(r"DAL/Daily-Action-List-(\d{{8}})\.csv$", p["path"]))
+                       or (m := re.search(r"Daily-Action-List-(\d{{8}})\.csv$", p["path"]))]
+          latest = max(dal_dates) if dal_dates else "0"
+          age = (date.today() - datetime.strptime(latest, "%Y%m%d").date()).days if latest != "0" else 999
+          print(f"[staleness] 最新 DAL 日期 = {latest}（{age} 天前）")
+          if age <= 10:
+              print("[staleness] ✅ 管线活跃，无需告警")
+              raise SystemExit(0)
+
+          title = "每日选股管线疑似停摆（静默未运行）"
+          body = (f"最新 Daily-Action-List 落库于 {latest}，距今 {age} 天（阈值 10 天，"
+                  f"已排除最长连假休市）。连续 10 天无任何信号日清单 = 触发链或管线整体失效，"
+                  f"请检查 Actions → 「每日选股兜底触发」/「每日选股」的最近运行。")
+          issues = gh(f"repos/{repo}/issues?state=open&per_page=50".format(repo=os.environ["GH_REPO"]))
+          dup = next((i for i in issues if i["title"] == title), None)
+          if dup:
+              subprocess.run(["gh", "issue", "comment", str(dup["number"]),
+                              "--body", f"{body}\n（{time.strftime('%Y-%m-%d %H:%M')} 仍停摆，本条为自动追踪更新）"],
+                             check=True)
+              print(f"[staleness] 已在既有告警 issue #{dup['number']} 追加追踪")
+          else:
+              subprocess.run(["gh", "issue", "create", "--title", title, "--body", body,
+                              "--label", "daily-pick-failure,automated"], check=True)
+              print("[staleness] 已创建停摆告警 issue")
+          PY

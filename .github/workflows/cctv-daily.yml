@@ -10,12 +10,6 @@ name: CCTV 舆情每日采集
 # 回滚方式：删除本文件即可。
 
 on:
-  schedule:
-    # 北京 23:30（UTC 15:30）：新闻联播 19:00 档播完 + akshare 收录约 3h 余量；
-    # 避开 daily-pick 的北京 16:00~21:40 推送窗口（末槽 13:40 UTC 启动的 run 可能拖到
-    # 15:00+ 才推完）。两边提交文件集不相交（CCTV-* vs DAL/Backtest/web_data），
-    # 即便推送撞车，rebase 也能干净合并。schedule 排队延迟只影响空转（有防重门）。
-    - cron: "30 15 * * *"
   workflow_dispatch:
     inputs:
       date:

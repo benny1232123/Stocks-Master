@@ -9,10 +9,6 @@ name: 纸盘组合每日执行（真实 process_day 闭环）
 # state 跨日累积，重复执行会推进两次 process_day → 必须当天只跑一次（gate 内 artifact 防重）。
 
 on:
-  schedule:
-    # 到点自检轮询：UTC 11:00~14:40 每 20 分钟一槽（北京 19:00~22:40）。
-    # 单点 cron 排队延迟可达数小时，改为高频槽位 + 北京时间窗口自检。
-    - cron: "*/20 11-14 * * 1-5"
   workflow_dispatch: {}
 
 permissions:

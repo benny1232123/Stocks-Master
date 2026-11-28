@@ -1,11 +1,6 @@
 name: 每日选股
 
 on:
-  schedule:
-    # 到点自检轮询：UTC 08:00~13:40 每 20 分钟一槽（北京 16:00~21:40）。
-    # 实测 schedule 排队延迟可达 7~10 小时（daily-holdings 2026-08-27/28/31 推到北京凌晨），
-    # 单点 cron 不可靠；高频槽位 + 窗口自检后，延迟只影响"哪一槽执行"，当日仍能完成。
-    - cron: "*/20 8-13 * * 1-5"
   workflow_dispatch:
     inputs:
       signal_date:

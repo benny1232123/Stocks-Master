@@ -3,8 +3,6 @@ name: 自适应权重月度重验
 # 每月 1 日运行 walk-forward 样本外重验；若验证「稳健更优」则自动开 PR 更新超参。
 # 有界 timeout-minutes，绝不超时；纯读历史 CSV，不联网不重跑回测。
 on:
-  schedule:
-    - cron: "0 9 1 * *"        # 每月 1 日 09:00 UTC
   workflow_dispatch:
     inputs:
       sweep:

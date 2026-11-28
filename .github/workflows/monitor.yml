@@ -1,9 +1,6 @@
 name: 策略监控（衰减告警 + 纸盘模拟）
 
 on:
-  schedule:
-    # 每周一 02:00 UTC（北京 10:00）运行；纯本地、有界、不联网。
-    - cron: "0 2 * * 1"
   workflow_dispatch: {}
 
 permissions:
